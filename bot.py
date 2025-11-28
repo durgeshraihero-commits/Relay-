@@ -10,8 +10,8 @@ from typing import Dict
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.enums import ParseMode  # CHANGED: Import from aiogram.enums
-from aiogram.utils.keyboard import ReplyKeyboardRemove
+from aiogram.enums import ParseMode
+from aiogram.types import ReplyKeyboardRemove  # CHANGED: Import from aiogram.types
 from aiogram import executor
 from dotenv import load_dotenv
 
@@ -41,7 +41,7 @@ if not TARGET_GROUP_ID:
 if not TARGET_BOT_ID:
     raise SystemExit("TARGET_BOT_ID is required")
 
-# Initialize bot and dispatcher - CHANGED: Remove parse_mode from Bot constructor
+# Initialize bot and dispatcher
 bot = Bot(token=RELAY_TOKEN)
 dp = Dispatcher()
 
@@ -183,25 +183,24 @@ async def on_friendbot_message(msg: types.Message):
             pass
 
     try:
-        # CHANGED: Add parse_mode parameter to send_message
         if REPLY_BACK_TO == "user":
             try:
                 await bot.send_message(
                     chat_id=origin_user, 
                     text=cleaned, 
-                    parse_mode=ParseMode.HTML  # CHANGED: Use ParseMode.HTML
+                    parse_mode=ParseMode.HTML
                 )
             except Exception:
                 await bot.send_message(
                     chat_id=origin_chat, 
                     text=cleaned, 
-                    parse_mode=ParseMode.HTML  # CHANGED: Use ParseMode.HTML
+                    parse_mode=ParseMode.HTML
                 )
         else:
             await bot.send_message(
                 chat_id=origin_chat, 
                 text=cleaned, 
-                parse_mode=ParseMode.HTML  # CHANGED: Use ParseMode.HTML
+                parse_mode=ParseMode.HTML
             )
     except Exception as e:
         logger.error("Failed sending cleaned message back: %s", e)
@@ -224,4 +223,4 @@ if __name__ == "__main__":
         skip_updates=True,
         on_startup=on_startup,
         on_shutdown=on_shutdown
-)
+    )
