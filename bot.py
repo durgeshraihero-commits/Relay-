@@ -11,8 +11,8 @@ from typing import Dict
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.enums import ParseMode
-from aiogram.types import ReplyKeyboardRemove  # CHANGED: Import from aiogram.types
-from aiogram import executor
+from aiogram.types import ReplyKeyboardRemove
+from aiogram.client.default import DefaultBotProperties  # NEW: For default properties
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -41,8 +41,11 @@ if not TARGET_GROUP_ID:
 if not TARGET_BOT_ID:
     raise SystemExit("TARGET_BOT_ID is required")
 
-# Initialize bot and dispatcher
-bot = Bot(token=RELAY_TOKEN)
+# Initialize bot and dispatcher with modern aiogram 3.x approach
+bot = Bot(
+    token=RELAY_TOKEN,
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)  # NEW: Set default parse mode
+)
 dp = Dispatcher()
 
 # In-memory pending map
@@ -185,23 +188,11 @@ async def on_friendbot_message(msg: types.Message):
     try:
         if REPLY_BACK_TO == "user":
             try:
-                await bot.send_message(
-                    chat_id=origin_user, 
-                    text=cleaned, 
-                    parse_mode=ParseMode.HTML
-                )
+                await bot.send_message(chat_id=origin_user, text=cleaned)
             except Exception:
-                await bot.send_message(
-                    chat_id=origin_chat, 
-                    text=cleaned, 
-                    parse_mode=ParseMode.HTML
-                )
+                await bot.send_message(chat_id=origin_chat, text=cleaned)
         else:
-            await bot.send_message(
-                chat_id=origin_chat, 
-                text=cleaned, 
-                parse_mode=ParseMode.HTML
-            )
+            await bot.send_message(chat_id=origin_chat, text=cleaned)
     except Exception as e:
         logger.error("Failed sending cleaned message back: %s", e)
 
@@ -209,18 +200,21 @@ async def on_friendbot_message(msg: types.Message):
 async def fallback(message: types.Message):
     return
 
-async def on_startup(_):
-    logger.info("Relay bot started successfully")
-
-async def on_shutdown(_):
-    logger.info("Shutting down relay bot")
-    save_pending()
+async def main():
+    """Main function to run the bot"""
+    logger.info("Starting relay bot")
+    
+    # Remove webhook if exists and start polling
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    logger.info("Starting relay bot")
-    executor.start_polling(
-        dp, 
-        skip_updates=True,
-        on_startup=on_startup,
-        on_shutdown=on_shutdown
-    )
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error(f"Bot crashed with error: {e}")
+    finally:
+        save_pending()
+        logger.info("Bot shutdown complete")
