@@ -115,9 +115,15 @@ def main():
     # Add error handler
     application.add_error_handler(error_handler)
     
-    # Add message handler - catches ALL messages including commands
+    # Add message handler for commands (messages starting with /)
     application.add_handler(MessageHandler(
-        filters.ALL,
+        filters.COMMAND,
+        handle_message
+    ))
+    
+    # Add message handler for all other messages
+    application.add_handler(MessageHandler(
+        filters.ALL & ~filters.COMMAND,
         handle_message
     ))
     
