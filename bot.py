@@ -1,166 +1,195 @@
 import logging
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from telethon import TelegramClient
+import asyncio
 
-# Configuration
+# ===== CONFIGURATION =====
 NEW_BOT_TOKEN = "8224146762:AAEJpeFIHmMeG2fjUn7ccMBiupA9Cxuewew"
 EXISTING_GROUP_ID = -1003275777221
-FRIEND_BOT_ID = 7574815513
 
-# Setup logging - MORE VERBOSE
+# ✅ YOUR API CREDENTIALS
+API_ID = 36246931
+API_HASH = "c9708f05badf286d69abcd0de7f44580"
+PHONE_NUMBER = "+917667280752"  # ⚠️ Replace with your actual phone number
+
+# ===== SETUP LOGGING =====
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.DEBUG
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Reduce httpx noise
-logging.getLogger("httpx").setLevel(logging.WARNING)
-
-# Store message mappings
+# ===== STORAGE =====
 message_map = {}
+telethon_client = None
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle all incoming messages"""
+# ===== TELETHON SETUP =====
+async def setup_telethon():
+    """Initialize Telethon client with user account"""
+    global telethon_client
+    
+    logger.info("🔐 Starting Telethon client...")
+    telethon_client = TelegramClient('user_session', API_ID, API_HASH)
+    
     try:
-        logger.info("=" * 60)
-        logger.info("🎯 HANDLER TRIGGERED!")
+        await telethon_client.start(phone=PHONE_NUMBER)
+        
+        # Check if we're authenticated
+        me = await telethon_client.get_me()
+        logger.info(f"✅ Telethon authenticated as: {me.first_name} (@{me.username})")
+        return telethon_client
+        
+    except Exception as e:
+        logger.error(f"❌ Telethon setup failed: {e}")
+        return None
 
-        if not update.message: 
-            logger.warning("⚠️ No message in update")
+async def send_via_user_account(message_text):
+    """Send message using user account (bypasses bot restrictions)"""
+    try:
+        if not telethon_client:
+            logger.error("❌ Telethon client not available")
+            return None
+            
+        # Send message as user (not as bot)
+        sent_message = await telethon_client.send_message(
+            entity=EXISTING_GROUP_ID,
+            message=message_text
+        )
+        
+        logger.info(f"✅ User account sent: {message_text}")
+        return sent_message.id
+        
+    except Exception as e:
+        logger.error(f"❌ Telethon send error: {e}")
+        return None
+
+# ===== BOT HANDLERS =====
+async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle messages from users in new group"""
+    try:
+        # Ignore messages from existing group
+        if update.effective_chat.id == EXISTING_GROUP_ID:
             return
             
-        chat_id = update.effective_chat.id
-        from_user = update.message.from_user
-        message_text = update.message.text or update.message.caption or ""
+        user_message = update.message.text.strip()
+        original_chat_id = update.effective_chat.id
+        original_msg_id = update.message.message_id
+        
+        logger.info(f"📩 User message: {user_message}")
+        
+        # Step 1: Send processing notification to user
+        await update.message.reply_text(
+            "🔄 Processing your request...",
+            reply_to_message_id=original_msg_id
+        )
+        
+        # Step 2: Send message via user account to trigger friend bot
+        user_msg_id = await send_via_user_account(user_message)
+        
+        if user_msg_id:
+            # Store mapping for response tracking
+            message_map[user_msg_id] = (original_chat_id, original_msg_id)
+            logger.info(f"✅ Friend bot triggered! Waiting for response...")
+        else:
+            await update.message.reply_text(
+                "❌ Failed to process request. Please try again.",
+                reply_to_message_id=original_msg_id
+            )
+        
+    except Exception as e:
+        logger.error(f"❌ Handler error: {e}")
 
-        logger.info(f"📩 MESSAGE: '{message_text}'")
-        logger.info(f"📊 From: {from_user.id} (Bot: {from_user.is_bot})")
-        logger.info(f"📍 Chat: {chat_id}")
-
-        # Case 1: Message from existing group (check for friend bot responses)
-        if chat_id == EXISTING_GROUP_ID:
-            logger.info("🎯 This is from EXISTING GROUP")
+async def handle_group_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle responses from friend bot in existing group"""
+    try:
+        if update.effective_chat.id != EXISTING_GROUP_ID:
+            return
             
-            # Check if message is from friend bot
-            if from_user.id == FRIEND_BOT_ID:
-                logger.info("✅ Confirmed: Message from FRIEND BOT")
+        message_text = update.message.text or ""
+        sender_id = update.effective_user.id
+        
+        logger.info(f"📨 Message in group from {sender_id}: {message_text[:50]}...")
+        
+        # Check if this is a reply to our user-account message
+        if update.message.reply_to_message:
+            replied_msg_id = update.message.reply_to_message.message_id
+            
+            if replied_msg_id in message_map:
+                original_chat_id, original_msg_id = message_map[replied_msg_id]
                 
-                if update.message.reply_to_message:
-                    replied_to_msg_id = update.message.reply_to_message.message_id
-                    logger.info(f"🔗 Friend bot replied to message ID: {replied_to_msg_id}")
-                    
-                    if replied_to_msg_id in message_map:
-                        new_group_id, original_msg_id = message_map[replied_to_msg_id]
-                        modified_response = f"🤖 Response:\n\n{message_text}"
-                        
-                        logger.info(f"📤 Sending back to new group: {new_group_id}")
-                        await context.bot.send_message(
-                            chat_id=new_group_id,
-                            text=modified_response,
-                            reply_to_message_id=original_msg_id
-                        )
-                        logger.info("✅ SUCCESS! Response sent to new group")
-                        del message_map[replied_to_msg_id]
-                    else:
-                        logger.warning(f"❌ No mapping found for message ID {replied_to_msg_id}")
-                else:
-                    logger.warning("⚠️ Friend bot message is not a reply - ignoring")
-            
-            # Also handle if humans reply to our messages
-            elif update.message.reply_to_message:
-                replied_to_msg_id = update.message.reply_to_message.message_id
-                if replied_to_msg_id in message_map:
-                    logger.info(f"👤 Human replied to our message")
-                    new_group_id, original_msg_id = message_map[replied_to_msg_id]
-                    response_text = f"👤 {from_user.first_name}:\n{message_text}"
+                logger.info(f"✅ Forwarding response to user...")
+                
+                # Send response back to user
+                await context.bot.send_message(
+                    chat_id=original_chat_id,
+                    text=f"🤖 Response:\n\n{message_text}",
+                    reply_to_message_id=original_msg_id
+                )
+                
+                # Clean up
+                del message_map[replied_msg_id]
+                logger.info("✅ Response delivered to user!")
+        else:
+            # Also check if the message itself is from friend bot (direct response)
+            # This handles cases where friend bot responds without replying
+            for msg_id, (chat_id, orig_msg_id) in list(message_map.items()):
+                # If we detect friend bot response and it matches recent messages
+                if sender_id == 7574815513:  # Your friend bot ID
+                    logger.info(f"✅ Direct response from friend bot detected!")
                     
                     await context.bot.send_message(
-                        chat_id=new_group_id,
-                        text=response_text,
-                        reply_to_message_id=original_msg_id
+                        chat_id=chat_id,
+                        text=f"🤖 Response:\n\n{message_text}",
+                        reply_to_message_id=orig_msg_id
                     )
-
-        # Case 2: Message from new group (forward to existing group WITH PROPER COMMAND)
-        else:
-            logger.info(f"🎯 This is from NEW GROUP (ID: {chat_id})")
-            
-            # Extract command and value from user message
-            user_message = message_text.strip()
-            
-            # Determine which command to use based on the input
-            command_to_use = None
-            value = None
-            
-            if user_message.isdigit() and len(user_message) >= 10:
-                # If it's just numbers, use /num command
-                command_to_use = "/num"
-                value = user_message
-            elif ' ' in user_message:
-                # If user already included a command, use it as is
-                parts = user_message.split(' ', 1)
-                if parts[0].startswith('/'):
-                    command_to_use = parts[0]
-                    value = parts[1] if len(parts) > 1 else ""
-                else:
-                    # Default to /num for any other text
-                    command_to_use = "/num"
-                    value = user_message
-            else:
-                # Default to /num command
-                command_to_use = "/num"
-                value = user_message
-            
-            # Format the message to trigger friend bot
-            trigger_message = f"{command_to_use} {value}".strip()
-            
-            logger.info(f"🎯 Using command: '{command_to_use}'")
-            logger.info(f"📤 Sending to existing group: '{trigger_message}'")
-            
-            # Send the command that will trigger the friend bot
-            sent_msg = await context.bot.send_message(
-                chat_id=EXISTING_GROUP_ID,
-                text=trigger_message
-            )
-            
-            # Store the mapping
-            message_map[sent_msg.message_id] = (chat_id, update.message.message_id)
-            logger.info(f"✅ Forwarded! Message ID in existing group: {sent_msg.message_id}")
-            logger.info(f"📊 Created mapping: {sent_msg.message_id} -> ({chat_id}, {update.message.message_id})")
-            logger.info(f"📊 Total mappings: {len(message_map)}")
-
+                    
+                    del message_map[msg_id]
+                    logger.info("✅ Direct response delivered!")
+                    break
+                
     except Exception as e:
-        logger.error(f"❌ ERROR: {e}", exc_info=True)
-    
-    logger.info("=" * 60)
+        logger.error(f"❌ Response handler error: {e}")
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    """Handle errors"""
-    logger.error(f"❌ Exception while handling an update: {context.error}", exc_info=context.error)
+    logger.error(f"Exception: {context.error}")
 
-def main():
-    """Start the bot"""
-    logger.info("=" * 60)
-    logger.info("🚀 STARTING BOT - FRIEND BOT COMMAND VERSION")
-    logger.info("=" * 60)
-
+# ===== MAIN =====
+async def main():
+    """Start the automated bot system"""
+    logger.info("🚀 Starting Automated Bridge Bot...")
+    logger.info("📱 Setting up user account connection...")
+    
+    # Setup Telethon (user account)
+    client = await setup_telethon()
+    if not client:
+        logger.error("❌ Failed to setup Telethon. Please check API credentials.")
+        return
+    
+    # Setup python-telegram-bot
     application = Application.builder().token(NEW_BOT_TOKEN).build()
     
-    # Add error handler
+    # Add handlers
+    application.add_handler(MessageHandler(
+        filters.TEXT & ~filters.Chat(EXISTING_GROUP_ID), 
+        handle_user_message
+    ))
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.Chat(EXISTING_GROUP_ID),
+        handle_group_response
+    ))
     application.add_error_handler(error_handler)
     
-    # Add message handler for all messages (including commands)
-    application.add_handler(MessageHandler(filters.ALL, handle_message))
+    logger.info("✅ Bot system started successfully!")
+    logger.info("🎯 How it works:")
+    logger.info("   1. User sends message in NEW group")
+    logger.info("   2. Your personal account sends it to EXISTING group") 
+    logger.info("   3. Friend bot responds to your personal account")
+    logger.info("   4. Response is automatically forwarded to user")
+    logger.info("=" * 50)
     
-    logger.info(f"📌 Configuration:")
-    logger.info(f" Existing Group ID: {EXISTING_GROUP_ID}")
-    logger.info(f" Friend Bot ID: {FRIEND_BOT_ID}")
-    logger.info(f" Supported commands: /num, /aadhar, /familyinfo")
-    logger.info("=" * 60)
-    logger.info("🔄 Bot is now running...")
-    logger.info("=" * 60)
-    
-    application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    # Run the bot
+    await application.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())
