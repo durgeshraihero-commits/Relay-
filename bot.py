@@ -1,220 +1,120 @@
-# relay_bot.py
-import os
-import re
-import json
 import logging
-import asyncio
-from time import time
-from pathlib import Path
-from typing import Dict
-
-from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
-from aiogram.enums import ParseMode
-from aiogram.types import ReplyKeyboardRemove
-from aiogram.client.default import DefaultBotProperties  # NEW: For default properties
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger("relay_bot")
+from telegram import Update
+from telegram.ext import Application, MessageHandler, filters, ContextTypes
 
 # Configuration
-RELAY_TOKEN = os.getenv("RELAY_TOKEN", "8224146762:AAEJpeFIHmMeG2fjUn7ccMBiupA9Cxuewew")
-TARGET_GROUP_ID = int(os.getenv("TARGET_GROUP_ID", "-1003275777221"))
-TARGET_BOT_ID = int(os.getenv("TARGET_BOT_ID", "7574815513"))
-REPLY_BACK_TO = os.getenv("REPLY_BACK_TO", "group")
-DELETE_ORIGINAL = os.getenv("DELETE_ORIGINAL", "yes").lower() in ("1", "true", "yes")
-PERSIST_FILE = os.getenv("PERSIST_FILE", "pending_map.json")
+NEW_BOT_TOKEN = "8224146762:AAEJpeFIHmMeG2fjUn7ccMBiupA9Cxuewew"
+EXISTING_GROUP_ID = -1003275777221
+FRIEND_BOT_ID = 7574815513
 
-# Validation
-if not RELAY_TOKEN:
-    raise SystemExit("RELAY_TOKEN is required")
-if not TARGET_GROUP_ID:
-    raise SystemExit("TARGET_GROUP_ID is required")
-if not TARGET_BOT_ID:
-    raise SystemExit("TARGET_BOT_ID is required")
-
-# Initialize bot and dispatcher with modern aiogram 3.x approach
-bot = Bot(
-    token=RELAY_TOKEN,
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML)  # NEW: Set default parse mode
+# Setup logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
 )
-dp = Dispatcher()
+logger = logging.getLogger(__name__)
 
-# In-memory pending map
-pending: Dict[str, dict] = {}
+# Store message mappings: {existing_group_msg_id: (new_group_chat_id, new_group_msg_id)}
+message_map = {}
 
-# Load persistence
-persist_path = Path(PERSIST_FILE)
-if persist_path.exists():
-    try:
-        with open(persist_path, 'r') as f:
-            pending = json.load(f)
-        logger.info("Loaded pending map with %d entries", len(pending))
-    except Exception as e:
-        logger.error("Failed to load persistence file: %s", e)
-        pending = {}
-
-def save_pending():
-    """Save pending map to file"""
-    try:
-        with open(persist_path, 'w') as f:
-            json.dump(pending, f)
-    except Exception as e:
-        logger.error("Failed to save pending map: %s", e)
-
-# Cleaning functions (keep your existing clean_text function)
-JOIN_LINK_RE = re.compile(r"https?://t\.me/[A-Za-z0-9_+/=%-]+")
-JOIN_FIELD_RE = re.compile(r'(?i)"join_(?:main|backup)"\s*:\s*".+?"\s*(,)?')
-UNWANTED_KEYS_RE = re.compile(r'(?im)^\s*"?(join_main|join_backup|join_.*invite|join.*)"?.*$', re.MULTILINE)
-
-def clean_text(text: str) -> str:
-    """Strip join links/fields and try to extract respCode/respMessage."""
-    if not text:
-        return ""
-    text = JOIN_LINK_RE.sub("", text)
-    text = JOIN_FIELD_RE.sub("", text)
-    text = UNWANTED_KEYS_RE.sub("", text)
-    text = re.sub(r"\n{2,}", "\n\n", text).strip()
-
-    # Try to extract respCode and respMessage if present
-    m_code = re.search(r'"respCode"\s*:\s*"?(?P<code>\d+)"?', text)
-    mm = re.search(r'"respMessage"\s*:\s*"(?P<msg>[^"]*)"', text)
-    if m_code or mm:
-        out = ["📁 Family Information:"]
-        if m_code:
-            out.append(f"• Code: <code>{m_code.group('code')}</code>")
-        if mm:
-            out.append(f"• Message: {mm.group('msg')}")
-        return "\n".join(out)
-    return text
-
-def pending_key(chat_id: int, msg_id: int) -> str:
-    return f"{chat_id}:{msg_id}"
-
-# Handlers
-@dp.message(Command("start"))
-async def cmd_start(msg: types.Message):
-    await msg.answer("Relay bot ready. Use /familyinfo <number> to query.", reply_markup=ReplyKeyboardRemove())
-
-@dp.message(Command("familyinfo"))
-async def familyinfo_handler(msg: types.Message):
-    args = msg.text.partition(" ")[2].strip()
-    if not args:
-        await msg.reply("Usage: /familyinfo <number>\nExample: /familyinfo 524928543777")
+async def handle_new_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle messages from new group - forward to existing group"""
+    if not update.message or not update.message.text:
         return
-
-    query_text = args
-    try:
-        sent = await bot.send_message(chat_id=TARGET_GROUP_ID, text=query_text)
-        key = pending_key(sent.chat.id, sent.message_id)
-        pending[key] = {
-            "origin_chat_id": msg.chat.id,
-            "origin_user_id": msg.from_user.id,
-            "origin_message_id": msg.message_id,
-            "query_text": query_text,
-            "sent_time": int(time())
-        }
-        save_pending()
-        await msg.reply("✅ Request forwarded to target group. I'll post the cleaned reply when it's ready.")
-    except Exception as e:
-        logger.error("Failed forwarding to target group: %s", e)
-        await msg.reply("Failed to forward request. Make sure the relay bot is added to the target group and can send messages.")
-
-@dp.message(F.chat.id == TARGET_GROUP_ID, F.from_user.is_bot == True)
-async def on_friendbot_message(msg: types.Message):
-    if msg.from_user.id != TARGET_BOT_ID:
-        return
-
-    logger.info("Received message from friend-bot in target group: %s", msg.message_id)
-
-    linked = None
-    if msg.reply_to_message and msg.reply_to_message.from_user:
-        try:
-            me = await bot.get_me()
-            if msg.reply_to_message.from_user.id == me.id:
-                key = pending_key(msg.reply_to_message.chat.id, msg.reply_to_message.message_id)
-                linked = pending.get(key)
-        except Exception as e:
-            logger.error("get_me failed: %s", e)
-
-    if not linked:
-        text_lower = (msg.text or msg.caption or "").lower()
-        for k, v in list(pending.items()):
-            if v.get("query_text", "").lower() in text_lower:
-                linked = v
-                pending.pop(k, None)
-                save_pending()
-                break
-
-    if not linked:
-        logger.info("Could not map friend-bot reply to pending request. Ignoring.")
-        return
-
-    original_text = msg.text or msg.caption or ""
-    cleaned = clean_text(original_text)
-    if not cleaned:
-        cleaned = "⚠️ Bot replied but nothing remained after cleaning."
-
-    origin_chat = linked["origin_chat_id"]
-    origin_user = linked["origin_user_id"]
-
-    if DELETE_ORIGINAL:
-        try:
-            await bot.delete_message(chat_id=msg.chat.id, message_id=msg.message_id)
-        except Exception as e:
-            logger.warning("Could not delete friend-bot message: %s", e)
-
-    if msg.reply_to_message and msg.reply_to_message.from_user:
-        try:
-            me = await bot.get_me()
-            if msg.reply_to_message.from_user.id == me.id:
-                try:
-                    await bot.delete_message(chat_id=msg.chat.id, message_id=msg.reply_to_message.message_id)
-                except Exception:
-                    pass
-                pending.pop(pending_key(msg.reply_to_message.chat.id, msg.reply_to_message.message_id), None)
-                save_pending()
-        except Exception:
-            pass
-
-    try:
-        if REPLY_BACK_TO == "user":
-            try:
-                await bot.send_message(chat_id=origin_user, text=cleaned)
-            except Exception:
-                await bot.send_message(chat_id=origin_chat, text=cleaned)
-        else:
-            await bot.send_message(chat_id=origin_chat, text=cleaned)
-    except Exception as e:
-        logger.error("Failed sending cleaned message back: %s", e)
-
-@dp.message()
-async def fallback(message: types.Message):
-    return
-
-async def main():
-    """Main function to run the bot"""
-    logger.info("Starting relay bot")
     
-    # Remove webhook if exists and start polling
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
+    new_group_id = update.effective_chat.id
+    user_message = update.message.text
+    
     try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
+        # Forward message to existing group
+        sent_msg = await context.bot.send_message(
+            chat_id=EXISTING_GROUP_ID,
+            text=f"User Query:\n{user_message}"
+        )
+        
+        # Store mapping for reply tracking
+        message_map[sent_msg.message_id] = (new_group_id, update.message.message_id)
+        
+        logger.info(f"Forwarded message from new group to existing group")
+        
     except Exception as e:
-        logger.error(f"Bot crashed with error: {e}")
-    finally:
-        save_pending()
-        logger.info("Bot shutdown complete")
+        logger.error(f"Error forwarding message: {e}")
+        await update.message.reply_text("Sorry, there was an error processing your request.")
+
+
+async def handle_existing_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle messages from existing group - check if it's from friend bot"""
+    if not update.message:
+        return
+    
+    # Check if message is from the friend bot
+    if update.message.from_user.id != FRIEND_BOT_ID:
+        return
+    
+    # Check if this is a reply to our forwarded message
+    if not update.message.reply_to_message:
+        return
+    
+    replied_to_msg_id = update.message.reply_to_message.message_id
+    
+    # Check if we have a mapping for this message
+    if replied_to_msg_id not in message_map:
+        return
+    
+    new_group_id, original_msg_id = message_map[replied_to_msg_id]
+    
+    try:
+        # Get the bot's response text
+        bot_response = update.message.text or update.message.caption or ""
+        
+        # Modify the response (you can customize this modification)
+        modified_response = f"🤖 Assistant Response:\n\n{bot_response}"
+        
+        # Send modified response to new group
+        await context.bot.send_message(
+            chat_id=new_group_id,
+            text=modified_response,
+            reply_to_message_id=original_msg_id
+        )
+        
+        logger.info(f"Sent modified response back to new group")
+        
+        # Clean up mapping
+        del message_map[replied_to_msg_id]
+        
+    except Exception as e:
+        logger.error(f"Error sending response: {e}")
+
+
+async def handle_all_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Route messages based on which group they come from"""
+    if not update.effective_chat:
+        return
+    
+    chat_id = update.effective_chat.id
+    
+    if chat_id == EXISTING_GROUP_ID:
+        await handle_existing_group_message(update, context)
+    else:
+        # Assume it's from a new group where users interact
+        await handle_new_group_message(update, context)
+
+
+def main():
+    """Start the bot"""
+    # Create application
+    application = Application.builder().token(NEW_BOT_TOKEN).build()
+    
+    # Add message handler
+    application.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        handle_all_messages
+    ))
+    
+    # Start the bot
+    logger.info("Bot started successfully!")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+
+if __name__ == '__main__':
+    main()
