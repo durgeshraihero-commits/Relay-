@@ -88,16 +88,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             logger.info(f"🎯 This is from NEW GROUP (ID: {chat_id})")
             
-            logger.info(f"📤 Forwarding exact message to existing group {EXISTING_GROUP_ID}...")
+            logger.info(f"📤 Forwarding message to existing group {EXISTING_GROUP_ID}...")
             logger.info(f"   Message content: '{message_text}'")
             
-            # Send the message exactly as received
-            sent_msg = await context.bot.send_message(
-                chat_id=EXISTING_GROUP_ID,
-                text=message_text
-            )
+            # Try forwarding the original message instead of sending a copy
+            try:
+                sent_msg = await context.bot.forward_message(
+                    chat_id=EXISTING_GROUP_ID,
+                    from_chat_id=chat_id,
+                    message_id=update.message.message_id
+                )
+                logger.info(f"✅ Message forwarded! Message ID in existing group: {sent_msg.message_id}")
+            except Exception as forward_error:
+                logger.warning(f"⚠️ Forward failed: {forward_error}")
+                logger.info("   Trying to send as new message instead...")
+                # Fallback: send as new message
+                sent_msg = await context.bot.send_message(
+                    chat_id=EXISTING_GROUP_ID,
+                    text=message_text
+                )
+                logger.info(f"✅ Message sent! Message ID in existing group: {sent_msg.message_id}")
             
-            logger.info(f"✅ Message sent! Message ID in existing group: {sent_msg.message_id}")
             logger.info(f"   Now waiting for friend bot (ID: {FRIEND_BOT_ID}) to reply to this message...")
             
             message_map[sent_msg.message_id] = (chat_id, update.message.message_id)
