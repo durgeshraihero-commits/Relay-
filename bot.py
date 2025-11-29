@@ -45,21 +45,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Case 1: Message from existing group
         if chat_id == EXISTING_GROUP_ID:
             logger.info("🎯 This is from EXISTING GROUP")
+            logger.info(f"   Checking if from friend bot (expected: {FRIEND_BOT_ID}, actual: {from_user.id})")
             
             if from_user.id == FRIEND_BOT_ID:
                 logger.info(f"✅ Confirmed: Message from FRIEND BOT")
+                logger.info(f"   Message content: '{message_text}'")
                 
                 if update.message.reply_to_message:
                     replied_to_msg_id = update.message.reply_to_message.message_id
+                    replied_to_text = update.message.reply_to_message.text or ""
                     logger.info(f"✅ Friend bot replied to message ID: {replied_to_msg_id}")
+                    logger.info(f"   Original message was: '{replied_to_text}'")
                     logger.info(f"📊 Current message_map: {message_map}")
                     
                     if replied_to_msg_id in message_map:
                         new_group_id, original_msg_id = message_map[replied_to_msg_id]
                         
-                        modified_response = f"🤖 Assistant Response:\n\n{message_text}"
+                        # Keep the response as-is, just add a simple header
+                        modified_response = f"🤖 Response:\n\n{message_text}"
                         
                         logger.info(f"📤 Sending response to group {new_group_id}")
+                        logger.info(f"   Response content: '{modified_response}'")
+                        
                         await context.bot.send_message(
                             chat_id=new_group_id,
                             text=modified_response,
@@ -70,9 +77,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         del message_map[replied_to_msg_id]
                     else:
                         logger.warning(f"❌ No mapping found for message ID {replied_to_msg_id}")
-                        logger.warning(f"Available mappings: {list(message_map.keys())}")
+                        logger.warning(f"   Available mappings: {list(message_map.keys())}")
                 else:
                     logger.info("⚠️ Friend bot message is NOT a reply - ignoring")
+                    logger.info("   (Friend bot must REPLY to the forwarded message)")
             else:
                 logger.info(f"⚠️ Message from user {from_user.id}, not friend bot {FRIEND_BOT_ID}")
         
@@ -80,12 +88,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             logger.info(f"🎯 This is from NEW GROUP (ID: {chat_id})")
             
-            logger.info(f"📤 Forwarding to existing group {EXISTING_GROUP_ID}...")
+            logger.info(f"📤 Forwarding exact message to existing group {EXISTING_GROUP_ID}...")
+            logger.info(f"   Message content: '{message_text}'")
+            
             # Send the message exactly as received
             sent_msg = await context.bot.send_message(
                 chat_id=EXISTING_GROUP_ID,
                 text=message_text
             )
+            
+            logger.info(f"✅ Message sent! Message ID in existing group: {sent_msg.message_id}")
+            logger.info(f"   Now waiting for friend bot (ID: {FRIEND_BOT_ID}) to reply to this message...")
             
             message_map[sent_msg.message_id] = (chat_id, update.message.message_id)
             
