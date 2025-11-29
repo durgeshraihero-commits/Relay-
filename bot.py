@@ -115,9 +115,9 @@ def main():
     # Add error handler
     application.add_error_handler(error_handler)
     
-    # Add message handler - catches ALL messages
+    # Add message handler - catches ALL messages including commands
     application.add_handler(MessageHandler(
-        filters.ALL & ~filters.COMMAND,
+        filters.ALL,
         handle_message
     ))
     
