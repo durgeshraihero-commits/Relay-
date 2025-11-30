@@ -1,78 +1,91 @@
-import logging
-from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from telethon import TelegramClient, events
+import asyncio
+import os
 
-NEW_BOT_TOKEN = "8224146762:AAEJpeFIHmMeG2fjUn7ccMBiupA9Cxuewew"
-EXISTING_GROUP_ID = -1003275777221
+# Your API credentials (use environment variables for security)
+api_id = int(os.getenv('API_ID', '36246931'))
+api_hash = os.getenv('API_HASH', 'e9708f05bedf286d69abed0da7f44580')
+phone = os.getenv('PHONE', '+917667280752')
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Group usernames/IDs
+first_group = os.getenv('FIRST_GROUP', 'eticalosinter')  # Source group (commands from here)
+second_group = os.getenv('SECOND_GROUP', 'ethicalosinter23')  # Destination group (forward commands to here)
 
+# Initialize the client
+client = TelegramClient('relay_session', api_id, api_hash)
+
+# Dictionary to track message mappings (original_msg_id -> forwarded_msg_id)
 message_map = {}
+reverse_map = {}  # forwarded_msg_id -> original_msg_id
 
-async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle messages from users"""
-    try:
-        if update.effective_chat.id == EXISTING_GROUP_ID:
-            return
+@client.on(events.NewMessage(chats=first_group))
+async def forward_command(event):
+    """Forward messages starting with '/' from first group to second group"""
+    message = event.message
+    
+    # Check if message starts with '/'
+    if message.text and message.text.startswith('/'):
+        try:
+            # Forward the message to the second group
+            forwarded = await client.send_message(
+                second_group,
+                message.text
+            )
             
-        user_message = update.message.text.strip()
-        original_chat_id = update.effective_chat.id
-        original_msg_id = update.message.message_id
-        
-        logger.info(f"📩 User: {user_message}")
-        
-        # Send to existing group
-        sent_msg = await context.bot.send_message(
-            chat_id=EXISTING_GROUP_ID,
-            text=user_message
-        )
-        
-        message_map[sent_msg.message_id] = (original_chat_id, original_msg_id)
-        
-        await update.message.reply_text("✅ Sent! Waiting for response...", reply_to_message_id=original_msg_id)
-        logger.info(f"✅ Message sent to group")
-        
-    except Exception as e:
-        logger.error(f"❌ Error: {e}")
+            # Store the mapping
+            message_map[message.id] = forwarded.id
+            reverse_map[forwarded.id] = message.id
+            
+            print(f"✓ Forwarded command from first group: {message.text}")
+        except Exception as e:
+            print(f"Error forwarding command: {e}")
 
-async def handle_group_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle responses"""
-    try:
-        if (update.effective_chat.id == EXISTING_GROUP_ID and 
-            update.message.reply_to_message):
-            
-            replied_msg_id = update.message.reply_to_message.message_id
-            
-            if replied_msg_id in message_map:
-                chat_id, msg_id = message_map[replied_msg_id]
-                
-                await context.bot.send_message(
-                    chat_id=chat_id,
-                    text=f"🤖 Response:\n\n{update.message.text}",
-                    reply_to_message_id=msg_id
+@client.on(events.NewMessage(chats=second_group))
+async def forward_reply(event):
+    """Forward replies from second group back to first group"""
+    message = event.message
+    
+    # Check if this is a reply to a forwarded message
+    if message.reply_to_msg_id:
+        original_msg_id = reverse_map.get(message.reply_to_msg_id)
+        
+        if original_msg_id:
+            try:
+                # Send the reply back to the first group
+                await client.send_message(
+                    first_group,
+                    message.text,
+                    reply_to=original_msg_id
                 )
-                
-                del message_map[replied_msg_id]
-                logger.info("✅ Response forwarded!")
-                
-    except Exception as e:
-        logger.error(f"❌ Response error: {e}")
+                print(f"✓ Forwarded reply back to first group: {message.text[:50]}...")
+            except Exception as e:
+                print(f"Error forwarding reply: {e}")
+    # Also forward non-reply messages that might be responses
+    elif not message.text.startswith('/'):
+        try:
+            await client.send_message(
+                first_group,
+                f"📩 Response from bot:\n{message.text}"
+            )
+            print(f"✓ Forwarded response to first group")
+        except Exception as e:
+            print(f"Error forwarding response: {e}")
 
-def main():
-    application = Application.builder().token(NEW_BOT_TOKEN).build()
+async def main():
+    # Start the client
+    await client.start(phone)
+    print("✓ Client started successfully!")
+    print(f"✓ Monitoring group: {first_group}")
+    print(f"✓ Forwarding to group: {second_group}")
+    print("✓ Bot is running... Press Ctrl+C to stop")
     
-    application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.Chat(EXISTING_GROUP_ID), 
-        handle_user_message
-    ))
-    application.add_handler(MessageHandler(
-        filters.TEXT & filters.Chat(EXISTING_GROUP_ID),
-        handle_group_response
-    ))
-    
-    logger.info("🚀 Simple Bot Started!")
-    application.run_polling(drop_pending_updates=True)
+    # Keep the client running
+    await client.run_until_disconnected()
 
 if __name__ == '__main__':
-    main()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n✓ Bot stopped by user")
+    except Exception as e:
+        print(f"Error: {e}")
