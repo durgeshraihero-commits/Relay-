@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: telegram-relay-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python relay_bot.py
+    plan: free
+    healthCheckPath: /
+    envVars:
+      - key: API_ID
+        value: 36246931
+      - key: API_HASH
+        value: e9708f05bedf286d69abed0da7f44580
+      - key: PHONE
+        value: +917667280752
+      - key: FIRST_GROUP
+        value: eticalosinter
+      - key: SECOND_GROUP
+        value: ethicalosinter23
+      - key: PYTHON_VERSION
+        value: 3.11.0
