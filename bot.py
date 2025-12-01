@@ -52,7 +52,7 @@ async def forward_command(event):
 
     try:
         # Wait 2 seconds and re-check that the message exists and hasn't changed
-        await asyncio.sleep(2)
+        await asyncio.sleep(5)
         # Fetch the message again from the source chat by ID
         latest = await client.get_messages(first_group, ids=message.id)
 
