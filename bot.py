@@ -1,8 +1,10 @@
+# bot.py
 from telethon import TelegramClient, events
 import asyncio
 import os
-from aiohttp import web
 import logging
+import time
+from aiohttp import web
 
 # --- config from env ---
 api_id = int(os.getenv('API_ID', '36246931'))
@@ -18,12 +20,18 @@ logger = logging.getLogger("relay_bot")
 
 client = TelegramClient('relay_session', api_id, api_hash)
 
-# mapping original_msg_id (in first_group) -> forwarded_msg_id (in second_group)
+# mapping original_msg_id (in first_group) -> { forwarded_id, ts }
 message_map = {}
 # reverse mapping forwarded_msg_id -> original_msg_id
 reverse_map = {}
 
 bot_status = {"running": False, "messages_forwarded": 0}
+
+# constants
+FORWARD_STABILITY_WAIT = 5        # seconds to wait and re-check original message before forwarding
+RESPONSE_WINDOW = 30              # seconds: only forward replies that arrive within this window
+CLEANUP_INTERVAL = 60             # seconds: how often to cleanup old mappings
+MAPPING_MAX_AGE = 120             # seconds: delete mappings older than this
 
 # Helper: safe get text (message.text can be None)
 def _get_text(msg):
@@ -33,14 +41,15 @@ def _get_text(msg):
 async def forward_command(event):
     """
     Forward messages starting with '/' from first group to second group
-    BUT only if:
-      - the command is not '/start'
-      - the same message still exists and has the same text 2 seconds later
+    Conditions:
+      - message starts with '/'
+      - not '/start'
+      - message still exists with same text after FORWARD_STABILITY_WAIT seconds
+    After forwarding we store mapping with timestamp so replies can be validated.
     """
     message = event.message
     text = _get_text(message)
 
-    # Only proceed if there's text and it starts with '/'
     if not text or not text.startswith('/'):
         return
 
@@ -51,38 +60,39 @@ async def forward_command(event):
         return
 
     try:
-        # Wait 2 seconds and re-check that the message exists and hasn't changed
-        await asyncio.sleep(5)
-        # Fetch the message again from the source chat by ID
+        # Wait a short time to avoid ephemeral/accidental commands
+        await asyncio.sleep(FORWARD_STABILITY_WAIT)
+
+        # Fetch the message again from the source chat by ID to ensure it still exists
         latest = await client.get_messages(first_group, ids=message.id)
-
-        # If message was deleted or content changed, skip forwarding
         if not latest:
-            logger.info(f"Message id {message.id} appears deleted after 2s — skipping forward.")
+            logger.info(f"Message id {message.id} appears deleted after stability wait — skipping forward.")
             return
-
         latest_text = _get_text(latest)
         if latest_text != text:
-            logger.info(f"Message id {message.id} text changed after 2s — skipping forward.")
+            logger.info(f"Message id {message.id} text changed after stability wait — skipping forward.")
             return
 
         # All checks passed — forward/send the command text to the second group
         forwarded = await client.send_message(second_group, text)
-        # store mappings
-        message_map[message.id] = forwarded.id
+
+        # store mappings with timestamp
+        ts = time.time()
+        message_map[message.id] = {"forwarded_id": forwarded.id, "ts": ts}
         reverse_map[forwarded.id] = message.id
         bot_status["messages_forwarded"] += 1
 
-        logger.info(f"✓ Forwarded command from {first_group} -> {second_group}: {text}")
+        logger.info(f"✓ Forwarded command {message.id} from {first_group} -> {second_group}: {text}")
     except Exception as e:
         logger.exception(f"Error while trying to forward command: {e}")
 
 @client.on(events.NewMessage(chats=second_group))
 async def forward_reply(event):
     """
-    Forward replies from second group back to first group.
-    If the message in second_group is a reply to a forwarded message, reply to the original message ID.
-    Also forward non-command responses back as "Response from bot:" (skip commands).
+    Forward replies from second group back to first group only when:
+      - the message is a reply to a forwarded message AND
+      - the reply timestamp is within RESPONSE_WINDOW seconds of the original user message timestamp.
+    Non-reply messages are ignored (so random bot messages won't be forwarded).
     """
     message = event.message
     text = _get_text(message)
@@ -91,35 +101,60 @@ async def forward_reply(event):
     if message.reply_to_msg_id:
         original_msg_id = reverse_map.get(message.reply_to_msg_id)
         if original_msg_id:
-            try:
-                # Reply back to the original message in the first group
-                await client.send_message(first_group, text, reply_to=original_msg_id)
-                bot_status["messages_forwarded"] += 1
-                logger.info(f"✓ Forwarded reply back to {first_group}: {text[:50]}...")
-                return
-            except Exception as e:
-                logger.exception(f"Error forwarding reply back to source group: {e}")
-                return
+            mapping = message_map.get(original_msg_id)
+            if mapping:
+                sent_ts = mapping.get("ts", 0)
+                now = time.time()
+                age = now - sent_ts
+                if age <= RESPONSE_WINDOW:
+                    try:
+                        # Reply back to the original message in the first group
+                        await client.send_message(first_group, text, reply_to=original_msg_id)
+                        bot_status["messages_forwarded"] += 1
+                        logger.info(f"✓ Forwarded timely reply back to {first_group} (orig_id={original_msg_id}) age={age:.1f}s: {text[:50]}...")
+                    except Exception as e:
+                        logger.exception(f"Error forwarding reply back to source group: {e}")
+                else:
+                    logger.info(f"Ignored reply in {second_group} for original {original_msg_id} — arrived after {age:.1f}s (> {RESPONSE_WINDOW}s).")
+            else:
+                logger.debug(f"No mapping found for original {original_msg_id} — ignoring reply.")
+        else:
+            logger.debug("Reply in destination group is not to a forwarded message — ignoring.")
+        return
 
-    # If not a reply (or mapping not found) and not a command (don't forward commands from second_group)
-    if text and not text.startswith('/'):
+    # If not a reply (or mapping not found) — ignore to prevent random messages getting forwarded
+    logger.debug("Ignored non-reply/non-mapped message from destination group (prevents random bot messages).")
+
+async def cleanup_task():
+    """Periodically remove old mappings to keep memory small."""
+    while True:
         try:
-            await client.send_message(first_group, f"📩 Response from bot:\n{text}")
-            bot_status["messages_forwarded"] += 1
-            logger.info("✓ Forwarded non-reply response to source group.")
+            now = time.time()
+            to_delete = []
+            for orig_id, info in list(message_map.items()):
+                if now - info.get("ts", 0) > MAPPING_MAX_AGE:
+                    to_delete.append(orig_id)
+            for orig_id in to_delete:
+                fwd_id = message_map[orig_id].get("forwarded_id")
+                message_map.pop(orig_id, None)
+                if fwd_id:
+                    reverse_map.pop(fwd_id, None)
+                logger.debug(f"Cleaned mapping orig={orig_id}, fwd={fwd_id}")
         except Exception as e:
-            logger.exception(f"Error forwarding response to source group: {e}")
-    else:
-        # Either no text or it's a command — ignore
-        logger.debug("Ignored message from second_group (either command or empty).")
+            logger.exception(f"Error during cleanup: {e}")
+        await asyncio.sleep(CLEANUP_INTERVAL)
 
 async def start_telegram_bot():
-    """Start the Telegram client"""
+    """Start the Telegram client and cleanup background task"""
     await client.start(phone)
     bot_status["running"] = True
     logger.info("✓ Telegram bot started successfully!")
     logger.info(f"✓ Monitoring group: {first_group}")
     logger.info(f"✓ Forwarding to group: {second_group}")
+
+    # spawn cleanup task
+    client.loop.create_task(cleanup_task())
+
     await client.run_until_disconnected()
 
 # Web server handlers (unchanged except small logging)
@@ -166,9 +201,9 @@ async def status(request):
             </div>
             <div class="info">
                 <strong>ℹ️ How it works:</strong><br>
-                • Messages starting with '/' in {first_group} are forwarded to {second_group} only if they still exist after 2 seconds.<br>
-                • '/start' is never forwarded.<br>
-                • Replies in {second_group} are sent back to {first_group} (when mapping exists).
+                • Commands starting with '/' from the source group are forwarded to the destination group (stability wait applied).<br>
+                • Replies in the destination group are forwarded back only if they are replies to the forwarded message and arrive within {RESPONSE_WINDOW} seconds of the original command.<br>
+                • Random/non-reply messages in the destination group are ignored (so the bot won't forward unexpected messages).
             </div>
         </div>
     </body>
