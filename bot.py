@@ -31,7 +31,8 @@ message_map_third = {}
 reverse_map_third = {}
 
 # Track which messages from third group have already been forwarded
-forwarded_from_third = set()
+# Key: reply_to_msg_id, Value: count of replies forwarded
+forwarded_from_third = {}
 
 bot_status = {"running": False, "messages_forwarded": 0}
 
@@ -158,7 +159,7 @@ async def forward_reply_third(event):
     """
     Forward replies from third group back to first group.
     Remove footer lines from JSON responses.
-    Only forward replies - one reply per command.
+    Forward up to the maximum number of replies expected for each command.
     """
     message = event.message
     text = _get_text(message)
@@ -174,9 +175,15 @@ async def forward_reply_third(event):
         logger.debug("Reply in third_group doesn't map to any original message.")
         return
 
-    # Check if we've already forwarded a reply for this original message
-    if message.reply_to_msg_id in forwarded_from_third:
-        logger.debug(f"Already forwarded a reply for message {message.reply_to_msg_id}, skipping.")
+    # Check reply count for this message
+    reply_info = forwarded_from_third.get(message.reply_to_msg_id)
+    if not reply_info:
+        logger.debug(f"No reply tracking info found for message {message.reply_to_msg_id}")
+        return
+    
+    # Check if we've already forwarded the maximum number of replies
+    if reply_info['count'] >= reply_info['max']:
+        logger.debug(f"Already forwarded {reply_info['count']}/{reply_info['max']} replies for message {message.reply_to_msg_id}, skipping.")
         return
 
     # Clean the response by removing footer
@@ -186,11 +193,11 @@ async def forward_reply_third(event):
         # Reply back to the original message in the first group with cleaned text
         await client.send_message(first_group, cleaned_text, reply_to=original_msg_id)
         
-        # Mark this forwarded message as processed so we don't forward additional replies
-        forwarded_from_third.add(message.reply_to_msg_id)
+        # Increment the reply count
+        forwarded_from_third[message.reply_to_msg_id]['count'] += 1
         
         bot_status["messages_forwarded"] += 1
-        logger.info(f"✓ Forwarded reply back to {first_group} from third group: {cleaned_text[:50]}...")
+        logger.info(f"✓ Forwarded reply {reply_info['count'] + 1}/{reply_info['max']} back to {first_group} from third group: {cleaned_text[:50]}...")
     except Exception as e:
         logger.exception(f"Error forwarding reply back to source group from third: {e}")
 
@@ -251,7 +258,7 @@ async def status(request):
                 • Messages starting with '/' in {first_group} are forwarded to {second_group} after 5 second verification<br>
                 • Messages starting with '2/' in {first_group} are forwarded to {third_group} (as '/command') after 5 second verification<br>
                 • '/start' is never forwarded<br>
-                • From {third_group}: Only ONE reply per command is forwarded back (footer removed)<br>
+                • From {third_group}: Most commands get ONE reply, '/vnum' gets TWO replies (footer removed)<br>
                 • From {second_group}: All replies are forwarded back
             </div>
         </div>
