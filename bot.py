@@ -164,7 +164,7 @@ async def forward_command(event):
             cmd_token = clean_command.split()[0].lower()
             allowed = 1
             stabilize = False
-            if cmd_token in ['/vnum', '/bomber']:
+            if cmd_token in ['/vnum', '/bomber', '/familyinfo']:
                 allowed = 2
                 stabilize = True  # enable stabilization behavior for these commands
 
