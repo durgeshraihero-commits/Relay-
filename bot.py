@@ -249,6 +249,9 @@ async def status(request):
         remaining = max(0, int(info['deadline'] - now))
         active_windows.append(f"forwarded_id={fid}, original_msg={info['original_msg_id']}, count={info['count']}/{info['max']}, remaining_s={remaining}")
 
+    # compute text outside f-string to avoid backslash-in-expression syntax error
+    active_text = "\n".join(active_windows) if active_windows else "None"
+
     html = f"""
     <!DOCTYPE html>
     <html>
@@ -284,7 +287,7 @@ async def status(request):
             </div>
             <div>
                 <h3>Active reply-windows</h3>
-                <pre>{'\\n'.join(active_windows) if active_windows else 'None'}</pre>
+                <pre>{active_text}</pre>
             </div>
         </div>
     </body>
