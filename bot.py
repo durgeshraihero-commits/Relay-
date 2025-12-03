@@ -30,6 +30,9 @@ reverse_map = {}
 message_map_third = {}
 reverse_map_third = {}
 
+# Track which messages from third group have already been forwarded
+forwarded_from_third = set()
+
 bot_status = {"running": False, "messages_forwarded": 0}
 
 # Helper: safe get text (message.text can be None)
@@ -56,9 +59,9 @@ def remove_footer(text):
 async def forward_command(event):
     """
     Forward messages starting with '/' or '2/' from first group to appropriate destination group
-    BUT only if:
-      - the command is not '/start'
-      - the same message still exists and has the same text 5 seconds later
+    - For regular '/' commands: wait 5 seconds and verify message unchanged
+    - For '2/' commands: forward immediately to third group (no delay)
+    - Never forward '/start'
     """
     message = event.message
     text = _get_text(message)
@@ -70,9 +73,11 @@ async def forward_command(event):
     # Determine target group and clean command
     target_group = second_group
     clean_command = text
+    is_third_group = False
     
     if text.startswith('2/'):
         target_group = third_group
+        is_third_group = True
         # Remove '2' prefix but keep the '/'
         clean_command = '/' + text[2:]
     
@@ -83,7 +88,7 @@ async def forward_command(event):
         return
 
     try:
-        # Wait 5 seconds and re-check that the message exists and hasn't changed
+        # Wait 5 seconds and re-check that the message exists and hasn't changed (for both groups)
         await asyncio.sleep(5)
         # Fetch the message again from the source chat by ID
         latest = await client.get_messages(first_group, ids=message.id)
@@ -101,8 +106,8 @@ async def forward_command(event):
         # All checks passed — forward/send the command text to the target group
         forwarded = await client.send_message(target_group, clean_command)
         
-        # store mappings based on target group
-        if target_group == third_group:
+        # Store mappings based on target group
+        if is_third_group:
             message_map_third[message.id] = forwarded.id
             reverse_map_third[forwarded.id] = message.id
         else:
@@ -153,37 +158,41 @@ async def forward_reply_third(event):
     """
     Forward replies from third group back to first group.
     Remove footer lines from JSON responses.
+    Only forward replies - one reply per command.
     """
     message = event.message
     text = _get_text(message)
 
+    # Only process if this is a reply to a message we forwarded
+    if not message.reply_to_msg_id:
+        logger.debug("Ignored non-reply message from third_group.")
+        return
+
+    # Check if this reply_to_msg_id exists in our mapping
+    original_msg_id = reverse_map_third.get(message.reply_to_msg_id)
+    if not original_msg_id:
+        logger.debug("Reply in third_group doesn't map to any original message.")
+        return
+
+    # Check if we've already forwarded a reply for this original message
+    if message.reply_to_msg_id in forwarded_from_third:
+        logger.debug(f"Already forwarded a reply for message {message.reply_to_msg_id}, skipping.")
+        return
+
     # Clean the response by removing footer
     cleaned_text = remove_footer(text)
 
-    # If this message is a reply to something in third_group, try to map back
-    if message.reply_to_msg_id:
-        original_msg_id = reverse_map_third.get(message.reply_to_msg_id)
-        if original_msg_id:
-            try:
-                # Reply back to the original message in the first group with cleaned text
-                await client.send_message(first_group, cleaned_text, reply_to=original_msg_id)
-                bot_status["messages_forwarded"] += 1
-                logger.info(f"✓ Forwarded reply back to {first_group} from third group: {cleaned_text[:50]}...")
-                return
-            except Exception as e:
-                logger.exception(f"Error forwarding reply back to source group from third: {e}")
-                return
-
-    # If not a reply (or mapping not found) and not a command
-    if cleaned_text and not cleaned_text.startswith('/'):
-        try:
-            await client.send_message(first_group, f"📩 Response from IntelX:\n{cleaned_text}")
-            bot_status["messages_forwarded"] += 1
-            logger.info("✓ Forwarded non-reply response to source group from third.")
-        except Exception as e:
-            logger.exception(f"Error forwarding response to source group from third: {e}")
-    else:
-        logger.debug("Ignored message from third_group (either command or empty).")
+    try:
+        # Reply back to the original message in the first group with cleaned text
+        await client.send_message(first_group, cleaned_text, reply_to=original_msg_id)
+        
+        # Mark this forwarded message as processed so we don't forward additional replies
+        forwarded_from_third.add(message.reply_to_msg_id)
+        
+        bot_status["messages_forwarded"] += 1
+        logger.info(f"✓ Forwarded reply back to {first_group} from third group: {cleaned_text[:50]}...")
+    except Exception as e:
+        logger.exception(f"Error forwarding reply back to source group from third: {e}")
 
 async def start_telegram_bot():
     """Start the Telegram client"""
@@ -235,15 +244,15 @@ async def status(request):
                 Messages Forwarded: {bot_status['messages_forwarded']}<br>
                 Source Group: {first_group}<br>
                 Destination Group 1: {second_group}<br>
-                Destination Group 2: {third_group}
+                Destination Group 2 (IntelX): {third_group}
             </div>
             <div class="info">
                 <strong>ℹ️ How it works:</strong><br>
-                • Messages starting with '/' in {first_group} are forwarded to {second_group}<br>
-                • Messages starting with '2/' in {first_group} are forwarded to {third_group} (as '/command')<br>
+                • Messages starting with '/' in {first_group} are forwarded to {second_group} after 5 second verification<br>
+                • Messages starting with '2/' in {first_group} are forwarded to {third_group} (as '/command') after 5 second verification<br>
                 • '/start' is never forwarded<br>
-                • Replies are sent back to {first_group} with footer removed<br>
-                • All messages must exist unchanged after 5 seconds to be forwarded
+                • From {third_group}: Only ONE reply per command is forwarded back (footer removed)<br>
+                • From {second_group}: All replies are forwarded back
             </div>
         </div>
     </body>
