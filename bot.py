@@ -18,6 +18,8 @@ third_group = os.getenv('THIRD_GROUP', 'IntelXGroup')          # destination 2 (
 
 # reply window duration (seconds) after forwarding to third_group
 THIRD_REPLY_WINDOW = int(os.getenv('THIRD_REPLY_WINDOW', '5'))
+# stabilization delay for replies (seconds) before forwarding to source (to allow edits/deletes)
+REPLY_STABILIZE_DELAY = int(os.getenv('REPLY_STABILIZE_DELAY', '5'))
 
 # --- init ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
@@ -35,7 +37,7 @@ message_map_third = {}
 reverse_map_third = {}
 
 # Track which messages from third group have already been forwarded
-# Key: forwarded_msg_id (the id in third_group we sent), Value: dict with count/max/deadline, original_msg_id
+# Key: forwarded_msg_id (the id in third_group we sent), Value: dict with count/max/deadline, original_msg_id, stabilize flag
 forwarded_from_third = {}
 
 bot_status = {"running": False, "messages_forwarded": 0}
@@ -58,6 +60,51 @@ def remove_footer(text):
         lines = text.splitlines()
         filtered = [L for L in lines if '"footer"' not in L and '@frappeash' not in L]
         return '\n'.join(filtered)
+
+async def _stabilize_and_forward_third_reply(forwarded_msg_id: int, reply_msg_id: int):
+    """
+    Wait REPLY_STABILIZE_DELAY seconds, then fetch the reply from third_group.
+    If the reply still exists (not deleted), forward its final version to the original message in first_group.
+    This function also checks that the forwarded_from_third[forwarded_msg_id] hasn't exceeded its max count.
+    """
+    try:
+        await asyncio.sleep(REPLY_STABILIZE_DELAY)
+        # Re-check tracking entry exists and that we still have quota
+        reply_info = forwarded_from_third.get(forwarded_msg_id)
+        if not reply_info:
+            logger.debug(f"Stabilize task: no tracking info for forwarded {forwarded_msg_id} — aborting.")
+            return
+
+        # If we've already forwarded enough replies, do nothing
+        if reply_info['count'] >= reply_info['max']:
+            logger.debug(f"Stabilize task: already forwarded {reply_info['count']}/{reply_info['max']} for {forwarded_msg_id} — aborting.")
+            return
+
+        # Fetch the reply message from third_group to get its latest/edited content (if deleted, latest will be None)
+        latest_reply = await client.get_messages(third_group, ids=reply_msg_id)
+        if not latest_reply:
+            logger.info(f"Stabilize task: reply {reply_msg_id} was deleted in third_group; skipping forward.")
+            return
+
+        latest_text = _get_text(latest_reply)
+        if not latest_text:
+            logger.info(f"Stabilize task: reply {reply_msg_id} has no text after fetch; skipping.")
+            return
+
+        # Clean the response by removing footer
+        cleaned_text = remove_footer(latest_text)
+
+        # Forward as a reply to the original message in first_group
+        original_msg_id = reply_info['original_msg_id']
+        await client.send_message(first_group, cleaned_text, reply_to=original_msg_id)
+
+        # Increment count
+        forwarded_from_third[forwarded_msg_id]['count'] += 1
+        bot_status["messages_forwarded"] += 1
+        current_count = forwarded_from_third[forwarded_msg_id]['count']
+        logger.info(f"✓ Stabilized-forwarded reply {current_count}/{reply_info['max']} from third_group reply {reply_msg_id} to {first_group} (forwarded_id={forwarded_msg_id}).")
+    except Exception as e:
+        logger.exception(f"Error in stabilize_and_forward task for forwarded {forwarded_msg_id}, reply {reply_msg_id}: {e}")
 
 @client.on(events.NewMessage(chats=first_group))
 async def forward_command(event):
@@ -116,18 +163,21 @@ async def forward_command(event):
             # Determine allowed replies: default 1; for /vnum and /bomber allow 2
             cmd_token = clean_command.split()[0].lower()
             allowed = 1
+            stabilize = False
             if cmd_token in ['/vnum', '/bomber']:
                 allowed = 2
+                stabilize = True  # enable stabilization behavior for these commands
 
             # Track the forwarded message id with reply window measured from now
             forwarded_from_third[forwarded.id] = {
                 'count': 0,
                 'max': allowed,
                 'deadline': time.time() + THIRD_REPLY_WINDOW,
-                'original_msg_id': message.id
+                'original_msg_id': message.id,
+                'stabilize': stabilize
             }
 
-            logger.info(f"Reply-tracking set for third_group message {forwarded.id}: max={allowed}, deadline={forwarded_from_third[forwarded.id]['deadline']}")
+            logger.info(f"Reply-tracking set for third_group message {forwarded.id}: max={allowed}, deadline={forwarded_from_third[forwarded.id]['deadline']}, stabilize={stabilize}")
         else:
             # mapping for second_group forwarded messages
             message_map[message.id] = forwarded.id
@@ -175,11 +225,12 @@ async def forward_reply_second(event):
 async def forward_reply_third(event):
     """
     Forward replies from third group back to first group.
-    Remove footer lines from JSON responses.
-    Accept replies only if:
-      - The message is a direct reply to a forwarded message (we have forwarded_from_third entry)
-      - The reply arrives within the configured reply window (default 5s)
-      - We haven't exceeded the allowed number of replies for that forwarded message
+    Behavior:
+      - Only process replies to messages we forwarded (reply_to_msg_id must map)
+      - Only accept replies that arrive within the reply-window (deadline)
+      - If the forwarded message's tracking has stabilize=True, schedule a stabilization delay
+        (REPLY_STABILIZE_DELAY seconds), then fetch the final version and forward if still exists.
+      - If stabilize=False, forward immediately (legacy behavior).
     """
     message = event.message
     text = _get_text(message)
@@ -201,7 +252,7 @@ async def forward_reply_third(event):
         logger.debug(f"No reply tracking info found for message {message.reply_to_msg_id}")
         return
 
-    # Check deadline (only forward replies received within the deadline)
+    # Check deadline (only accept replies received within the deadline)
     now = time.time()
     if now > reply_info['deadline']:
         logger.debug(f"Reply arrived after deadline for message {message.reply_to_msg_id} (now={now}, deadline={reply_info['deadline']}) — skipping.")
@@ -212,21 +263,25 @@ async def forward_reply_third(event):
         logger.debug(f"Already forwarded {reply_info['count']}/{reply_info['max']} replies for message {message.reply_to_msg_id}, skipping.")
         return
 
-    # Clean the response by removing footer
-    cleaned_text = remove_footer(text)
-
+    # At this point, we should accept this reply. Two flows:
+    #  - If stabilize==True: schedule stabilization task that waits REPLY_STABILIZE_DELAY seconds,
+    #    then fetch the reply and forward only if it still exists (final edited version).
+    #  - If stabilize==False: forward immediately (legacy behavior).
     try:
-        # Reply back to the original message in the first group with cleaned text
-        await client.send_message(first_group, cleaned_text, reply_to=reply_info['original_msg_id'])
-
-        # Increment the reply count
-        forwarded_from_third[message.reply_to_msg_id]['count'] += 1
-
-        bot_status["messages_forwarded"] += 1
-        current_count = forwarded_from_third[message.reply_to_msg_id]['count']
-        logger.info(f"✓ Forwarded reply {current_count}/{reply_info['max']} back to {first_group} from third group: {cleaned_text[:50]}...")
+        if reply_info.get('stabilize'):
+            # Schedule stabilization task and return; the task will increment the count when it forwards
+            logger.info(f"Scheduling stabilization-forward for reply {message.id} to forwarded {message.reply_to_msg_id}")
+            asyncio.create_task(_stabilize_and_forward_third_reply(message.reply_to_msg_id, message.id))
+        else:
+            # Legacy immediate-forwarding behavior
+            cleaned_text = remove_footer(text)
+            await client.send_message(first_group, cleaned_text, reply_to=reply_info['original_msg_id'])
+            forwarded_from_third[message.reply_to_msg_id]['count'] += 1
+            bot_status["messages_forwarded"] += 1
+            current_count = forwarded_from_third[message.reply_to_msg_id]['count']
+            logger.info(f"✓ Immediately forwarded reply {current_count}/{reply_info['max']} from third_group reply {message.id} to {first_group} (forwarded_id={message.reply_to_msg_id}).")
     except Exception as e:
-        logger.exception(f"Error forwarding reply back to source group from third: {e}")
+        logger.exception(f"Error handling reply from third: {e}")
 
 async def start_telegram_bot():
     """Start the Telegram client"""
@@ -247,7 +302,7 @@ async def status(request):
     now = time.time()
     for fid, info in forwarded_from_third.items():
         remaining = max(0, int(info['deadline'] - now))
-        active_windows.append(f"forwarded_id={fid}, original_msg={info['original_msg_id']}, count={info['count']}/{info['max']}, remaining_s={remaining}")
+        active_windows.append(f"forwarded_id={fid}, original_msg={info['original_msg_id']}, count={info['count']}/{info['max']}, remaining_s={remaining}, stabilize={info.get('stabilize', False)}")
 
     # compute text outside f-string to avoid backslash-in-expression syntax error
     active_text = "\n".join(active_windows) if active_windows else "None"
@@ -282,7 +337,8 @@ async def status(request):
                 <strong>ℹ️ Behavior:</strong><br>
                 • Bot verifies messages from the source group for 5s before forwarding.<br>
                 • Messages beginning with '2/' are forwarded to the third group (as '/...').<br>
-                • After forwarding to third group a reply-window of {THIRD_REPLY_WINDOW}s opens; replies to the forwarded message within that window are copied back.<br>
+                • After forwarding to third group a reply-window of {THIRD_REPLY_WINDOW}s opens; replies to the forwarded message within that window are accepted.<br>
+                • For commands configured with stabilization (currently '/vnum' and '/bomber'), replies are forwarded only after a {REPLY_STABILIZE_DELAY}s stabilization delay and only if the reply still exists (final/edited version).<br>
                 • Commands '/vnum' and '/bomber' (when sent as '2/vnum' or '2/bomber') allow up to 2 replies in the window; others default to 1.
             </div>
             <div>
