@@ -12,7 +12,7 @@ api_id = int(os.getenv('API_ID', '36246931'))
 api_hash = os.getenv('API_HASH', 'e9708f05bedf286d69abed0da7f44580')
 phone = os.getenv('PHONE', '+917667280752')
 
-first_group = os.getenv('FIRST_GROUP', 'eticalosinter')        # source
+first_group = os.getenv('FIRST_GROUP', 'ethicalosinterr')        # source
 second_group = os.getenv('SECOND_GROUP', 'ethicalosinter23')   # destination 1
 third_group = os.getenv('THIRD_GROUP', 'IntelXGroup')          # destination 2 (for 2/ commands)
 
