@@ -14,7 +14,7 @@ api_hash = os.getenv('API_HASH', 'e9708f05bedf286d69abed0da7f44580')
 phone = os.getenv('PHONE', '+917667280752')
 
 first_group = os.getenv('FIRST_GROUP', 'ethicalosinterr')        # source
-second_group = os.getenv('SECOND_GROUP', 'ethicalosinter23')   # destination 1
+second_group = os.getenv('SECOND_GROUP', 'ethicalosint')   # destination 1
 third_group = os.getenv('THIRD_GROUP', 'IntelXGroup')          # destination 2 (for 2/ commands)
 
 # reply window duration (seconds) after forwarding to third_group
