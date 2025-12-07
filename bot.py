@@ -5,6 +5,7 @@ import os
 import logging
 import json
 import time
+import re
 from aiohttp import web
 
 # --- config from env ---
@@ -40,11 +41,75 @@ reverse_map_third = {}
 # Key: forwarded_msg_id (the id in third_group we sent), Value: dict with count/max/deadline, original_msg_id, stabilize flag
 forwarded_from_third = {}
 
-bot_status = {"running": False, "messages_forwarded": 0}
+bot_status = {"running": False, "messages_forwarded": 0, "filtered_content": 0}
 
 # Helper: safe get text (message.text can be None)
 def _get_text(msg):
     return msg.text if msg and getattr(msg, "text", None) is not None else ""
+
+def filter_links_and_usernames(text):
+    """
+    Remove all URLs and Telegram usernames from text.
+    Also removes lines containing specific promotional content.
+    Returns cleaned text and whether content was filtered.
+    """
+    if not text:
+        return text, False
+    
+    original_text = text
+    
+    # URL patterns to match
+    url_patterns = [
+        r'https?://[^\s]+',           # http:// or https:// URLs
+        r'www\.[^\s]+',                # www. URLs
+        r't\.me/[^\s]+',               # Telegram links
+        r'[a-zA-Z0-9-]+\.[a-zA-Z]{2,}[^\s]*'  # domain.com style links
+    ]
+    
+    # Username patterns to match
+    username_patterns = [
+        r'@[\w]+',                     # @username format
+        r'@[a-zA-Z0-9_]{5,32}'        # Telegram username format (5-32 chars)
+    ]
+    
+    # Combine all patterns
+    all_patterns = url_patterns + username_patterns
+    
+    # Remove matched patterns
+    cleaned = text
+    for pattern in all_patterns:
+        cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
+    
+    # Split into lines and filter out lines with promotional content
+    lines = cleaned.split('\n')
+    filtered_lines = []
+    
+    promotional_keywords = [
+        'use these commands in:',
+        'join our group',
+        'visit our channel',
+        '💬 use these commands',
+        'commands in:'
+    ]
+    
+    for line in lines:
+        line_lower = line.lower().strip()
+        # Skip empty lines and lines with promotional content
+        if line_lower and not any(keyword in line_lower for keyword in promotional_keywords):
+            filtered_lines.append(line)
+    
+    # Rejoin lines
+    cleaned = '\n'.join(filtered_lines)
+    
+    # Clean up extra whitespace
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)  # Replace 3+ newlines with 2
+    cleaned = re.sub(r' {2,}', ' ', cleaned)       # Replace multiple spaces with single
+    cleaned = cleaned.strip()
+    
+    # Check if we actually filtered anything
+    was_filtered = (original_text != cleaned)
+    
+    return cleaned, was_filtered
 
 def remove_footer(text):
     """Remove the footer line from JSON responses (best-effort)."""
@@ -93,10 +158,21 @@ async def _stabilize_and_forward_third_reply(forwarded_msg_id: int, reply_msg_id
 
         # Clean the response by removing footer
         cleaned_text = remove_footer(latest_text)
+        
+        # Filter links and usernames
+        filtered_text, was_filtered = filter_links_and_usernames(cleaned_text)
+        
+        if was_filtered:
+            bot_status["filtered_content"] += 1
+            logger.info(f"Filtered links/usernames from stabilized reply {reply_msg_id}")
+        
+        if not filtered_text or not filtered_text.strip():
+            logger.info(f"After filtering, reply {reply_msg_id} is empty; skipping forward.")
+            return
 
         # Forward as a reply to the original message in first_group
         original_msg_id = reply_info['original_msg_id']
-        await client.send_message(first_group, cleaned_text, reply_to=original_msg_id)
+        await client.send_message(first_group, filtered_text, reply_to=original_msg_id)
 
         # Increment count
         forwarded_from_third[forwarded_msg_id]['count'] += 1
@@ -192,6 +268,7 @@ async def forward_command(event):
 async def forward_reply_second(event):
     """
     Forward replies from second group back to first group.
+    Filters out links and usernames before forwarding.
     """
     message = event.message
     text = _get_text(message)
@@ -201,10 +278,21 @@ async def forward_reply_second(event):
         original_msg_id = reverse_map.get(message.reply_to_msg_id)
         if original_msg_id:
             try:
+                # Filter links and usernames
+                filtered_text, was_filtered = filter_links_and_usernames(text)
+                
+                if was_filtered:
+                    bot_status["filtered_content"] += 1
+                    logger.info(f"Filtered links/usernames from second_group reply")
+                
+                if not filtered_text or not filtered_text.strip():
+                    logger.info("After filtering, message is empty; not forwarding.")
+                    return
+                
                 # Reply back to the original message in the first group
-                await client.send_message(first_group, text, reply_to=original_msg_id)
+                await client.send_message(first_group, filtered_text, reply_to=original_msg_id)
                 bot_status["messages_forwarded"] += 1
-                logger.info(f"✓ Forwarded reply back to {first_group}: {text[:50]}...")
+                logger.info(f"✓ Forwarded filtered reply back to {first_group}: {filtered_text[:50]}...")
                 return
             except Exception as e:
                 logger.exception(f"Error forwarding reply back to source group: {e}")
@@ -213,9 +301,20 @@ async def forward_reply_second(event):
     # If not a reply (or mapping not found) and not a command (don't forward commands from second_group)
     if text and not text.startswith('/'):
         try:
-            await client.send_message(first_group, f"📩 Response from bot:\n{text}")
+            # Filter links and usernames
+            filtered_text, was_filtered = filter_links_and_usernames(text)
+            
+            if was_filtered:
+                bot_status["filtered_content"] += 1
+                logger.info(f"Filtered links/usernames from second_group non-reply")
+            
+            if not filtered_text or not filtered_text.strip():
+                logger.info("After filtering, message is empty; not forwarding.")
+                return
+            
+            await client.send_message(first_group, f"📩 Response from bot:\n{filtered_text}")
             bot_status["messages_forwarded"] += 1
-            logger.info("✓ Forwarded non-reply response to source group.")
+            logger.info("✓ Forwarded filtered non-reply response to source group.")
         except Exception as e:
             logger.exception(f"Error forwarding response to source group: {e}")
     else:
@@ -225,6 +324,7 @@ async def forward_reply_second(event):
 async def forward_reply_third(event):
     """
     Forward replies from third group back to first group.
+    Filters out links and usernames before forwarding.
     Behavior:
       - Only process replies to messages we forwarded (reply_to_msg_id must map)
       - Only accept replies that arrive within the reply-window (deadline)
@@ -273,13 +373,25 @@ async def forward_reply_third(event):
             logger.info(f"Scheduling stabilization-forward for reply {message.id} to forwarded {message.reply_to_msg_id}")
             asyncio.create_task(_stabilize_and_forward_third_reply(message.reply_to_msg_id, message.id))
         else:
-            # Legacy immediate-forwarding behavior
+            # Legacy immediate-forwarding behavior with filtering
             cleaned_text = remove_footer(text)
-            await client.send_message(first_group, cleaned_text, reply_to=reply_info['original_msg_id'])
+            
+            # Filter links and usernames
+            filtered_text, was_filtered = filter_links_and_usernames(cleaned_text)
+            
+            if was_filtered:
+                bot_status["filtered_content"] += 1
+                logger.info(f"Filtered links/usernames from third_group reply {message.id}")
+            
+            if not filtered_text or not filtered_text.strip():
+                logger.info(f"After filtering, reply {message.id} is empty; skipping forward.")
+                return
+            
+            await client.send_message(first_group, filtered_text, reply_to=reply_info['original_msg_id'])
             forwarded_from_third[message.reply_to_msg_id]['count'] += 1
             bot_status["messages_forwarded"] += 1
             current_count = forwarded_from_third[message.reply_to_msg_id]['count']
-            logger.info(f"✓ Immediately forwarded reply {current_count}/{reply_info['max']} from third_group reply {message.id} to {first_group} (forwarded_id={message.reply_to_msg_id}).")
+            logger.info(f"✓ Immediately forwarded filtered reply {current_count}/{reply_info['max']} from third_group reply {message.id} to {first_group} (forwarded_id={message.reply_to_msg_id}).")
     except Exception as e:
         logger.exception(f"Error handling reply from third: {e}")
 
@@ -290,6 +402,7 @@ async def start_telegram_bot():
     logger.info("✓ Telegram bot started successfully!")
     logger.info(f"✓ Monitoring group: {first_group}")
     logger.info(f"✓ Forwarding to groups: {second_group}, {third_group}")
+    logger.info("✓ Link and username filtering enabled")
     await client.run_until_disconnected()
 
 # Web server handlers (health + status)
@@ -318,6 +431,7 @@ async def status(request):
             h1 {{ color:#0088cc; }}
             .status {{ padding:10px; margin:10px 0; border-radius:5px; background:#d4edda; color:#155724; border:1px solid #c3e6cb; }}
             .info {{ margin:15px 0; padding:10px; background:#e7f3ff; border-left:4px solid #0088cc; }}
+            .warning {{ margin:15px 0; padding:10px; background:#fff3cd; border-left:4px solid #ffc107; }}
             pre {{ background:#f7f7f7; padding:10px; border-radius:6px; overflow:auto; }}
         </style>
         <meta http-equiv="refresh" content="10">
@@ -326,9 +440,11 @@ async def status(request):
         <div class="container">
             <h1>🤖 Telegram Multi-Group Relay Bot</h1>
             <div class="status">✅ Status: {'Running' if bot_status['running'] else 'Stopped'}</div>
+            <div class="warning">🛡️ Security: Link & Username Filtering Active</div>
             <div class="info">
                 <strong>📊 Statistics:</strong><br>
                 Messages Forwarded: {bot_status['messages_forwarded']}<br>
+                Content Filtered: {bot_status['filtered_content']}<br>
                 Source Group: {first_group}<br>
                 Destination Group 1: {second_group}<br>
                 Destination Group 2: {third_group}
@@ -338,8 +454,9 @@ async def status(request):
                 • Bot verifies messages from the source group for 5s before forwarding.<br>
                 • Messages beginning with '2/' are forwarded to the third group (as '/...').<br>
                 • After forwarding to third group a reply-window of {THIRD_REPLY_WINDOW}s opens; replies to the forwarded message within that window are accepted.<br>
-                • For commands configured with stabilization (currently '/vnum' and '/bomber'), replies are forwarded only after a {REPLY_STABILIZE_DELAY}s stabilization delay and only if the reply still exists (final/edited version).<br>
-                • Commands '/vnum' and '/bomber' (when sent as '2/vnum' or '2/bomber') allow up to 2 replies in the window; others default to 1.
+                • For commands configured with stabilization (currently '/vnum', '/bomber', '/familyinfo'), replies are forwarded only after a {REPLY_STABILIZE_DELAY}s stabilization delay and only if the reply still exists (final/edited version).<br>
+                • Commands '/vnum', '/bomber', '/familyinfo' (when sent as '2/vnum', '2/bomber', '2/familyinfo') allow up to 2 replies in the window; others default to 1.<br>
+                • <strong>🛡️ ALL URLs, Telegram usernames (@username), and promotional lines are automatically filtered from forwarded messages.</strong>
             </div>
             <div>
                 <h3>Active reply-windows</h3>
