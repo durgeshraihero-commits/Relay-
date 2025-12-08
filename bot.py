@@ -20,7 +20,9 @@ third_group = os.getenv('THIRD_GROUP', 'IntelXGroup')          # destination 2 (
 # reply window duration (seconds) after forwarding to third_group
 THIRD_REPLY_WINDOW = int(os.getenv('THIRD_REPLY_WINDOW', '5'))
 # stabilization delay for replies (seconds) before forwarding to source (to allow edits/deletes)
-REPLY_STABILIZE_DELAY = int(os.getenv('REPLY_STABILIZE_DELAY', '5'))
+REPLY_STABILIZE_DELAY = int(os.getenv('REPLY_STABILIZE_DELAY', '3'))
+# Wait time for fetching responses
+FETCH_WAIT_TIME = int(os.getenv('FETCH_WAIT_TIME', '3'))
 
 # --- init ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
@@ -41,11 +43,36 @@ reverse_map_third = {}
 # Key: forwarded_msg_id (the id in third_group we sent), Value: dict with count/max/deadline, original_msg_id, stabilize flag
 forwarded_from_third = {}
 
+# Track status messages that need to be deleted
+# Key: original_msg_id, Value: {'status_msg': Message, 'responses': []}
+status_messages = {}
+
 bot_status = {"running": False, "messages_forwarded": 0, "filtered_content": 0}
 
 # Helper: safe get text (message.text can be None)
 def _get_text(msg):
     return msg.text if msg and getattr(msg, "text", None) is not None else ""
+
+def get_fetch_message(command):
+    """Generate appropriate fetching message based on command type"""
+    cmd_lower = command.lower()
+    
+    if 'vnum' in cmd_lower or 'vehicle' in cmd_lower:
+        return "⏳ Fetching vehicle info… Please wait."
+    elif 'family' in cmd_lower:
+        return "⏳ Fetching family info… Please wait."
+    elif 'aadhar' in cmd_lower or 'aadhaar' in cmd_lower:
+        return "⏳ Fetching Aadhar info… Please wait."
+    elif 'pan' in cmd_lower:
+        return "⏳ Fetching PAN info… Please wait."
+    elif 'voter' in cmd_lower:
+        return "⏳ Fetching voter info… Please wait."
+    elif 'insta' in cmd_lower:
+        return "⏳ Fetching Instagram info… Please wait."
+    elif 'bomber' in cmd_lower:
+        return "⏳ Processing bomber request… Please wait."
+    else:
+        return "⏳ Fetching info… Please wait."
 
 def filter_links_and_usernames(text):
     """
@@ -172,6 +199,15 @@ async def _stabilize_and_forward_third_reply(forwarded_msg_id: int, reply_msg_id
 
         # Forward as a reply to the original message in first_group
         original_msg_id = reply_info['original_msg_id']
+        
+        # Delete status message if exists
+        if original_msg_id in status_messages:
+            try:
+                await status_messages[original_msg_id]['status_msg'].delete()
+                del status_messages[original_msg_id]
+            except Exception as e:
+                logger.warning(f"Could not delete status message: {e}")
+        
         await client.send_message(first_group, filtered_text, reply_to=original_msg_id)
 
         # Increment count
@@ -188,6 +224,7 @@ async def forward_command(event):
     Forward messages starting with '/' or '2/' from first group to appropriate destination group
     - For ALL commands (including 2/), wait 5 seconds and verify message unchanged
     - Never forward '/start'
+    - Show fetching status and wait for response before forwarding
     """
     message = event.message
     text = _get_text(message)
@@ -215,16 +252,38 @@ async def forward_command(event):
         return
 
     try:
+        # Send fetching status message
+        fetch_msg_text = get_fetch_message(clean_command)
+        status_msg = await client.send_message(first_group, fetch_msg_text, reply_to=message.id)
+        
+        # Store status message for later deletion
+        status_messages[message.id] = {
+            'status_msg': status_msg,
+            'responses': []
+        }
+        
         # WAIT 5 seconds for verification for ALL commands (including 2/)
         await asyncio.sleep(5)
         # Re-fetch the message to confirm it still exists and hasn't changed
         latest = await client.get_messages(first_group, ids=message.id)
         if not latest:
             logger.info(f"Message id {message.id} appears deleted after 5s — skipping forward.")
+            # Delete status message
+            try:
+                await status_msg.delete()
+                del status_messages[message.id]
+            except:
+                pass
             return
         latest_text = _get_text(latest)
         if latest_text != text:
             logger.info(f"Message id {message.id} text changed after 5s — skipping forward.")
+            # Delete status message
+            try:
+                await status_msg.delete()
+                del status_messages[message.id]
+            except:
+                pass
             return
 
         # All checks passed — forward/send the command text to the target group
@@ -240,7 +299,7 @@ async def forward_command(event):
             cmd_token = clean_command.split()[0].lower()
             allowed = 1
             stabilize = False
-            if cmd_token in ['2/vnum', '2/bomber', '2/familyinfo', '2/insta']:
+            if cmd_token in ['/vnum', '/bomber', '/familyinfo', '/insta']:
                 allowed = 2
                 stabilize = True  # enable stabilization behavior for these commands
 
@@ -263,12 +322,20 @@ async def forward_command(event):
         logger.info(f"✓ Forwarded command from {first_group} -> {target_group}: {clean_command}")
     except Exception as e:
         logger.exception(f"Error while trying to forward command: {e}")
+        # Clean up status message on error
+        if message.id in status_messages:
+            try:
+                await status_messages[message.id]['status_msg'].delete()
+                del status_messages[message.id]
+            except:
+                pass
 
 @client.on(events.NewMessage(chats=second_group))
 async def forward_reply_second(event):
     """
     Forward replies from second group back to first group.
     Filters out links and usernames before forwarding.
+    Waits FETCH_WAIT_TIME seconds to check for edits/deletions.
     """
     message = event.message
     text = _get_text(message)
@@ -278,8 +345,19 @@ async def forward_reply_second(event):
         original_msg_id = reverse_map.get(message.reply_to_msg_id)
         if original_msg_id:
             try:
+                # Wait for potential edits/deletions
+                await asyncio.sleep(FETCH_WAIT_TIME)
+                
+                # Re-fetch message to get latest version
+                latest_msg = await client.get_messages(second_group, ids=message.id)
+                if not latest_msg:
+                    logger.info(f"Reply {message.id} was deleted, not forwarding.")
+                    return
+                
+                latest_text = _get_text(latest_msg)
+                
                 # Filter links and usernames
-                filtered_text, was_filtered = filter_links_and_usernames(text)
+                filtered_text, was_filtered = filter_links_and_usernames(latest_text)
                 
                 if was_filtered:
                     bot_status["filtered_content"] += 1
@@ -289,6 +367,14 @@ async def forward_reply_second(event):
                     logger.info("After filtering, message is empty; not forwarding.")
                     return
                 
+                # Delete status message if exists
+                if original_msg_id in status_messages:
+                    try:
+                        await status_messages[original_msg_id]['status_msg'].delete()
+                        del status_messages[original_msg_id]
+                    except Exception as e:
+                        logger.warning(f"Could not delete status message: {e}")
+                
                 # Reply back to the original message in the first group
                 await client.send_message(first_group, filtered_text, reply_to=original_msg_id)
                 bot_status["messages_forwarded"] += 1
@@ -297,28 +383,6 @@ async def forward_reply_second(event):
             except Exception as e:
                 logger.exception(f"Error forwarding reply back to source group: {e}")
                 return
-
-    # If not a reply (or mapping not found) and not a command (don't forward commands from second_group)
-    if text and not text.startswith('/'):
-        try:
-            # Filter links and usernames
-            filtered_text, was_filtered = filter_links_and_usernames(text)
-            
-            if was_filtered:
-                bot_status["filtered_content"] += 1
-                logger.info(f"Filtered links/usernames from second_group non-reply")
-            
-            if not filtered_text or not filtered_text.strip():
-                logger.info("After filtering, message is empty; not forwarding.")
-                return
-            
-            await client.send_message(first_group, f"📩 Response from bot:\n{filtered_text}")
-            bot_status["messages_forwarded"] += 1
-            logger.info("✓ Forwarded filtered non-reply response to source group.")
-        except Exception as e:
-            logger.exception(f"Error forwarding response to source group: {e}")
-    else:
-        logger.debug("Ignored message from second_group (either command or empty).")
 
 @client.on(events.NewMessage(chats=third_group))
 async def forward_reply_third(event):
@@ -373,8 +437,17 @@ async def forward_reply_third(event):
             logger.info(f"Scheduling stabilization-forward for reply {message.id} to forwarded {message.reply_to_msg_id}")
             asyncio.create_task(_stabilize_and_forward_third_reply(message.reply_to_msg_id, message.id))
         else:
-            # Legacy immediate-forwarding behavior with filtering
-            cleaned_text = remove_footer(text)
+            # Wait for potential edits/deletions
+            await asyncio.sleep(FETCH_WAIT_TIME)
+            
+            # Re-fetch message
+            latest_msg = await client.get_messages(third_group, ids=message.id)
+            if not latest_msg:
+                logger.info(f"Reply {message.id} was deleted, not forwarding.")
+                return
+            
+            latest_text = _get_text(latest_msg)
+            cleaned_text = remove_footer(latest_text)
             
             # Filter links and usernames
             filtered_text, was_filtered = filter_links_and_usernames(cleaned_text)
@@ -386,6 +459,14 @@ async def forward_reply_third(event):
             if not filtered_text or not filtered_text.strip():
                 logger.info(f"After filtering, reply {message.id} is empty; skipping forward.")
                 return
+            
+            # Delete status message if exists
+            if reply_info['original_msg_id'] in status_messages:
+                try:
+                    await status_messages[reply_info['original_msg_id']]['status_msg'].delete()
+                    del status_messages[reply_info['original_msg_id']]
+                except Exception as e:
+                    logger.warning(f"Could not delete status message: {e}")
             
             await client.send_message(first_group, filtered_text, reply_to=reply_info['original_msg_id'])
             forwarded_from_third[message.reply_to_msg_id]['count'] += 1
@@ -403,6 +484,8 @@ async def start_telegram_bot():
     logger.info(f"✓ Monitoring group: {first_group}")
     logger.info(f"✓ Forwarding to groups: {second_group}, {third_group}")
     logger.info("✓ Link and username filtering enabled")
+    logger.info(f"✓ Fetch wait time: {FETCH_WAIT_TIME}s")
+    logger.info(f"✓ Reply stabilization delay: {REPLY_STABILIZE_DELAY}s")
     await client.run_until_disconnected()
 
 # Web server handlers (health + status)
@@ -419,6 +502,7 @@ async def status(request):
 
     # compute text outside f-string to avoid backslash-in-expression syntax error
     active_text = "\n".join(active_windows) if active_windows else "None"
+    active_status_count = len(status_messages)
 
     html = f"""
     <!DOCTYPE html>
@@ -445,17 +529,21 @@ async def status(request):
                 <strong>📊 Statistics:</strong><br>
                 Messages Forwarded: {bot_status['messages_forwarded']}<br>
                 Content Filtered: {bot_status['filtered_content']}<br>
+                Active Status Messages: {active_status_count}<br>
                 Source Group: {first_group}<br>
                 Destination Group 1: {second_group}<br>
                 Destination Group 2: {third_group}
             </div>
             <div class="info">
                 <strong>ℹ️ Behavior:</strong><br>
+                • Bot shows "⏳ Fetching info…" status when command is sent.<br>
                 • Bot verifies messages from the source group for 5s before forwarding.<br>
+                • Replies are waited for {FETCH_WAIT_TIME}s to check for edits/deletions before forwarding.<br>
+                • Status messages are automatically deleted when responses arrive.<br>
                 • Messages beginning with '2/' are forwarded to the third group (as '/...').<br>
                 • After forwarding to third group a reply-window of {THIRD_REPLY_WINDOW}s opens; replies to the forwarded message within that window are accepted.<br>
-                • For commands configured with stabilization (currently '/vnum', '/bomber', '/familyinfo'), replies are forwarded only after a {REPLY_STABILIZE_DELAY}s stabilization delay and only if the reply still exists (final/edited version).<br>
-                • Commands '/vnum', '/bomber', '/familyinfo' (when sent as '2/vnum', '2/bomber', '2/familyinfo') allow up to 2 replies in the window; others default to 1.<br>
+                • For commands configured with stabilization (currently '/vnum', '/bomber', '/familyinfo', '/insta'), replies are forwarded only after a {REPLY_STABILIZE_DELAY}s stabilization delay and only if the reply still exists (final/edited version).<br>
+                • Commands '/vnum', '/bomber', '/familyinfo', '/insta' (when sent as '2/vnum', '2/bomber', '2/familyinfo', '2/insta') allow up to 2 replies in the window; others default to 1.<br>
                 • <strong>🛡️ ALL URLs, Telegram usernames (@username), and promotional lines are automatically filtered from forwarded messages.</strong>
             </div>
             <div>
