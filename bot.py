@@ -15,7 +15,7 @@ phone = os.getenv('PHONE', '+917667280752')
 
 first_group = os.getenv('FIRST_GROUP', 'ethicalosinterr')        # source
 second_group = os.getenv('SECOND_GROUP', 'ethicalosint')   # destination 1
-third_group = os.getenv('THIRD_GROUP', 'IntelXGroup')          # destination 2 (for 2/ commands)
+third_group = os.getenv('THIRD_GROUP', -4803968352)          # destination 2 (for 2/ commands)
 
 # reply window duration (seconds) after forwarding to third_group
 THIRD_REPLY_WINDOW = int(os.getenv('THIRD_REPLY_WINDOW', '5'))
