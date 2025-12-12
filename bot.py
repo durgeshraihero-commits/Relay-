@@ -46,7 +46,7 @@ SECOND_GROUP = os.getenv("SECOND_GROUP", "ethicalosint")
 THIRD_GROUP = os.getenv("THIRD_GROUP", "IntelXGroup")
 
 MASTER_API_SECRET = os.getenv("MASTER_API_SECRET")  # required for admin actions
-MONGODB_URI = os.getenv("MONGODB_URI")
+MONGODB_URI = os.getenv("MONGODB_URI",'mongodb+srv://prarthanaray147_db_user:fMuTkgFsaHa5NRIy@cluster0.txn8bv3.mongodb.net/tg_bot_db?retryWrites=true&w=majority')
 MONGODB_DBNAME = os.getenv("MONGODB_DBNAME", "tg_bot_db")
 API_KEYS_FALLBACK_FILE = os.getenv("API_KEYS_FALLBACK_FILE", "./api_keys_fallback.json")
 
