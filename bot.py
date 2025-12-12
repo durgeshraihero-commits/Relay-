@@ -1,8 +1,27 @@
 #!/usr/bin/env python3
 """
-bot.py — Telegram relay + HTTP API in a single file.
-(Full corrected version — ready for Render; bug fixes applied)
+bot.py — Telegram relay + HTTP API using an existing session file 'relay_session.session'.
+
+Usage:
+  - Ensure relay_session.session is present (session name = "relay_session").
+  - Set env vars listed below.
+  - Run: python3 bot.py
+
+Environment variables (important):
+  API_ID               -> Telegram API ID (from my.telegram.org)
+  API_HASH             -> Telegram API HASH (from my.telegram.org)
+  FIRST_GROUP          -> source group username/id
+  SECOND_GROUP         -> destination group username/id
+  THIRD_GROUP          -> destination group username/id
+  MASTER_API_SECRET    -> secret required to create API keys
+  API_KEYS_FILE        -> path to store API keys (default ./api_keys.json)
+  PORT                 -> web server port (default 10000)
+  THIRD_REPLY_WINDOW   -> seconds to accept replies from third group (default 5)
+  REPLY_STABILIZE_DELAY-> stabilization delay seconds (default 3)
+  FETCH_WAIT_TIME      -> wait time before fetching final reply (default 3)
+  API_REQUEST_TIMEOUT  -> HTTP timeout override (optional)
 """
+
 import os
 import time
 import json
@@ -14,7 +33,9 @@ from aiohttp import web
 from telethon import TelegramClient, events
 
 # ---------- Configuration ----------
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # REQUIRED (recommended)
+API_ID = os.getenv("API_ID")
+API_HASH = os.getenv("API_HASH")
+
 FIRST_GROUP = os.getenv("FIRST_GROUP", "ethicalosinterr")
 SECOND_GROUP = os.getenv("SECOND_GROUP", "ethicalosint")
 THIRD_GROUP = os.getenv("THIRD_GROUP", "IntelXGroup")
@@ -29,35 +50,28 @@ FETCH_WAIT_TIME = int(os.getenv("FETCH_WAIT_TIME", "3"))
 
 API_REQUEST_TIMEOUT = int(os.getenv("API_REQUEST_TIMEOUT", str(THIRD_REPLY_WINDOW + REPLY_STABILIZE_DELAY + FETCH_WAIT_TIME + 5)))
 
-# CORRECTED: read env names (previously you had literal numbers/strings)
-API_ID = os.getenv("API_ID")
-API_HASH = os.getenv("API_HASH")
-PHONE = os.getenv("PHONE")
-
 # ---------- Logging ----------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
-logger = logging.getLogger("relay_api_bot")
+logger = logging.getLogger("relay_session_bot")
 
-# ---------- Telethon client ----------
-if BOT_TOKEN:
-    _api_id = int(API_ID) if API_ID else 0
-    _api_hash = API_HASH if API_HASH else None
-    client = TelegramClient("relay_bot_session", _api_id, _api_hash)
-else:
-    if not (API_ID and API_HASH and PHONE):
-        logger.error("Either BOT_TOKEN or API_ID+API_HASH+PHONE must be provided. Exiting.")
-        raise SystemExit(1)
-    client = TelegramClient("relay_session", int(API_ID), API_HASH)
+# ---------- Validate required env ----------
+if not (API_ID and API_HASH):
+    logger.error("API_ID and API_HASH must be set in environment. Exiting.")
+    raise SystemExit(1)
+
+# ---------- Telethon client using session file 'relay_session' ----------
+# This will use 'relay_session.session' if present in the working directory.
+client = TelegramClient("relay_session", int(API_ID), API_HASH)
 
 # ---------- In-memory maps ----------
-message_map = {}
-reverse_map = {}
+message_map = {}           # source_msg_id -> forwarded_msg_id (second group)
+reverse_map = {}           # forwarded_msg_id -> source_msg_id
 message_map_third = {}
 reverse_map_third = {}
-forwarded_from_third = {}
-status_messages = {}
+forwarded_from_third = {}  # forwarded_msg_id -> {count,max,deadline,original_msg_id,stabilize}
+status_messages = {}       # original_msg_id -> {'status_msg': Message, 'responses': []}
 bot_status = {"running": False, "messages_forwarded": 0, "filtered_content": 0}
-api_request_map = {}
+api_request_map = {}       # forwarded_msg_id -> {future, responses[], max, deadline, stabilize, original_api_req_id}
 
 # ---------- API keys persistence ----------
 def load_api_keys():
@@ -260,6 +274,7 @@ async def forward_command(event):
 async def forward_reply_second(event):
     message = event.message
     text = _get_text(message)
+    # normal mapping back to source group
     if message.reply_to_msg_id:
         original_id = reverse_map.get(message.reply_to_msg_id)
         if original_id:
@@ -286,6 +301,7 @@ async def forward_reply_second(event):
             except Exception as e:
                 logger.exception("Error forwarding from second: %s", e)
 
+    # API-related: if this reply references a forwarded message that was created for an API request
     if message.reply_to_msg_id:
         api_entry = api_request_map.get(message.reply_to_msg_id)
         if api_entry:
@@ -380,13 +396,9 @@ async def forward_reply_third(event):
 
 # ---------- Telegram startup ----------
 async def start_telegram():
-    if BOT_TOKEN:
-        await client.start(bot_token=BOT_TOKEN)
-        logger.info("Started Telethon as bot.")
-    else:
-        await client.start(PHONE)
-        logger.info("Started Telethon with phone session.")
+    await client.start()  # uses relay_session.session automatically
     bot_status["running"] = True
+    logger.info("Started Telethon using session file 'relay_session.session' — monitoring groups.")
     await client.run_until_disconnected()
 
 # ---------- HTTP API endpoints ----------
@@ -500,7 +512,7 @@ async def status(request):
     active_text = "\n".join(active_windows) if active_windows else "None"
     html = f"""
     <!DOCTYPE html><html><head><title>Relay API Bot</title></head><body>
-    <h1>Telegram Relay API Bot</h1>
+    <h1>Telegram Relay API Bot (user session)</h1>
     <p>Status: {'Running' if bot_status['running'] else 'Stopped'}</p>
     <p>Messages Forwarded: {bot_status['messages_forwarded']}</p>
     <p>Content Filtered: {bot_status['filtered_content']}</p>
