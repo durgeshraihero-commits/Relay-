@@ -51,9 +51,9 @@ FETCH_WAIT_TIME = int(os.getenv("FETCH_WAIT_TIME", "3"))
 API_REQUEST_TIMEOUT = int(os.getenv("API_REQUEST_TIMEOUT", str(THIRD_REPLY_WINDOW + REPLY_STABILIZE_DELAY + FETCH_WAIT_TIME + 5)))
 
 # If using phone session (not recommended), you may set API_ID and API_HASH and PHONE
-API_ID = os.getenv("API_ID")
-API_HASH = os.getenv("API_HASH")
-PHONE = os.getenv("PHONE")
+API_ID = os.getenv('36246931')
+API_HASH = os.getenv('e9708f05bedf286d69abed0da7f44580')
+PHONE = os.getenv("+917667280752")
 
 # ---------- Logging ----------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
