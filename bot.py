@@ -1,21 +1,25 @@
 #!/usr/bin/env python3
 """
-bot.py — Telegram relay + HTTP API with persistent API-keys (MongoDB)
+bot.py — Telegram relay + HTTP API with MongoDB-backed API keys (session-mode)
 
-Env variables:
-  API_ID                 -> Telegram API ID (my.telegram.org)
-  API_HASH               -> Telegram API HASH (my.telegram.org)
-  FIRST_GROUP            -> source group username/id
-  SECOND_GROUP           -> destination group username/id
-  THIRD_GROUP            -> destination group username/id
-  MASTER_API_SECRET      -> admin secret to create/revoke keys
-  MONGODB_URI            -> connection string (mongodb+srv://...)
-  MONGODB_DBNAME         -> db name (default: tg_bot_db)
-  PORT                   -> web port (default 10000)
-  THIRD_REPLY_WINDOW     -> reply window seconds (default 5)
-  REPLY_STABILIZE_DELAY  -> stabilization delay seconds (default 3)
-  FETCH_WAIT_TIME        -> wait before reading / edits (default 3)
-  API_REQUEST_TIMEOUT    -> overall HTTP request timeout (optional)
+Env:
+  API_ID, API_HASH                -> required (strings)
+  FIRST_GROUP, SECOND_GROUP, THIRD_GROUP  -> group usernames or numeric ids
+  MASTER_API_SECRET               -> admin secret
+  MONGODB_URI                     -> mongodb+srv://... (you provided earlier)
+  MONGODB_DBNAME                  -> tg_bot_db (default)
+  PORT                            -> web port (default 10000)
+  THIRD_REPLY_WINDOW              -> seconds to accept replies (default 5)
+  REPLY_STABILIZE_DELAY           -> seconds to wait before finalizing replies (default 3)
+  FETCH_WAIT_TIME                 -> seconds to wait for edits/deletes before forwarding (default 3)
+  API_REQUEST_TIMEOUT             -> overall HTTP timeout for api/command (optional)
+  KEY_DEFAULT_DURATION_DAYS       -> default API key lifetime in days (default 30)
+
+Requirements (recommended in requirements.txt):
+  telethon==1.29.1
+  aiohttp==3.9.4
+  motor==3.7.1
+  python-dateutil==2.8.2
 """
 import os
 import re
@@ -31,7 +35,7 @@ from aiohttp import web
 from telethon import TelegramClient, events
 from motor.motor_asyncio import AsyncIOMotorClient
 
-# -------------------- Config --------------------
+# ---------------- config ----------------
 API_ID = os.getenv("API_ID")
 API_HASH = os.getenv("API_HASH")
 
@@ -52,19 +56,19 @@ FETCH_WAIT_TIME = int(os.getenv("FETCH_WAIT_TIME", "3"))
 API_REQUEST_TIMEOUT = int(os.getenv("API_REQUEST_TIMEOUT", str(THIRD_REPLY_WINDOW + REPLY_STABILIZE_DELAY + FETCH_WAIT_TIME + 5)))
 KEY_DEFAULT_DURATION_DAYS = int(os.getenv("KEY_DEFAULT_DURATION_DAYS", "30"))
 
-# -------------------- Logging --------------------
+# ---------------- logging ----------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger("relay_api_bot")
 
-# -------------------- Validate required env --------------------
+# ---------------- validate required env ----------------
 if not (API_ID and API_HASH):
     logger.error("API_ID and API_HASH must be set in environment. Exiting.")
     raise SystemExit(1)
 
-# -------------------- Telethon client (uses relay_session.session) --------------------
+# ---------------- Telethon client (session file) ----------------
 client = TelegramClient("relay_session", int(API_ID), API_HASH)
 
-# -------------------- MongoDB init (Motor) --------------------
+# ---------------- MongoDB init ----------------
 mongo_client = None
 db = None
 api_keys_col = None
@@ -77,21 +81,19 @@ async def init_db():
         await mongo_client.server_info()
         db = mongo_client[MONGODB_DBNAME]
         api_keys_col = db[MONGODB_COLLECTION_API_KEYS]
-        # Create TTL index on expires_at to allow Mongo to auto-delete expired docs
+        # create indexes
         try:
             await api_keys_col.create_index("expires_at", expireAfterSeconds=0)
             await api_keys_col.create_index("key", unique=True)
-            logger.info("MongoDB: api_keys collection ready (TTL/indexes created)")
+            logger.info("MongoDB: api_keys collection initialized (indexes ok).")
         except Exception as e:
             logger.warning("MongoDB index creation warning: %s", e)
     except Exception as e:
         logger.exception("Could not connect to MongoDB: %s", e)
-        # Fail fast: keep running but keys won't persist
         api_keys_col = None
 
-# -------------------- In-memory runtime maps --------------------
-# Track forwarded messages and API waiters
-api_request_map = {}       # forwarded_msg_id -> { future, responses(list), max, deadline, stabilize }
+# ---------------- runtime maps ----------------
+api_request_map = {}       # forwarded_msg_id -> {future, responses(list), max, deadline, stabilize}
 forwarded_from_third = {}  # forwarded_msg_id -> {count,max,deadline,original_msg_id,stabilize}
 message_map = {}           # source_msg_id -> forwarded_msg_id (second)
 reverse_map = {}           # forwarded_msg_id -> source_msg_id
@@ -100,7 +102,7 @@ reverse_map_third = {}     # forwarded_msg_id -> source_msg_id
 status_messages = {}       # original_msg_id -> {'status_msg': Message}
 bot_status = {"running": False, "messages_forwarded": 0, "filtered_content": 0}
 
-# -------------------- Helpers: text cleaning and JSON extraction --------------------
+# ---------------- helpers: text cleaning ----------------
 def _get_text(msg):
     return msg.text if msg and getattr(msg, "text", None) is not None else ""
 
@@ -151,14 +153,11 @@ def clean_code_fences(text):
     return re.sub(r"^```+|```+$", "", text.strip(), flags=re.MULTILINE)
 
 def extract_json_from_text(s):
-    """Return parsed JSON object if found in text, else None. Also return cleaned text."""
     if not isinstance(s, str):
         return None, s
     cleaned = clean_code_fences(s)
-    # find first {...} block
     m = re.search(r"(\{[\s\S]*\})", cleaned)
     candidate = m.group(1) if m else cleaned
-    # try to parse candidate; try to fix trailing commas
     try:
         obj = json.loads(candidate)
         return obj, cleaned
@@ -171,23 +170,13 @@ def extract_json_from_text(s):
             return None, cleaned
 
 def format_for_telegram_and_api(raw_text, command_hint=None):
-    """
-    Returns tuple (send_text_for_telegram, structured_for_api)
-    - send_text_for_telegram: cleaned markdown-friendly string
-    - structured_for_api: dict or text to be returned as JSON in API responses
-    """
     if not raw_text:
         return "", {"text": ""}
-
-    # First remove footer, code fences and filter links/usernames
     no_footer = remove_footer(raw_text)
     cleaned_links, was_filtered = filter_links_and_usernames(no_footer)
     cleaned = clean_code_fences(cleaned_links).strip()
-
-    # Try JSON extraction
     parsed, _ = extract_json_from_text(cleaned)
     if parsed is not None:
-        # Create a pretty human-friendly text for telegram
         header = f"✅ Result"
         if command_hint:
             header = f"✅ Result — {command_hint}"
@@ -201,29 +190,21 @@ def format_for_telegram_and_api(raw_text, command_hint=None):
             for k, v in parsed["data"].items():
                 lines.append(f"- {k}: {v}")
         else:
-            # fallback flatten
             lines.append("")
-            try:
-                flat = json.dumps(parsed, indent=2, ensure_ascii=False)
-                lines.append(flat)
-            except Exception:
-                lines.append(str(parsed))
+            lines.append(json.dumps(parsed, indent=2, ensure_ascii=False))
         telegram_text = header + "\n\n" + "\n".join(lines)
-        # For API, return the parsed object (so clients get structured JSON)
         return telegram_text, {"json": parsed}
     else:
-        # Not JSON: return cleaned text block
         header = f"✅ Result"
         if command_hint:
             header = f"✅ Result — {command_hint}"
-        # Limit length
         cleaned_lines = cleaned.splitlines()
         if len(cleaned_lines) > 200:
             cleaned = "\n".join(cleaned_lines[:200]) + "\n... (truncated)"
         telegram_text = header + "\n\n" + cleaned
         return telegram_text, {"text": cleaned}
 
-# -------------------- MongoDB API-keys management --------------------
+# ---------------- Mongo-backed API keys ----------------
 def _now_utc():
     return datetime.now(timezone.utc)
 
@@ -241,13 +222,11 @@ async def create_api_key(label=None, days=None, owner=None):
         "expires_at": _future_utc(days=days),
         "revoked": False
     }
-    if api_keys_col:
+    if api_keys_col is not None:
         await api_keys_col.insert_one(doc)
     else:
-        # fallback in-memory - NOT persistent; included for resilience
-        logger.warning("create_api_key: Mongo not available — falling back to ephemeral in-memory (not durable).")
-        # store in local file for minimal persistence
-        local = {}
+        # fallback persistence (file) — best-effort
+        logger.warning("create_api_key: Mongo not available — using fallback file.")
         try:
             with open("api_keys_fallback.json", "r", encoding="utf-8") as f:
                 local = json.load(f)
@@ -259,10 +238,9 @@ async def create_api_key(label=None, days=None, owner=None):
     return key
 
 async def validate_api_key(key):
-    # returns (valid:bool, reason_or_doc)
     if not key:
         return False, "missing_key"
-    if api_keys_col:
+    if api_keys_col is not None:
         doc = await api_keys_col.find_one({"key": key})
         if not doc:
             return False, "not_found"
@@ -289,7 +267,7 @@ async def validate_api_key(key):
         return True, ent
 
 async def revoke_api_key(key):
-    if api_keys_col:
+    if api_keys_col is not None:
         res = await api_keys_col.update_one({"key": key}, {"$set": {"revoked": True}})
         return res.matched_count > 0
     else:
@@ -307,7 +285,7 @@ async def revoke_api_key(key):
 
 async def list_api_keys():
     out = []
-    if api_keys_col:
+    if api_keys_col is not None:
         cursor = api_keys_col.find({}, {"_id": 0}).sort("created_at", -1)
         async for doc in cursor:
             d = dict(doc)
@@ -326,7 +304,7 @@ async def list_api_keys():
             out = []
     return out
 
-# -------------------- Stabilize helper for third_group replies --------------------
+# ---------------- stabilization helper ----------------
 async def _stabilize_and_forward_third_reply(forwarded_msg_id: int, reply_msg_id: int):
     try:
         await asyncio.sleep(REPLY_STABILIZE_DELAY)
@@ -335,15 +313,12 @@ async def _stabilize_and_forward_third_reply(forwarded_msg_id: int, reply_msg_id
             return
         if entry["count"] >= entry["max"]:
             return
-
         latest_reply = await client.get_messages(THIRD_GROUP, ids=reply_msg_id)
         if not latest_reply:
             return
         latest_text = _get_text(latest_reply)
         if not latest_text:
             return
-
-        # Clean & format
         telegram_text, structured = format_for_telegram_and_api(latest_text, command_hint=None)
         if entry.get("original_msg_id") and entry["original_msg_id"] in status_messages:
             try:
@@ -351,15 +326,10 @@ async def _stabilize_and_forward_third_reply(forwarded_msg_id: int, reply_msg_id
                 del status_messages[entry["original_msg_id"]]
             except Exception:
                 pass
-
-        # Send back to FIRST_GROUP
         if entry.get("original_msg_id"):
             await client.send_message(FIRST_GROUP, telegram_text, reply_to=entry["original_msg_id"])
-
         entry["count"] += 1
         bot_status["messages_forwarded"] += 1
-
-        # If there is an API waiter, append structured response and maybe set result
         api_entry = api_request_map.get(forwarded_msg_id)
         if api_entry:
             api_entry["responses"].append(structured)
@@ -369,14 +339,13 @@ async def _stabilize_and_forward_third_reply(forwarded_msg_id: int, reply_msg_id
     except Exception as e:
         logger.exception("Error in stabilize task: %s", e)
 
-# -------------------- Telegram event handlers --------------------
+# ---------------- Telegram handlers ----------------
 @client.on(events.NewMessage(chats=FIRST_GROUP))
 async def forward_command(event):
     message = event.message
     text = _get_text(message)
     if not text or not (text.startswith("/") or text.startswith("2/")):
         return
-
     target = SECOND_GROUP
     clean_command = text
     is_third = False
@@ -384,12 +353,10 @@ async def forward_command(event):
         is_third = True
         target = THIRD_GROUP
         clean_command = "/" + text[2:]
-
     cmd_token = clean_command.split()[0].lower()
     if cmd_token == "/start":
         logger.info("Ignored /start from source group.")
         return
-
     try:
         status_msg = await client.send_message(FIRST_GROUP, get_fetch_message(clean_command), reply_to=message.id)
         status_messages[message.id] = {"status_msg": status_msg, "responses": []}
@@ -402,9 +369,7 @@ async def forward_command(event):
             except Exception:
                 pass
             return
-
         forwarded = await client.send_message(target, clean_command)
-
         if is_third:
             message_map_third[message.id] = forwarded.id
             reverse_map_third[forwarded.id] = message.id
@@ -424,7 +389,6 @@ async def forward_command(event):
         else:
             message_map[message.id] = forwarded.id
             reverse_map[forwarded.id] = message.id
-
         bot_status["messages_forwarded"] += 1
         logger.info("Forwarded command to %s: %s", target, clean_command)
     except Exception as e:
@@ -458,8 +422,6 @@ def get_fetch_message(command):
 async def forward_reply_second(event):
     message = event.message
     text = _get_text(message)
-
-    # Normal mapping back to source group
     if message.reply_to_msg_id:
         original_id = reverse_map.get(message.reply_to_msg_id)
         if original_id:
@@ -474,7 +436,6 @@ async def forward_reply_second(event):
                     bot_status["filtered_content"] += 1
                 if not cleaned_text.strip():
                     return
-                # Polished text and structured data
                 telegram_text, structured = format_for_telegram_and_api(cleaned_text, command_hint=None)
                 if original_id in status_messages:
                     try:
@@ -485,7 +446,6 @@ async def forward_reply_second(event):
                 await client.send_message(FIRST_GROUP, telegram_text, reply_to=original_id)
                 bot_status["messages_forwarded"] += 1
                 logger.info("Forwarded reply from second_group -> first_group")
-                # If this reply corresponds to an API request (forwarded into second_group), append structured
                 api_entry = api_request_map.get(message.reply_to_msg_id)
                 if api_entry:
                     api_entry["responses"].append(structured)
@@ -495,7 +455,6 @@ async def forward_reply_second(event):
                 return
             except Exception as e:
                 logger.exception("Error forwarding from second: %s", e)
-    # If not mapped, still check if it's for an API forwarded message
     if message.reply_to_msg_id:
         api_entry = api_request_map.get(message.reply_to_msg_id)
         if api_entry:
@@ -524,7 +483,6 @@ async def forward_reply_third(event):
     text = _get_text(message)
     if not message.reply_to_msg_id:
         return
-
     original_id = reverse_map_third.get(message.reply_to_msg_id)
     if original_id:
         reply_info = forwarded_from_third.get(message.reply_to_msg_id)
@@ -550,7 +508,6 @@ async def forward_reply_third(event):
                 if not cleaned_text.strip():
                     return
                 telegram_text, structured = format_for_telegram_and_api(cleaned_text, command_hint=None)
-                # Delete status message if it exists
                 if reply_info["original_msg_id"] in status_messages:
                     try:
                         await status_messages[reply_info["original_msg_id"]]["status_msg"].delete()
@@ -569,7 +526,6 @@ async def forward_reply_third(event):
         except Exception as e:
             logger.exception("Error handling third_group reply: %s", e)
     else:
-        # Might be API-only forwarded message mapping
         api_entry = api_request_map.get(message.reply_to_msg_id)
         if api_entry:
             try:
@@ -594,14 +550,14 @@ async def forward_reply_third(event):
             except Exception as e:
                 logger.exception("Error handling third_group API reply: %s", e)
 
-# -------------------- Telegram startup --------------------
+# ---------------- telegram startup ----------------
 async def start_telegram():
-    await client.start()  # uses relay_session.session automatically
+    await client.start()  # uses existing session file
     bot_status["running"] = True
     logger.info("Started Telethon using session file 'relay_session.session' — monitoring groups.")
     await client.run_until_disconnected()
 
-# -------------------- HTTP API endpoints --------------------
+# ---------------- HTTP endpoints ----------------
 async def api_create_key(request):
     try:
         data = await request.json()
@@ -621,8 +577,11 @@ async def api_create_key(request):
                 duration = 365
     except Exception:
         return web.json_response({"error": "invalid_duration"}, status=400)
-
-    key = await create_api_key(label=label, days=duration, owner=owner)
+    try:
+        key = await create_api_key(label=label, days=duration, owner=owner)
+    except Exception as e:
+        logger.exception("api_create_key: DB error")
+        return web.json_response({"error": "db_unavailable", "detail": str(e)}, status=503)
     return web.json_response({"api_key": key, "label": label, "duration_days": duration or KEY_DEFAULT_DURATION_DAYS})
 
 async def api_revoke_key(request):
@@ -635,7 +594,11 @@ async def api_revoke_key(request):
     key = data.get("key")
     if not key:
         return web.json_response({"error": "missing_key"}, status=400)
-    ok = await revoke_api_key(key)
+    try:
+        ok = await revoke_api_key(key)
+    except Exception as e:
+        logger.exception("api_revoke_key: DB error")
+        return web.json_response({"error": "db_unavailable", "detail": str(e)}, status=503)
     return web.json_response({"revoked": ok})
 
 async def api_list_keys(request):
@@ -645,7 +608,11 @@ async def api_list_keys(request):
         return web.json_response({"error": "invalid_json"}, status=400)
     if data.get("master_secret") != MASTER_API_SECRET:
         return web.json_response({"error": "unauthorized"}, status=401)
-    docs = await list_api_keys()
+    try:
+        docs = await list_api_keys()
+    except Exception as e:
+        logger.exception("api_list_keys: DB error")
+        return web.json_response({"error": "db_unavailable", "detail": str(e)}, status=503)
     return web.json_response({"keys": docs})
 
 async def api_command(request):
@@ -653,18 +620,13 @@ async def api_command(request):
         data = await request.json()
     except:
         return web.json_response({"error": "invalid_json"}, status=400)
-
     api_key = data.get("api_key")
     command = data.get("command")
     if not api_key or not command:
         return web.json_response({"error": "missing_parameters"}, status=400)
-
-    # Validate API key (MongoDB)
     valid, info = await validate_api_key(api_key)
     if not valid:
         return web.json_response({"error": "invalid_api_key", "reason": info}, status=401)
-
-    # Determine target
     is_third = False
     clean_command = command
     target = SECOND_GROUP
@@ -672,32 +634,23 @@ async def api_command(request):
         is_third = True
         target = THIRD_GROUP
         clean_command = "/" + command[2:]
-
     if clean_command.split()[0].lower() == "/start":
         return web.json_response({"error": "forbidden_command"}, status=400)
-
-    # Post a status into FIRST_GROUP (optional)
     try:
         await client.send_message(FIRST_GROUP, f"[API] {get_fetch_message(clean_command)}")
     except Exception:
         logger.debug("Could not post API status message in first_group (continuing)")
-
-    # Send the command into target
     try:
         forwarded = await client.send_message(target, clean_command)
     except Exception as e:
         logger.exception("Failed sending command to target group: %s", e)
         return web.json_response({"error": "telegram_send_failed", "detail": str(e)}, status=500)
-
-    # Determine allowed replies and "stabilize" flag
     cmd_token = clean_command.split()[0].lower()
     allowed = 1
     stabilize = False
     if cmd_token in ["/vnum", "/bomber", "/familyinfo", "/insta"]:
         allowed = 2
         stabilize = True
-
-    # Create API tracker
     fut = asyncio.get_running_loop().create_future()
     api_entry = {
         "future": fut,
@@ -708,23 +661,15 @@ async def api_command(request):
         "original_api_req_id": uuid.uuid4().hex
     }
     api_request_map[forwarded.id] = api_entry
-
-    # If third-group forwarded, also track forwarded_from_third for reply-window handling
     if is_third:
         forwarded_from_third[forwarded.id] = {
-            "count": 0,
-            "max": allowed,
-            "deadline": time.time() + THIRD_REPLY_WINDOW,
-            "original_msg_id": None,
-            "stabilize": stabilize
+            "count": 0, "max": allowed, "deadline": time.time() + THIRD_REPLY_WINDOW,
+            "original_msg_id": None, "stabilize": stabilize
         }
-
-    # Wait for replies or timeout
     try:
         results = await asyncio.wait_for(fut, timeout=API_REQUEST_TIMEOUT)
         api_request_map.pop(forwarded.id, None)
         forwarded_from_third.pop(forwarded.id, None)
-        # Return structured JSON responses (already parsed when possible)
         return web.json_response({"success": True, "responses": results})
     except asyncio.TimeoutError:
         responses = api_entry["responses"][:]
@@ -739,7 +684,7 @@ async def api_command(request):
         forwarded_from_third.pop(forwarded.id, None)
         return web.json_response({"success": False, "error": "internal_error", "detail": str(e)}, status=500)
 
-# -------------------- Health and status --------------------
+# ---------------- health / status ----------------
 async def health_check(request):
     return web.Response(text="OK", status=200)
 
@@ -761,7 +706,7 @@ async def status(request):
     """
     return web.Response(text=html, content_type="text/html")
 
-# -------------------- Web server startup --------------------
+# ---------------- start web server ----------------
 async def start_web_server():
     app = web.Application()
     app.router.add_post("/api/create_key", api_create_key)
@@ -778,21 +723,19 @@ async def start_web_server():
     logger.info("Web server started on port %s", PORT)
     await asyncio.Event().wait()
 
-# -------------------- Main --------------------
+# ---------------- main ----------------
 async def main():
-    # init DB first (so create_key works immediately)
     await init_db()
-    # optionally start a background task to revoke expired keys hourly
+    # background: expire keys hourly (mark revoked)
     async def expire_task():
         while True:
             try:
-                if api_keys_col:
+                if api_keys_col is not None:
                     await api_keys_col.update_many({"expires_at": {"$lt": _now_utc()}, "revoked": False}, {"$set": {"revoked": True}})
             except Exception:
                 logger.debug("expire_task: error (continuing)")
             await asyncio.sleep(3600)
     asyncio.create_task(expire_task())
-
     await asyncio.gather(start_web_server(), start_telegram())
 
 if __name__ == "__main__":
