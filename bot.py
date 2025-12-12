@@ -1,145 +1,170 @@
 #!/usr/bin/env python3
-from telethon import TelegramClient, events
-import asyncio
+"""
+bot.py — Telegram relay + HTTP API in a single file.
+
+Usage:
+  - Deploy to Render (or any server) and set env vars listed below.
+  - Use BOT_TOKEN (recommended) so no interactive login is required.
+
+Environment variables (important):
+  BOT_TOKEN             -> Telegram bot token (recommended)
+  FIRST_GROUP           -> source group username/id (where commands are sent from)
+  SECOND_GROUP          -> destination group username/id (normal target)
+  THIRD_GROUP           -> destination group username/id (for 2/ commands)
+  MASTER_API_SECRET     -> secret required to create API keys
+  API_KEYS_FILE         -> path to store API keys (default ./api_keys.json)
+  PORT                  -> web server port (default 10000)
+  THIRD_REPLY_WINDOW    -> seconds to accept replies from third group (default 5)
+  REPLY_STABILIZE_DELAY -> stabilization delay for some commands (default 3)
+  FETCH_WAIT_TIME       -> wait time before reading final reply (default 3)
+  API_REQUEST_TIMEOUT   -> override HTTP wait timeout (optional)
+
+Requirements:
+  pip install telethon aiohttp
+"""
+
 import os
-import logging
-import json
 import time
+import json
+import uuid
 import re
+import asyncio
+import logging
 from aiohttp import web
+from telethon import TelegramClient, events
 
-# --- config from env ---
-api_id = int(os.getenv('API_ID', '36246931'))
-api_hash = os.getenv('API_HASH', 'e9708f05bedf286d69abed0da7f44580')
-phone = os.getenv('PHONE', '+917667280752')
+# ---------- Configuration ----------
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # REQUIRED (recommended)
+FIRST_GROUP = os.getenv("FIRST_GROUP", "ethicalosinterr")
+SECOND_GROUP = os.getenv("SECOND_GROUP", "ethicalosint")
+THIRD_GROUP = os.getenv("THIRD_GROUP", "IntelXGroup")
 
-first_group = os.getenv('FIRST_GROUP', 'ethicalosinterr')        # source
-second_group = os.getenv('SECOND_GROUP', 'ethicalosint')   # destination 1
-third_group = os.getenv('THIRD_GROUP', 'IntelXGroup')          # destination 2 (for 2/ commands)
+MASTER_API_SECRET = os.getenv("MASTER_API_SECRET")  # required to create keys
+API_KEYS_FILE = os.getenv("API_KEYS_FILE", "./api_keys.json")
 
-# reply window duration (seconds) after forwarding to third_group
-THIRD_REPLY_WINDOW = int(os.getenv('THIRD_REPLY_WINDOW', '5'))
-# stabilization delay for replies (seconds) before forwarding to source (to allow edits/deletes)
-REPLY_STABILIZE_DELAY = int(os.getenv('REPLY_STABILIZE_DELAY', '3'))
-# Wait time for fetching responses
-FETCH_WAIT_TIME = int(os.getenv('FETCH_WAIT_TIME', '3'))
+PORT = int(os.getenv("PORT", "10000"))
+THIRD_REPLY_WINDOW = int(os.getenv("THIRD_REPLY_WINDOW", "5"))
+REPLY_STABILIZE_DELAY = int(os.getenv("REPLY_STABILIZE_DELAY", "3"))
+FETCH_WAIT_TIME = int(os.getenv("FETCH_WAIT_TIME", "3"))
 
-# --- init ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
-logger = logging.getLogger("relay_bot")
+# API request timeout default:
+API_REQUEST_TIMEOUT = int(os.getenv("API_REQUEST_TIMEOUT", str(THIRD_REPLY_WINDOW + REPLY_STABILIZE_DELAY + FETCH_WAIT_TIME + 5)))
 
-client = TelegramClient('relay_session', api_id, api_hash)
+# If using phone session (not recommended), you may set API_ID and API_HASH and PHONE
+API_ID = os.getenv("API_ID")
+API_HASH = os.getenv("API_HASH")
+PHONE = os.getenv("PHONE")
 
-# mapping original_msg_id (in first_group) -> forwarded_msg_id (in second_group)
-message_map = {}
-# reverse mapping forwarded_msg_id -> original_msg_id
-reverse_map = {}
+# ---------- Logging ----------
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+logger = logging.getLogger("relay_api_bot")
 
-# mapping for third group (source_msg_id -> forwarded_msg_id)
-message_map_third = {}
-reverse_map_third = {}
+# ---------- Telethon client ----------
+# If BOT_TOKEN provided, start as bot. Otherwise requires API_ID/PHONE (not recommended on Render).
+if BOT_TOKEN:
+    # Telethon can be created with any app id/hash, but to be safe, if API_ID/HASH are set, use them.
+    _api_id = int(API_ID) if API_ID else 0
+    _api_hash = API_HASH if API_HASH else None
+    # If API_ID/HASH are not provided, Telethon still works with 0/None when starting with bot_token.
+    client = TelegramClient("relay_bot_session", _api_id, _api_hash)
+else:
+    if not (API_ID and API_HASH and PHONE):
+        logger.error("Either BOT_TOKEN or API_ID+API_HASH+PHONE must be provided. Exiting.")
+        raise SystemExit(1)
+    client = TelegramClient("relay_session", int(API_ID), API_HASH)
 
-# Track which messages from third group have already been forwarded
-# Key: forwarded_msg_id (the id in third_group we sent), Value: dict with count/max/deadline, original_msg_id, stabilize flag
-forwarded_from_third = {}
+# ---------- In-memory maps ----------
+# Telegram message mappings
+message_map = {}           # source_msg_id -> forwarded_msg_id (second group)
+reverse_map = {}           # forwarded_msg_id -> source_msg_id
+message_map_third = {}     # source_msg_id -> forwarded_msg_id (third group)
+reverse_map_third = {}     # forwarded_msg_id -> source_msg_id
+forwarded_from_third = {}  # forwarded_msg_id -> {count,max,deadline,original_msg_id,stabilize}
 
-# Track status messages that need to be deleted
-# Key: original_msg_id, Value: {'status_msg': Message, 'responses': []}
-status_messages = {}
+# Status messages per original msg
+status_messages = {}       # original_msg_id -> {'status_msg': Message, 'responses': []}
 
 bot_status = {"running": False, "messages_forwarded": 0, "filtered_content": 0}
 
-# Helper: safe get text (message.text can be None)
+# API request tracking: forwarded_msg_id -> {future, responses[], max, deadline, stabilize, original_api_req_id}
+api_request_map = {}
+
+# ---------- API keys persistence ----------
+def load_api_keys():
+    try:
+        with open(API_KEYS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_api_keys(keys):
+    try:
+        with open(API_KEYS_FILE, "w", encoding="utf-8") as f:
+            json.dump(keys, f, indent=2)
+    except Exception as e:
+        logger.warning("Could not save API keys: %s", e)
+
+api_keys = load_api_keys()
+
+def generate_api_key(label=None):
+    token = uuid.uuid4().hex
+    api_keys[token] = {"label": label or "", "created_at": int(time.time())}
+    save_api_keys(api_keys)
+    return token
+
+def validate_api_key(token):
+    return token in api_keys
+
+# ---------- Helpers ----------
 def _get_text(msg):
     return msg.text if msg and getattr(msg, "text", None) is not None else ""
 
 def get_fetch_message(command):
-    """Generate appropriate fetching message based on command type"""
     cmd_lower = command.lower()
-    
     if 'vnum' in cmd_lower or 'vehicle' in cmd_lower:
         return "⏳ Fetching vehicle info… Please wait."
-    elif 'family' in cmd_lower:
+    if 'family' in cmd_lower:
         return "⏳ Fetching family info… Please wait."
-    elif 'aadhar' in cmd_lower or 'aadhaar' in cmd_lower:
+    if 'aadhar' in cmd_lower or 'aadhaar' in cmd_lower:
         return "⏳ Fetching Aadhar info… Please wait."
-    elif 'pan' in cmd_lower:
+    if 'pan' in cmd_lower:
         return "⏳ Fetching PAN info… Please wait."
-    elif 'voter' in cmd_lower:
+    if 'voter' in cmd_lower:
         return "⏳ Fetching voter info… Please wait."
-    elif 'insta' in cmd_lower:
+    if 'insta' in cmd_lower:
         return "⏳ Fetching Instagram info… Please wait."
-    elif 'bomber' in cmd_lower:
+    if 'bomber' in cmd_lower:
         return "⏳ Processing bomber request… Please wait."
-    else:
-        return "⏳ Fetching info… Please wait."
+    return "⏳ Fetching info… Please wait."
 
 def filter_links_and_usernames(text):
-    """
-    Remove all URLs and Telegram usernames from text.
-    Also removes lines containing specific promotional content.
-    Returns cleaned text and whether content was filtered.
-    """
     if not text:
         return text, False
-    
     original_text = text
-    
-    # URL patterns to match
     url_patterns = [
-        r'https?://[^\s]+',           # http:// or https:// URLs
-        r'www\.[^\s]+',                # www. URLs
-        r't\.me/[^\s]+',               # Telegram links
-        r'[a-zA-Z0-9-]+\.[a-zA-Z]{2,}[^\s]*'  # domain.com style links
+        r'https?://[^\s]+',
+        r'www\.[^\s]+',
+        r't\.me/[^\s]+',
+        r'[a-zA-Z0-9-]+\.[a-zA-Z]{2,}[^\s]*'
     ]
-    
-    # Username patterns to match
-    username_patterns = [
-        r'@[\w]+',                     # @username format
-        r'@[a-zA-Z0-9_]{5,32}'        # Telegram username format (5-32 chars)
-    ]
-    
-    # Combine all patterns
-    all_patterns = url_patterns + username_patterns
-    
-    # Remove matched patterns
+    username_patterns = [r'@[\w]{2,32}']
+    patterns = url_patterns + username_patterns
     cleaned = text
-    for pattern in all_patterns:
-        cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
-    
-    # Split into lines and filter out lines with promotional content
-    lines = cleaned.split('\n')
+    for p in patterns:
+        cleaned = re.sub(p, '', cleaned, flags=re.IGNORECASE)
+    lines = cleaned.splitlines()
     filtered_lines = []
-    
-    promotional_keywords = [
-        'use these commands in:',
-        'join our group',
-        'visit our channel',
-        '💬 use these commands',
-        'commands in:'
-    ]
-    
+    promotional = ['use these commands in:', 'join our group', 'visit our channel', '💬 use these commands', 'commands in:']
     for line in lines:
-        line_lower = line.lower().strip()
-        # Skip empty lines and lines with promotional content
-        if line_lower and not any(keyword in line_lower for keyword in promotional_keywords):
+        l = line.strip()
+        if l and not any(k in l.lower() for k in promotional):
             filtered_lines.append(line)
-    
-    # Rejoin lines
-    cleaned = '\n'.join(filtered_lines)
-    
-    # Clean up extra whitespace
-    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)  # Replace 3+ newlines with 2
-    cleaned = re.sub(r' {2,}', ' ', cleaned)       # Replace multiple spaces with single
-    cleaned = cleaned.strip()
-    
-    # Check if we actually filtered anything
-    was_filtered = (original_text != cleaned)
-    
-    return cleaned, was_filtered
+    cleaned = "\n".join(filtered_lines)
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+    cleaned = re.sub(r' {2,}', ' ', cleaned).strip()
+    return cleaned, (original_text != cleaned)
 
 def remove_footer(text):
-    """Remove the footer line from JSON responses (best-effort)."""
     if not text:
         return text
     try:
@@ -148,137 +173,88 @@ def remove_footer(text):
             del data["footer"]
         return json.dumps(data, indent=2, ensure_ascii=False)
     except Exception:
-        # fallback: simple line filter
         lines = text.splitlines()
         filtered = [L for L in lines if '"footer"' not in L and '@frappeash' not in L]
-        return '\n'.join(filtered)
+        return "\n".join(filtered)
 
+# ---------- Stabilize helper ----------
 async def _stabilize_and_forward_third_reply(forwarded_msg_id: int, reply_msg_id: int):
-    """
-    Wait REPLY_STABILIZE_DELAY seconds, then fetch the reply from third_group.
-    If the reply still exists (not deleted), forward its final version to the original message in first_group.
-    This function also checks that the forwarded_from_third[forwarded_msg_id] hasn't exceeded its max count.
-    """
     try:
         await asyncio.sleep(REPLY_STABILIZE_DELAY)
-        # Re-check tracking entry exists and that we still have quota
         reply_info = forwarded_from_third.get(forwarded_msg_id)
         if not reply_info:
-            logger.debug(f"Stabilize task: no tracking info for forwarded {forwarded_msg_id} — aborting.")
             return
-
-        # If we've already forwarded enough replies, do nothing
         if reply_info['count'] >= reply_info['max']:
-            logger.debug(f"Stabilize task: already forwarded {reply_info['count']}/{reply_info['max']} for {forwarded_msg_id} — aborting.")
             return
-
-        # Fetch the reply message from third_group to get its latest/edited content (if deleted, latest will be None)
-        latest_reply = await client.get_messages(third_group, ids=reply_msg_id)
+        latest_reply = await client.get_messages(THIRD_GROUP, ids=reply_msg_id)
         if not latest_reply:
-            logger.info(f"Stabilize task: reply {reply_msg_id} was deleted in third_group; skipping forward.")
             return
-
         latest_text = _get_text(latest_reply)
         if not latest_text:
-            logger.info(f"Stabilize task: reply {reply_msg_id} has no text after fetch; skipping.")
             return
-
-        # Clean the response by removing footer
-        cleaned_text = remove_footer(latest_text)
-        
-        # Filter links and usernames
-        filtered_text, was_filtered = filter_links_and_usernames(cleaned_text)
-        
+        cleaned = remove_footer(latest_text)
+        filtered_text, was_filtered = filter_links_and_usernames(cleaned)
         if was_filtered:
             bot_status["filtered_content"] += 1
-            logger.info(f"Filtered links/usernames from stabilized reply {reply_msg_id}")
-        
-        if not filtered_text or not filtered_text.strip():
-            logger.info(f"After filtering, reply {reply_msg_id} is empty; skipping forward.")
+        if not filtered_text.strip():
             return
 
-        # Forward as a reply to the original message in first_group
-        original_msg_id = reply_info['original_msg_id']
-        
-        # Delete status message if exists
-        if original_msg_id in status_messages:
+        # delete status message if exists
+        original_msg_id = reply_info.get('original_msg_id')
+        if original_msg_id and original_msg_id in status_messages:
             try:
                 await status_messages[original_msg_id]['status_msg'].delete()
                 del status_messages[original_msg_id]
-            except Exception as e:
-                logger.warning(f"Could not delete status message: {e}")
-        
-        await client.send_message(first_group, filtered_text, reply_to=original_msg_id)
+            except Exception:
+                pass
 
-        # Increment count
+        # send back to first_group (for human visibility)
+        if original_msg_id:
+            await client.send_message(FIRST_GROUP, filtered_text, reply_to=original_msg_id)
+
         forwarded_from_third[forwarded_msg_id]['count'] += 1
         bot_status["messages_forwarded"] += 1
-        current_count = forwarded_from_third[forwarded_msg_id]['count']
-        logger.info(f"✓ Stabilized-forwarded reply {current_count}/{reply_info['max']} from third_group reply {reply_msg_id} to {first_group} (forwarded_id={forwarded_msg_id}).")
-    except Exception as e:
-        logger.exception(f"Error in stabilize_and_forward task for forwarded {forwarded_msg_id}, reply {reply_msg_id}: {e}")
 
-@client.on(events.NewMessage(chats=first_group))
+        # If an API request is waiting on this forwarded message, append and maybe set future
+        api_entry = api_request_map.get(forwarded_msg_id)
+        if api_entry:
+            api_entry['responses'].append(filtered_text)
+            if len(api_entry['responses']) >= api_entry['max']:
+                if not api_entry['future'].done():
+                    api_entry['future'].set_result(api_entry['responses'])
+    except Exception as e:
+        logger.exception("Error in stabilize task: %s", e)
+
+# ---------- Telegram event handlers ----------
+@client.on(events.NewMessage(chats=FIRST_GROUP))
 async def forward_command(event):
-    """
-    Forward messages starting with '/' or '2/' from first group to appropriate destination group
-    - For ALL commands (including 2/), wait 5 seconds and verify message unchanged
-    - Never forward '/start'
-    - Show fetching status and wait for response before forwarding
-    """
     message = event.message
     text = _get_text(message)
-
-    # Only proceed if there's text and it starts with '/' or '2/'
     if not text or not (text.startswith('/') or text.startswith('2/')):
         return
 
-    # Determine target group and clean command
-    target_group = second_group
+    target = SECOND_GROUP
     clean_command = text
-    is_third_group = False
-
+    is_third = False
     if text.startswith('2/'):
-        target_group = third_group
-        is_third_group = True
-        # Remove the '2' prefix but keep the leading slash
-        # Example: '2/vnum arg' -> '/vnum arg'
+        is_third = True
+        target = THIRD_GROUP
         clean_command = '/' + text[2:]
 
-    # Never forward /start
-    stripped = clean_command.split()[0]  # command token (e.g. '/start' or '/help')
-    if stripped.lower() == '/start':
-        logger.info("Received /start in source group — will NOT forward.")
+    cmd_token = clean_command.split()[0].lower()
+    if cmd_token == '/start':
+        logger.info("Ignored /start from source group.")
         return
 
     try:
-        # Send fetching status message
-        fetch_msg_text = get_fetch_message(clean_command)
-        status_msg = await client.send_message(first_group, fetch_msg_text, reply_to=message.id)
-        
-        # Store status message for later deletion
-        status_messages[message.id] = {
-            'status_msg': status_msg,
-            'responses': []
-        }
-        
-        # WAIT 5 seconds for verification for ALL commands (including 2/)
+        # Post status to source group
+        status_msg = await client.send_message(FIRST_GROUP, get_fetch_message(clean_command), reply_to=message.id)
+        status_messages[message.id] = {'status_msg': status_msg, 'responses': []}
+        # Wait 5s to ensure sender didn't edit/delete
         await asyncio.sleep(5)
-        # Re-fetch the message to confirm it still exists and hasn't changed
-        latest = await client.get_messages(first_group, ids=message.id)
-        if not latest:
-            logger.info(f"Message id {message.id} appears deleted after 5s — skipping forward.")
-            # Delete status message
-            try:
-                await status_msg.delete()
-                del status_messages[message.id]
-            except:
-                pass
-            return
-        latest_text = _get_text(latest)
-        if latest_text != text:
-            logger.info(f"Message id {message.id} text changed after 5s — skipping forward.")
-            # Delete status message
+        latest = await client.get_messages(FIRST_GROUP, ids=message.id)
+        if not latest or _get_text(latest) != text:
+            # message changed or deleted — drop
             try:
                 await status_msg.delete()
                 del status_messages[message.id]
@@ -286,43 +262,29 @@ async def forward_command(event):
                 pass
             return
 
-        # All checks passed — forward/send the command text to the target group
-        forwarded = await client.send_message(target_group, clean_command)
+        forwarded = await client.send_message(target, clean_command)
 
-        # Store mappings based on target group
-        if is_third_group:
-            # Map source -> forwarded and reverse
+        if is_third:
             message_map_third[message.id] = forwarded.id
             reverse_map_third[forwarded.id] = message.id
-
-            # Determine allowed replies: default 1; for /vnum and /bomber allow 2
-            cmd_token = clean_command.split()[0].lower()
             allowed = 1
             stabilize = False
             if cmd_token in ['/vnum', '/bomber', '/familyinfo', '/insta']:
                 allowed = 2
-                stabilize = True  # enable stabilization behavior for these commands
-
-            # Track the forwarded message id with reply window measured from now
+                stabilize = True
             forwarded_from_third[forwarded.id] = {
-                'count': 0,
-                'max': allowed,
-                'deadline': time.time() + THIRD_REPLY_WINDOW,
-                'original_msg_id': message.id,
-                'stabilize': stabilize
+                'count': 0, 'max': allowed, 'deadline': time.time() + THIRD_REPLY_WINDOW,
+                'original_msg_id': message.id, 'stabilize': stabilize
             }
-
-            logger.info(f"Reply-tracking set for third_group message {forwarded.id}: max={allowed}, deadline={forwarded_from_third[forwarded.id]['deadline']}, stabilize={stabilize}")
+            logger.info("Tracking third_group forwarded id %s (max=%s, stabilize=%s)", forwarded.id, allowed, stabilize)
         else:
-            # mapping for second_group forwarded messages
             message_map[message.id] = forwarded.id
             reverse_map[forwarded.id] = message.id
 
         bot_status["messages_forwarded"] += 1
-        logger.info(f"✓ Forwarded command from {first_group} -> {target_group}: {clean_command}")
+        logger.info("Forwarded command to %s: %s", target, clean_command)
     except Exception as e:
-        logger.exception(f"Error while trying to forward command: {e}")
-        # Clean up status message on error
+        logger.exception("Error forwarding command: %s", e)
         if message.id in status_messages:
             try:
                 await status_messages[message.id]['status_msg'].delete()
@@ -330,259 +292,297 @@ async def forward_command(event):
             except:
                 pass
 
-@client.on(events.NewMessage(chats=second_group))
+@client.on(events.NewMessage(chats=SECOND_GROUP))
 async def forward_reply_second(event):
-    """
-    Forward replies from second group back to first group.
-    Filters out links and usernames before forwarding.
-    Waits FETCH_WAIT_TIME seconds to check for edits/deletions.
-    """
     message = event.message
     text = _get_text(message)
-
-    # If this message is a reply to something in second_group, try to map back
+    # normal mapping back to source group
     if message.reply_to_msg_id:
-        original_msg_id = reverse_map.get(message.reply_to_msg_id)
-        if original_msg_id:
+        original_id = reverse_map.get(message.reply_to_msg_id)
+        if original_id:
             try:
-                # Wait for potential edits/deletions
                 await asyncio.sleep(FETCH_WAIT_TIME)
-                
-                # Re-fetch message to get latest version
-                latest_msg = await client.get_messages(second_group, ids=message.id)
-                if not latest_msg:
-                    logger.info(f"Reply {message.id} was deleted, not forwarding.")
+                latest = await client.get_messages(SECOND_GROUP, ids=message.id)
+                if not latest:
                     return
-                
-                latest_text = _get_text(latest_msg)
-                
-                # Filter links and usernames
-                filtered_text, was_filtered = filter_links_and_usernames(latest_text)
-                
+                filtered, was_filtered = filter_links_and_usernames(_get_text(latest))
                 if was_filtered:
                     bot_status["filtered_content"] += 1
-                    logger.info(f"Filtered links/usernames from second_group reply")
-                
-                if not filtered_text or not filtered_text.strip():
-                    logger.info("After filtering, message is empty; not forwarding.")
+                if not filtered.strip():
                     return
-                
-                # Delete status message if exists
-                if original_msg_id in status_messages:
+                # delete status if exists
+                if original_id in status_messages:
                     try:
-                        await status_messages[original_msg_id]['status_msg'].delete()
-                        del status_messages[original_msg_id]
-                    except Exception as e:
-                        logger.warning(f"Could not delete status message: {e}")
-                
-                # Reply back to the original message in the first group
-                await client.send_message(first_group, filtered_text, reply_to=original_msg_id)
+                        await status_messages[original_id]['status_msg'].delete()
+                        del status_messages[original_id]
+                    except:
+                        pass
+                await client.send_message(FIRST_GROUP, filtered, reply_to=original_id)
                 bot_status["messages_forwarded"] += 1
-                logger.info(f"✓ Forwarded filtered reply back to {first_group}: {filtered_text[:50]}...")
+                logger.info("Forwarded reply from second_group -> first_group")
                 return
             except Exception as e:
-                logger.exception(f"Error forwarding reply back to source group: {e}")
-                return
+                logger.exception("Error forwarding from second: %s", e)
 
-@client.on(events.NewMessage(chats=third_group))
+    # API-related: if this reply references a forwarded message that was created for an API request
+    if message.reply_to_msg_id:
+        api_entry = api_request_map.get(message.reply_to_msg_id)
+        if api_entry:
+            try:
+                await asyncio.sleep(FETCH_WAIT_TIME)
+                latest = await client.get_messages(SECOND_GROUP, ids=message.id)
+                if not latest:
+                    return
+                filtered, was_filtered = filter_links_and_usernames(_get_text(latest))
+                if was_filtered:
+                    bot_status["filtered_content"] += 1
+                if not filtered.strip():
+                    return
+                api_entry['responses'].append(filtered)
+                if len(api_entry['responses']) >= api_entry['max']:
+                    if not api_entry['future'].done():
+                        api_entry['future'].set_result(api_entry['responses'])
+            except Exception as e:
+                logger.exception("Error in API-related second_group handler: %s", e)
+
+@client.on(events.NewMessage(chats=THIRD_GROUP))
 async def forward_reply_third(event):
-    """
-    Forward replies from third group back to first group.
-    Filters out links and usernames before forwarding.
-    Behavior:
-      - Only process replies to messages we forwarded (reply_to_msg_id must map)
-      - Only accept replies that arrive within the reply-window (deadline)
-      - If the forwarded message's tracking has stabilize=True, schedule a stabilization delay
-        (REPLY_STABILIZE_DELAY seconds), then fetch the final version and forward if still exists.
-      - If stabilize=False, forward immediately (legacy behavior).
-    """
     message = event.message
     text = _get_text(message)
-
-    # Only process if this is a reply to a message we forwarded
     if not message.reply_to_msg_id:
-        logger.debug("Ignored non-reply message from third_group.")
         return
 
-    # Check if this reply_to_msg_id exists in our mapping
-    original_msg_id = reverse_map_third.get(message.reply_to_msg_id)
-    if not original_msg_id:
-        logger.debug("Reply in third_group doesn't map to any original message.")
-        return
+    original_id = reverse_map_third.get(message.reply_to_msg_id)
+    if original_id:
+        reply_info = forwarded_from_third.get(message.reply_to_msg_id)
+        if not reply_info:
+            return
+        now = time.time()
+        if now > reply_info['deadline']:
+            return
+        if reply_info['count'] >= reply_info['max']:
+            return
+        try:
+            if reply_info.get('stabilize'):
+                asyncio.create_task(_stabilize_and_forward_third_reply(message.reply_to_msg_id, message.id))
+            else:
+                await asyncio.sleep(FETCH_WAIT_TIME)
+                latest = await client.get_messages(THIRD_GROUP, ids=message.id)
+                if not latest:
+                    return
+                cleaned = remove_footer(_get_text(latest))
+                filtered, was_filtered = filter_links_and_usernames(cleaned)
+                if was_filtered:
+                    bot_status["filtered_content"] += 1
+                if not filtered.strip():
+                    return
+                # delete status
+                if reply_info['original_msg_id'] in status_messages:
+                    try:
+                        await status_messages[reply_info['original_msg_id']]['status_msg'].delete()
+                        del status_messages[reply_info['original_msg_id']]
+                    except:
+                        pass
+                await client.send_message(FIRST_GROUP, filtered, reply_to=reply_info['original_msg_id'])
+                forwarded_from_third[message.reply_to_msg_id]['count'] += 1
+                bot_status["messages_forwarded"] += 1
+                # satisfy any API waiter
+                api_entry = api_request_map.get(message.reply_to_msg_id)
+                if api_entry:
+                    api_entry['responses'].append(filtered)
+                    if len(api_entry['responses']) >= api_entry['max']:
+                        if not api_entry['future'].done():
+                            api_entry['future'].set_result(api_entry['responses'])
+        except Exception as e:
+            logger.exception("Error handling third_group reply: %s", e)
+    else:
+        # Possible API-only forwarded message mapping (if we forwarded for API)
+        api_entry = api_request_map.get(message.reply_to_msg_id)
+        if api_entry:
+            try:
+                if api_entry.get('stabilize'):
+                    asyncio.create_task(_stabilize_and_forward_third_reply(message.reply_to_msg_id, message.id))
+                else:
+                    await asyncio.sleep(FETCH_WAIT_TIME)
+                    latest = await client.get_messages(THIRD_GROUP, ids=message.id)
+                    if not latest:
+                        return
+                    cleaned = remove_footer(_get_text(latest))
+                    filtered, was_filtered = filter_links_and_usernames(cleaned)
+                    if was_filtered:
+                        bot_status["filtered_content"] += 1
+                    if not filtered.strip():
+                        return
+                    api_entry['responses'].append(filtered)
+                    if len(api_entry['responses']) >= api_entry['max']:
+                        if not api_entry['future'].done():
+                            api_entry['future'].set_result(api_entry['responses'])
+            except Exception as e:
+                logger.exception("Error handling third_group API reply: %s", e)
 
-    # Check reply tracking info for this forwarded message
-    reply_info = forwarded_from_third.get(message.reply_to_msg_id)
-    if not reply_info:
-        logger.debug(f"No reply tracking info found for message {message.reply_to_msg_id}")
-        return
-
-    # Check deadline (only accept replies received within the deadline)
-    now = time.time()
-    if now > reply_info['deadline']:
-        logger.debug(f"Reply arrived after deadline for message {message.reply_to_msg_id} (now={now}, deadline={reply_info['deadline']}) — skipping.")
-        return
-
-    # Check if we've already forwarded the maximum number of replies
-    if reply_info['count'] >= reply_info['max']:
-        logger.debug(f"Already forwarded {reply_info['count']}/{reply_info['max']} replies for message {message.reply_to_msg_id}, skipping.")
-        return
-
-    # At this point, we should accept this reply. Two flows:
-    #  - If stabilize==True: schedule stabilization task that waits REPLY_STABILIZE_DELAY seconds,
-    #    then fetch the reply and forward only if it still exists (final edited version).
-    #  - If stabilize==False: forward immediately (legacy behavior).
-    try:
-        if reply_info.get('stabilize'):
-            # Schedule stabilization task and return; the task will increment the count when it forwards
-            logger.info(f"Scheduling stabilization-forward for reply {message.id} to forwarded {message.reply_to_msg_id}")
-            asyncio.create_task(_stabilize_and_forward_third_reply(message.reply_to_msg_id, message.id))
-        else:
-            # Wait for potential edits/deletions
-            await asyncio.sleep(FETCH_WAIT_TIME)
-            
-            # Re-fetch message
-            latest_msg = await client.get_messages(third_group, ids=message.id)
-            if not latest_msg:
-                logger.info(f"Reply {message.id} was deleted, not forwarding.")
-                return
-            
-            latest_text = _get_text(latest_msg)
-            cleaned_text = remove_footer(latest_text)
-            
-            # Filter links and usernames
-            filtered_text, was_filtered = filter_links_and_usernames(cleaned_text)
-            
-            if was_filtered:
-                bot_status["filtered_content"] += 1
-                logger.info(f"Filtered links/usernames from third_group reply {message.id}")
-            
-            if not filtered_text or not filtered_text.strip():
-                logger.info(f"After filtering, reply {message.id} is empty; skipping forward.")
-                return
-            
-            # Delete status message if exists
-            if reply_info['original_msg_id'] in status_messages:
-                try:
-                    await status_messages[reply_info['original_msg_id']]['status_msg'].delete()
-                    del status_messages[reply_info['original_msg_id']]
-                except Exception as e:
-                    logger.warning(f"Could not delete status message: {e}")
-            
-            await client.send_message(first_group, filtered_text, reply_to=reply_info['original_msg_id'])
-            forwarded_from_third[message.reply_to_msg_id]['count'] += 1
-            bot_status["messages_forwarded"] += 1
-            current_count = forwarded_from_third[message.reply_to_msg_id]['count']
-            logger.info(f"✓ Immediately forwarded filtered reply {current_count}/{reply_info['max']} from third_group reply {message.id} to {first_group} (forwarded_id={message.reply_to_msg_id}).")
-    except Exception as e:
-        logger.exception(f"Error handling reply from third: {e}")
-
-async def start_telegram_bot():
-    """Start the Telegram client"""
-    await client.start(phone)
+# ---------- Telegram startup ----------
+async def start_telegram():
+    if BOT_TOKEN:
+        await client.start(bot_token=BOT_TOKEN)
+        logger.info("Started Telethon as bot.")
+    else:
+        await client.start(PHONE)
+        logger.info("Started Telethon with phone session.")
     bot_status["running"] = True
-    logger.info("✓ Telegram bot started successfully!")
-    logger.info(f"✓ Monitoring group: {first_group}")
-    logger.info(f"✓ Forwarding to groups: {second_group}, {third_group}")
-    logger.info("✓ Link and username filtering enabled")
-    logger.info(f"✓ Fetch wait time: {FETCH_WAIT_TIME}s")
-    logger.info(f"✓ Reply stabilization delay: {REPLY_STABILIZE_DELAY}s")
     await client.run_until_disconnected()
 
-# Web server handlers (health + status)
+# ---------- HTTP API endpoints ----------
+async def api_create_key(request):
+    if MASTER_API_SECRET is None:
+        return web.json_response({"error": "server_not_configured"}, status=500)
+    try:
+        data = await request.json()
+    except:
+        return web.json_response({"error": "invalid_json"}, status=400)
+    if data.get("master_secret") != MASTER_API_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    label = data.get("label")
+    token = generate_api_key(label)
+    return web.json_response({"api_key": token, "label": label})
+
+async def api_command(request):
+    try:
+        data = await request.json()
+    except:
+        return web.json_response({"error": "invalid_json"}, status=400)
+    api_key = data.get("api_key")
+    if not api_key or not validate_api_key(api_key):
+        return web.json_response({"error": "invalid_api_key"}, status=401)
+    command = data.get("command")
+    if not command or not isinstance(command, str):
+        return web.json_response({"error": "missing_command"}, status=400)
+
+    # Determine target group
+    is_third = False
+    clean_command = command
+    target = SECOND_GROUP
+    if command.startswith("2/"):
+        is_third = True
+        target = THIRD_GROUP
+        clean_command = "/" + command[2:]
+
+    if clean_command.split()[0].lower() == "/start":
+        return web.json_response({"error": "forbidden_command"}, status=400)
+
+    # Post a status into FIRST_GROUP (optional)
+    try:
+        await client.send_message(FIRST_GROUP, f"[API] {get_fetch_message(clean_command)}")
+    except Exception:
+        logger.debug("Could not post API status message in first_group (continuing)")
+
+    # Send the command into the target group
+    try:
+        forwarded = await client.send_message(target, clean_command)
+    except Exception as e:
+        logger.exception("Failed sending command to target group: %s", e)
+        return web.json_response({"error": "telegram_send_failed", "detail": str(e)}, status=500)
+
+    # Determine allowed replies and stabilization
+    cmd_token = clean_command.split()[0].lower()
+    allowed = 1
+    stabilize = False
+    if cmd_token in ['/vnum', '/bomber', '/familyinfo', '/insta']:
+        allowed = 2
+        stabilize = True
+
+    # Create API tracker
+    fut = asyncio.get_running_loop().create_future()
+    api_entry = {
+        "future": fut,
+        "responses": [],
+        "max": allowed,
+        "deadline": time.time() + THIRD_REPLY_WINDOW,
+        "stabilize": stabilize,
+        "original_api_req_id": uuid.uuid4().hex
+    }
+    api_request_map[forwarded.id] = api_entry
+
+    # Also ensure forwarded_from_third entry if third
+    if is_third:
+        forwarded_from_third[forwarded.id] = {
+            'count': 0, 'max': allowed, 'deadline': time.time() + THIRD_REPLY_WINDOW,
+            'original_msg_id': None, 'stabilize': stabilize
+        }
+
+    # Wait for replies or timeout
+    try:
+        results = await asyncio.wait_for(fut, timeout=API_REQUEST_TIMEOUT)
+        api_request_map.pop(forwarded.id, None)
+        forwarded_from_third.pop(forwarded.id, None)
+        return web.json_response({"success": True, "responses": results})
+    except asyncio.TimeoutError:
+        responses = api_entry['responses'][:]
+        api_request_map.pop(forwarded.id, None)
+        forwarded_from_third.pop(forwarded.id, None)
+        if responses:
+            return web.json_response({"success": True, "responses": responses, "note": "partial/timeout"})
+        return web.json_response({"success": False, "error": "timeout_no_response"}, status=504)
+    except Exception as e:
+        logger.exception("Error while waiting for API response: %s", e)
+        api_request_map.pop(forwarded.id, None)
+        forwarded_from_third.pop(forwarded.id, None)
+        return web.json_response({"success": False, "error": "internal_error", "detail": str(e)}, status=500)
+
+async def api_list_keys(request):
+    try:
+        q = await request.json()
+    except:
+        return web.json_response({"error": "invalid_json"}, status=400)
+    if q.get("master_secret") != MASTER_API_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    return web.json_response({"keys": api_keys})
+
 async def health_check(request):
     return web.Response(text="OK", status=200)
 
 async def status(request):
-    # Build a small list of active reply-windows for display (optional)
     active_windows = []
     now = time.time()
     for fid, info in forwarded_from_third.items():
         remaining = max(0, int(info['deadline'] - now))
-        active_windows.append(f"forwarded_id={fid}, original_msg={info['original_msg_id']}, count={info['count']}/{info['max']}, remaining_s={remaining}, stabilize={info.get('stabilize', False)}")
-
-    # compute text outside f-string to avoid backslash-in-expression syntax error
+        active_windows.append(f"forwarded_id={fid}, original_msg={info.get('original_msg_id')}, count={info['count']}/{info['max']}, remaining_s={remaining}, stabilize={info.get('stabilize', False)}")
     active_text = "\n".join(active_windows) if active_windows else "None"
-    active_status_count = len(status_messages)
-
     html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Telegram Relay Bot</title>
-        <style>
-            body {{ font-family: Arial, sans-serif; max-width: 900px; margin: 30px auto; background:#f5f5f5; }}
-            .container {{ background:#fff; padding:24px; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,0.08); }}
-            h1 {{ color:#0088cc; }}
-            .status {{ padding:10px; margin:10px 0; border-radius:5px; background:#d4edda; color:#155724; border:1px solid #c3e6cb; }}
-            .info {{ margin:15px 0; padding:10px; background:#e7f3ff; border-left:4px solid #0088cc; }}
-            .warning {{ margin:15px 0; padding:10px; background:#fff3cd; border-left:4px solid #ffc107; }}
-            pre {{ background:#f7f7f7; padding:10px; border-radius:6px; overflow:auto; }}
-        </style>
-        <meta http-equiv="refresh" content="10">
-    </head>
-    <body>
-        <div class="container">
-            <h1>🤖 Telegram Multi-Group Relay Bot</h1>
-            <div class="status">✅ Status: {'Running' if bot_status['running'] else 'Stopped'}</div>
-            <div class="warning">🛡️ Security: Link & Username Filtering Active</div>
-            <div class="info">
-                <strong>📊 Statistics:</strong><br>
-                Messages Forwarded: {bot_status['messages_forwarded']}<br>
-                Content Filtered: {bot_status['filtered_content']}<br>
-                Active Status Messages: {active_status_count}<br>
-                Source Group: {first_group}<br>
-                Destination Group 1: {second_group}<br>
-                Destination Group 2: {third_group}
-            </div>
-            <div class="info">
-                <strong>ℹ️ Behavior:</strong><br>
-                • Bot shows "⏳ Fetching info…" status when command is sent.<br>
-                • Bot verifies messages from the source group for 5s before forwarding.<br>
-                • Replies are waited for {FETCH_WAIT_TIME}s to check for edits/deletions before forwarding.<br>
-                • Status messages are automatically deleted when responses arrive.<br>
-                • Messages beginning with '2/' are forwarded to the third group (as '/...').<br>
-                • After forwarding to third group a reply-window of {THIRD_REPLY_WINDOW}s opens; replies to the forwarded message within that window are accepted.<br>
-                • For commands configured with stabilization (currently '/vnum', '/bomber', '/familyinfo', '/insta'), replies are forwarded only after a {REPLY_STABILIZE_DELAY}s stabilization delay and only if the reply still exists (final/edited version).<br>
-                • Commands '/vnum', '/bomber', '/familyinfo', '/insta' (when sent as '2/vnum', '2/bomber', '2/familyinfo', '2/insta') allow up to 2 replies in the window; others default to 1.<br>
-                • <strong>🛡️ ALL URLs, Telegram usernames (@username), and promotional lines are automatically filtered from forwarded messages.</strong>
-            </div>
-            <div>
-                <h3>Active reply-windows</h3>
-                <pre>{active_text}</pre>
-            </div>
-        </div>
-    </body>
-    </html>
+    <!DOCTYPE html><html><head><title>Relay API Bot</title></head><body>
+    <h1>Telegram Relay API Bot</h1>
+    <p>Status: {'Running' if bot_status['running'] else 'Stopped'}</p>
+    <p>Messages Forwarded: {bot_status['messages_forwarded']}</p>
+    <p>Content Filtered: {bot_status['filtered_content']}</p>
+    <pre>Active reply-windows:\n{active_text}</pre>
+    </body></html>
     """
-    return web.Response(text=html, content_type='text/html')
+    return web.Response(text=html, content_type="text/html")
 
+# ---------- Web server startup ----------
 async def start_web_server():
     app = web.Application()
-    app.router.add_get('/', status)
-    app.router.add_get('/health', health_check)
-    app.router.add_get('/status', status)
+    app.router.add_post("/api/create_key", api_create_key)
+    app.router.add_post("/api/command", api_command)
+    app.router.add_post("/api/list_keys", api_list_keys)
+    app.router.add_get("/health", health_check)
+    app.router.add_get("/", status)
 
     runner = web.AppRunner(app)
     await runner.setup()
-
-    port = int(os.getenv('PORT', 10000))
-    site = web.TCPSite(runner, '0.0.0.0', port)
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    logger.info(f"✓ Web server started on port {port}")
-    logger.info(f"✓ Access at http://0.0.0.0:{port}")
-
+    logger.info("Web server started on port %s", PORT)
     await asyncio.Event().wait()
 
+# ---------- Main ----------
 async def main():
-    await asyncio.gather(
-        start_web_server(),
-        start_telegram_bot()
-    )
+    # start both telegram and webserver concurrently
+    await asyncio.gather(start_web_server(), start_telegram())
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("✓ Bot stopped by user")
+        logger.info("Stopped by user")
     except Exception as e:
-        logger.exception(f"Fatal error: {e}")
+        logger.exception("Fatal error: %s", e)
