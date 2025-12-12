@@ -3,32 +3,15 @@
 bot.py — Telegram relay + HTTP API (single-file, ready for Render)
 
 Features:
- - Uses a Telethon session file (default: relay_session.session) — no interactive login required.
- - MongoDB-backed API key storage (with safe fallback to a JSON file when Mongo is unavailable).
- - Admin endpoints: /api/create_key, /api/list_keys, /api/revoke_key
- - Public endpoints: /api/validate_key, /api/command
- - Health endpoint: /health and human status page at /
- - Reply-window tracking for third_group replies and optional stabilization delay
- - Filtering of links/usernames and footer-removal for replies
- - Robust error handling and logging (no raw tracebacks returned publicly)
- - Avoids crashing when Mongo index options conflict (skips creation if already present)
-
-Environment variables used:
- - SESSION_FILE          (default: relay_session.session)
- - API_ID                (optional; Telethon app id, 0 works if session file already valid)
- - API_HASH              (optional; Telethon app hash)
- - FIRST_GROUP           (source group username or ID)
- - SECOND_GROUP          (destination group 1)
- - THIRD_GROUP           (destination group 2)
- - MASTER_API_SECRET     (admin secret for creating/listing/revoking keys)
- - MONGODB_URI           (optional; when not set fallback file storage used)
- - MONGODB_DBNAME        (default: tg_bot_db)
- - API_KEYS_FALLBACK_FILE (default: ./api_keys_fallback.json)
- - PORT                  (default: 10000)
- - THIRD_REPLY_WINDOW    (seconds; default 5)
- - REPLY_STABILIZE_DELAY (seconds; default 3)
- - FETCH_WAIT_TIME       (seconds; default 3)
- - API_REQUEST_TIMEOUT   (seconds; default computed from above)
+ - Telethon session-based (relay_session.session)
+ - MongoDB-backed API key storage (with safe fallback to a JSON file)
+ - Admin endpoints: create_key, list_keys, revoke_key
+ - Public endpoints: validate_key, api_command
+ - Health endpoint and status page
+ - Reply-window tracking, stabilization for special commands
+ - Link/username filtering + footer removal
+ - Robust error handling (no raw tracebacks in responses)
+ - Safe Mongo init: won't crash on index option conflicts
 """
 
 import os
@@ -55,9 +38,9 @@ FIRST_GROUP = os.getenv("FIRST_GROUP", "ethicalosinterr")
 SECOND_GROUP = os.getenv("SECOND_GROUP", "ethicalosint")
 THIRD_GROUP = os.getenv("THIRD_GROUP", "IntelXGroup")
 
-MASTER_API_SECRET = os.getenv("MASTER_API_SECRET")  # required for admin endpoints
+MASTER_API_SECRET = os.getenv("MASTER_API_SECRET")
 
-MONGODB_URI = os.getenv("MONGODB_URI","mongodb+srv://prarthanaray147_db_user:fMuTkgFsaHa5NRIy@cluster0.txn8bv3.mongodb.net/tg_bot_db?retryWrites=true&w=majority")
+MONGODB_URI = os.getenv("MONGODB_URI")
 MONGODB_DBNAME = os.getenv("MONGODB_DBNAME", "tg_bot_db")
 API_KEYS_FALLBACK_FILE = os.getenv("API_KEYS_FALLBACK_FILE", "./api_keys_fallback.json")
 
@@ -157,7 +140,6 @@ async def create_api_key_in_db(key: str, label: str = "", owner: str = None, dur
     }
     if api_keys_col is not None:
         try:
-            # run insert in executor to avoid blocking loop
             await asyncio.get_running_loop().run_in_executor(None, api_keys_col.insert_one, doc)
             return True, doc
         except Exception as e:
@@ -180,23 +162,38 @@ async def find_api_key_doc(key: str):
     return data.get(key)
 
 async def list_api_keys_from_storage():
+    """
+    Return a list of API key dicts with serializable fields (ISO datetimes).
+    Works with MongoDB (returns python datetimes) or fallback JSON file.
+    """
     if api_keys_col is not None:
         try:
             cursor = api_keys_col.find({})
             docs = await asyncio.get_running_loop().run_in_executor(None, lambda: list(cursor))
-            out = []
+            result = []
             for d in docs:
-                out.append({
+                created = d.get("created_at")
+                expires = d.get("expires_at")
+                if isinstance(created, datetime):
+                    created_iso = created.astimezone(timezone.utc).isoformat()
+                else:
+                    created_iso = created
+                if isinstance(expires, datetime):
+                    expires_iso = expires.astimezone(timezone.utc).isoformat()
+                else:
+                    expires_iso = expires
+                result.append({
                     "key": d.get("key"),
                     "label": d.get("label", ""),
                     "owner": d.get("owner", ""),
-                    "created_at": d.get("created_at"),
-                    "expires_at": d.get("expires_at"),
+                    "created_at": created_iso,
+                    "expires_at": expires_iso,
                     "revoked": bool(d.get("revoked", False))
                 })
-            return out
+            return result
         except Exception as e:
             logger.exception("Mongo list error: %s", e)
+    # fallback
     data = load_fallback_keys()
     out = []
     for k, d in data.items():
@@ -238,7 +235,6 @@ async def validate_api_key_in_storage(key: str):
         if expires_at:
             try:
                 exp_dt = datetime.fromisoformat(expires_at)
-                # make timezone aware; stored value is in iso UTC
                 if exp_dt.replace(tzinfo=timezone.utc) < _now_utc():
                     return False, "expired"
             except Exception:
@@ -313,13 +309,13 @@ def get_fetch_message(command: str):
     return "⏳ Fetching info… Please wait."
 
 # ---------------- Runtime maps ----------------
-message_map = {}           # source_msg_id -> forwarded_msg_id
+message_map = {}
 reverse_map = {}
 message_map_third = {}
 reverse_map_third = {}
-forwarded_from_third = {}  # forwarded_msg_id -> {count,max,deadline,original_msg_id,stabilize}
-status_messages = {}       # original_msg_id -> {'status_msg':..., 'responses':[]}
-api_request_map = {}       # forwarded_msg_id -> {future,responses,max,deadline,stabilize,original_api_req_id}
+forwarded_from_third = {}
+status_messages = {}
+api_request_map = {}
 bot_status = {"running": False, "messages_forwarded": 0, "filtered_content": 0}
 
 # ---------------- Telethon client ----------------
@@ -350,7 +346,6 @@ async def _stabilize_and_forward_third_reply(forwarded_msg_id: int, reply_msg_id
         if not filtered_text.strip():
             return
         original_msg_id = info.get('original_msg_id')
-        # delete status msg if exists
         if original_msg_id and original_msg_id in status_messages:
             try:
                 await status_messages[original_msg_id]['status_msg'].delete()
@@ -361,7 +356,6 @@ async def _stabilize_and_forward_third_reply(forwarded_msg_id: int, reply_msg_id
             await client.send_message(FIRST_GROUP, filtered_text, reply_to=original_msg_id)
         forwarded_from_third[forwarded_msg_id]['count'] += 1
         bot_status["messages_forwarded"] += 1
-        # satisfy any API waiter
         api_entry = api_request_map.get(forwarded_msg_id)
         if api_entry:
             api_entry['responses'].append(filtered_text)
@@ -458,7 +452,6 @@ async def forward_reply_second(event):
                     pass
             await client.send_message(FIRST_GROUP, filtered, reply_to=original_id)
             bot_status["messages_forwarded"] += 1
-            # API support: if reply corresponds to a forwarded API msg, satisfy future
             api_entry = api_request_map.get(message.reply_to_msg_id)
             if api_entry:
                 api_entry['responses'].append(filtered)
@@ -515,7 +508,6 @@ async def forward_reply_third(event):
         except Exception as e:
             logger.exception("Error handling third_group reply: %s", e)
     else:
-        # reply to an API-only forwarded message
         api_entry = api_request_map.get(message.reply_to_msg_id)
         if api_entry:
             try:
@@ -620,7 +612,7 @@ async def api_validate_key(request):
 async def api_command(request):
     """
     Client API: {"api_key":"...","command":"2/vnum MH12AB1234"}
-    Only commands prefixed with '2/' are allowed (per your design).
+    Only commands prefixed with '2/' are allowed.
     """
     try:
         data = await request.json()
@@ -654,7 +646,6 @@ async def api_command(request):
         logger.exception("Failed sending command to third_group: %s", e)
         return web.json_response({"error": "telegram_send_failed", "detail": str(e)}, status=500)
 
-    # determine stabilize / allowed replies for this command
     cmd_token = clean_command.split()[0].lower()
     allowed = 1
     stabilize = False
@@ -742,7 +733,6 @@ async def start_web_server():
 # ---------------- Main ----------------
 async def main():
     init_mongo()
-    # run webserver and telegram loop concurrently
     await asyncio.gather(start_web_server(), start_telegram())
 
 if __name__ == "__main__":
