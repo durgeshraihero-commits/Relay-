@@ -25,7 +25,7 @@ THIRD_GROUP = os.getenv("THIRD_GROUP", "IntelXGroup")
 
 MASTER_API_SECRET = os.getenv("MASTER_API_SECRET")
 
-MONGODB_URI = os.getenv("MONGODB_URI")
+MONGODB_URI = os.getenv("MONGODB_URI","mongodb+srv://prarthanaray147_db_user:***************@cluster0.txn8bv3.mongodb.net/tg_bot_db?retryWrites=true&w=majority")
 MONGODB_DBNAME = os.getenv("MONGODB_DBNAME", "tg_bot_db")
 API_KEYS_FALLBACK_FILE = os.getenv("API_KEYS_FALLBACK_FILE", "./api_keys_fallback.json")
 
@@ -601,6 +601,11 @@ async def forward_reply_third(event):
                         bot_status["filtered_content"] += 1
                     if not filtered.strip():
                         return
+                    
+                    # Store initial_reply_id for API tracking
+                    if 'initial_reply_id' not in api_entry or api_entry['initial_reply_id'] is None:
+                        api_entry['initial_reply_id'] = message.id
+                    
                     api_entry['responses'].append(filtered)
                     if len(api_entry['responses']) >= api_entry['max']:
                         if not api_entry['future'].done():
@@ -632,7 +637,16 @@ async def api_create_key(request):
         return web.json_response({"error": "unauthorized"}, status=401)
     label = data.get("label", "")
     owner = data.get("owner", "")
-    duration_days = int(data.get("duration_days", 30))
+    
+    # Handle duration_days with better None handling
+    duration_days = data.get("duration_days") or 30
+    try:
+        duration_days = int(duration_days)
+        if duration_days <= 0:
+            duration_days = 30
+    except (ValueError, TypeError):
+        duration_days = 30
+    
     token = uuid.uuid4().hex
     ok, doc = await create_api_key_in_db(token, label=label, owner=owner, duration_days=duration_days)
     if not ok:
