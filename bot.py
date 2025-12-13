@@ -1,15 +1,13 @@
 
 #!/usr/bin/env python3
 """
-bot.py — Telegram relay + HTTP API (Render ready)
+FINAL bot.py — Telegram Relay + HTTP API
 
-Features:
-- Telegram relay FIRST / SECOND / THIRD group
-- Stabilized replies
-- API server
-- MongoDB + JSON fallback
-- API keys
-- Fetch-placeholder watch & edit handling (NEW)
+✔ FIRST / SECOND / THIRD group relay
+✔ MongoDB + fallback JSON
+✔ Full Admin APIs
+✔ Stabilized replies
+✔ Fetch-placeholder watch & edit logic
 """
 
 import os
@@ -25,7 +23,7 @@ from aiohttp import web
 from telethon import TelegramClient, events, errors
 from pymongo import MongoClient
 
-# ===================== CONFIG =====================
+# ================= CONFIG =================
 PORT = int(os.getenv("PORT", "10000"))
 
 SESSION_FILE = os.getenv("SESSION_FILE", "relay_session.session")
@@ -38,30 +36,26 @@ THIRD_GROUP = os.getenv("THIRD_GROUP", "IntelXGroup")
 
 MASTER_API_SECRET = os.getenv("MASTER_API_SECRET")
 
-MONGODB_URI = os.getenv("MONGODB_URI","mongodb+srv://prarthanaray147_db_user:fMuTkgFsaHa5NRIy@cluster0.txn8bv3.mongodb.net/tg_bot_db?retryWrites=true&w=majority")
+MONGODB_URI = os.getenv("MONGODB_URI")
 MONGODB_DBNAME = os.getenv("MONGODB_DBNAME", "tg_bot_db")
 API_KEYS_FALLBACK_FILE = os.getenv("API_KEYS_FALLBACK_FILE", "./api_keys.json")
 
 THIRD_REPLY_WINDOW = int(os.getenv("THIRD_REPLY_WINDOW", "5"))
 REPLY_STABILIZE_DELAY = int(os.getenv("REPLY_STABILIZE_DELAY", "3"))
-FETCH_WAIT_TIME = int(os.getenv("FETCH_WAIT_TIME", "3"))
 
-# 🔴 Requested change
 FETCH_EDIT_WATCH_TIME = int(os.getenv("FETCH_EDIT_WATCH_TIME", "15"))
 FETCH_PHRASE = "⏳ Fetching"
 
-API_REQUEST_TIMEOUT = int(
-    os.getenv("API_REQUEST_TIMEOUT", "30")
-)
+API_REQUEST_TIMEOUT = int(os.getenv("API_REQUEST_TIMEOUT", "30"))
 
-# ===================== LOGGING =====================
+# ================= LOGGING =================
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s: %(message)s"
 )
 logger = logging.getLogger("relay_bot")
 
-# ===================== MONGODB =====================
+# ================= MONGODB =================
 mongo_client = None
 db = None
 api_keys_col = None
@@ -69,7 +63,7 @@ api_keys_col = None
 def init_mongo():
     global mongo_client, db, api_keys_col
     if not MONGODB_URI:
-        logger.warning("MongoDB not configured, using file fallback")
+        logger.warning("MongoDB not configured, using fallback file")
         return
     try:
         mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
@@ -82,9 +76,9 @@ def init_mongo():
             pass
         logger.info("MongoDB connected")
     except Exception as e:
-        logger.exception("MongoDB error: %s", e)
+        logger.exception("MongoDB failed: %s", e)
 
-# ===================== FALLBACK KEYS =====================
+# ================= FALLBACK =================
 def load_keys():
     try:
         if os.path.exists(API_KEYS_FALLBACK_FILE):
@@ -101,7 +95,7 @@ def save_keys(data):
     except Exception:
         pass
 
-# ===================== UTILITIES =====================
+# ================= UTILITIES =================
 def now_utc():
     return datetime.now(timezone.utc)
 
@@ -116,12 +110,10 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 def remove_footer(text: str) -> str:
-    lines = []
-    for l in text.splitlines():
-        if "@frappeash" in l or "footer" in l.lower():
-            continue
-        lines.append(l)
-    return "\n".join(lines)
+    return "\n".join(
+        l for l in text.splitlines()
+        if "footer" not in l.lower() and "@frappeash" not in l
+    )
 
 def get_fetch_message(cmd: str) -> str:
     return "⏳ Fetching info… Please wait."
@@ -129,7 +121,7 @@ def get_fetch_message(cmd: str) -> str:
 def _get_text(msg):
     return msg.text if msg and msg.text else ""
 
-# ===================== API KEY HELPERS =====================
+# ================= API KEYS =================
 async def create_api_key(label="", days=30):
     key = uuid.uuid4().hex
     doc = {
@@ -168,25 +160,14 @@ async def validate_api_key(key):
         pass
     return True
 
-# ===================== RUNTIME MAPS =====================
-message_map = {}
-reverse_map = {}
-message_map_third = {}
-reverse_map_third = {}
+# ================= RUNTIME MAPS =================
 forwarded_from_third = {}
-status_messages = {}
 api_request_map = {}
 
-bot_status = {
-    "running": False,
-    "messages_forwarded": 0,
-    "filtered": 0
-}
-
-# ===================== TELETHON =====================
+# ================= TELEGRAM =================
 client = TelegramClient(SESSION_FILE, API_ID, API_HASH)
 
-# ===================== FETCH WATCHER (NEW) =====================
+# ================= FETCH WATCHER =================
 async def watch_fetch_then_resolve(forwarded_id: int):
     start = time.time()
     api_entry = api_request_map.get(forwarded_id)
@@ -196,7 +177,6 @@ async def watch_fetch_then_resolve(forwarded_id: int):
     while time.time() - start < FETCH_EDIT_WATCH_TIME:
         await asyncio.sleep(1)
 
-        # Edited original message
         try:
             msg = await client.get_messages(THIRD_GROUP, ids=forwarded_id)
             if msg and msg.text and not is_fetch_message(msg.text):
@@ -204,8 +184,7 @@ async def watch_fetch_then_resolve(forwarded_id: int):
                 if text:
                     if info and info.get("original_msg_id"):
                         await client.send_message(
-                            FIRST_GROUP,
-                            text,
+                            FIRST_GROUP, text,
                             reply_to=info["original_msg_id"]
                         )
                     if api_entry and not api_entry["future"].done():
@@ -214,11 +193,8 @@ async def watch_fetch_then_resolve(forwarded_id: int):
         except Exception:
             pass
 
-        # New reply to same command
         async for m in client.iter_messages(
-            THIRD_GROUP,
-            reply_to=forwarded_id,
-            limit=3
+            THIRD_GROUP, reply_to=forwarded_id, limit=3
         ):
             if last_seen == m.id:
                 continue
@@ -229,39 +205,14 @@ async def watch_fetch_then_resolve(forwarded_id: int):
                 if text:
                     if info and info.get("original_msg_id"):
                         await client.send_message(
-                            FIRST_GROUP,
-                            text,
+                            FIRST_GROUP, text,
                             reply_to=info["original_msg_id"]
                         )
                     if api_entry and not api_entry["future"].done():
                         api_entry["future"].set_result([text])
                 return
 
-# ===================== STABILIZER =====================
-async def stabilize_reply(fid, rid):
-    await asyncio.sleep(REPLY_STABILIZE_DELAY)
-    info = forwarded_from_third.get(fid)
-    if not info or info["count"] >= info["max"]:
-        return
-    msg = await client.get_messages(THIRD_GROUP, ids=rid)
-    if not msg:
-        return
-
-    text = _get_text(msg)
-    if is_fetch_message(text):
-        asyncio.create_task(watch_fetch_then_resolve(fid))
-        return
-
-    text = clean_text(remove_footer(text))
-    if text:
-        await client.send_message(
-            FIRST_GROUP,
-            text,
-            reply_to=info["original_msg_id"]
-        )
-        info["count"] += 1
-
-# ===================== HANDLERS =====================
+# ================= TELEGRAM HANDLERS =================
 @client.on(events.NewMessage(chats=FIRST_GROUP))
 async def forward_command(event):
     text = _get_text(event.message)
@@ -271,20 +222,16 @@ async def forward_command(event):
     target = THIRD_GROUP if text.startswith("2/") else SECOND_GROUP
     clean = "/" + text[2:] if text.startswith("2/") else text
 
-    status = await client.send_message(
+    await client.send_message(
         FIRST_GROUP,
         get_fetch_message(clean),
         reply_to=event.message.id
     )
-    status_messages[event.message.id] = status
 
     forwarded = await client.send_message(target, clean)
 
     if target == THIRD_GROUP:
         forwarded_from_third[forwarded.id] = {
-            "count": 0,
-            "max": 1,
-            "deadline": time.time() + THIRD_REPLY_WINDOW,
             "original_msg_id": event.message.id
         }
 
@@ -304,15 +251,34 @@ async def handle_third_reply(event):
     if not info:
         return
 
-    text = clean_text(remove_footer(text))
-    if text:
+    final = clean_text(remove_footer(text))
+    if final:
         await client.send_message(
             FIRST_GROUP,
-            text,
+            final,
             reply_to=info["original_msg_id"]
         )
 
-# ===================== API =====================
+# ================= HTTP API =================
+async def api_create_key(request):
+    data = await request.json()
+    if data.get("master_secret") != MASTER_API_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    key = await create_api_key(data.get("label", ""))
+    return web.json_response({"api_key": key})
+
+async def api_list_keys(request):
+    if api_keys_col:
+        keys = list(api_keys_col.find({}, {"_id": 0}))
+    else:
+        keys = list(load_keys().values())
+    return web.json_response({"keys": keys})
+
+async def api_validate_key(request):
+    data = await request.json()
+    valid = await validate_api_key(data.get("api_key"))
+    return web.json_response({"valid": valid})
+
 async def api_command(request):
     data = await request.json()
     if not await validate_api_key(data.get("api_key")):
@@ -323,8 +289,7 @@ async def api_command(request):
         return web.json_response({"error": "invalid_command"}, status=400)
 
     forwarded = await client.send_message(
-        THIRD_GROUP,
-        "/" + cmd[2:]
+        THIRD_GROUP, "/" + cmd[2:]
     )
 
     fut = asyncio.get_running_loop().create_future()
@@ -335,16 +300,27 @@ async def api_command(request):
         res = await asyncio.wait_for(fut, timeout=API_REQUEST_TIMEOUT)
         return web.json_response({"success": True, "responses": res})
     except asyncio.TimeoutError:
-        return web.json_response({"success": False, "error": "timeout"}, status=504)
+        return web.json_response({"error": "timeout"}, status=504)
 
-# ===================== WEB =====================
 async def health(request):
     return web.Response(text="OK")
 
+async def status(request):
+    return web.json_response({
+        "running": True,
+        "active_requests": len(api_request_map)
+    })
+
+# ================= START =================
 async def start_web():
     app = web.Application()
-    app.router.add_post("/api/command", api_command)
+    app.router.add_get("/", status)
     app.router.add_get("/health", health)
+    app.router.add_post("/api/create_key", api_create_key)
+    app.router.add_post("/api/list_keys", api_list_keys)
+    app.router.add_post("/api/validate_key", api_validate_key)
+    app.router.add_post("/api/command", api_command)
+
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
@@ -354,11 +330,9 @@ async def start_web():
 
 async def start_tg():
     await client.start()
-    bot_status["running"] = True
     logger.info("Telegram started")
     await client.run_until_disconnected()
 
-# ===================== MAIN =====================
 async def main():
     init_mongo()
     await asyncio.gather(start_web(), start_tg())
