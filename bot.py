@@ -1,13 +1,20 @@
 
 #!/usr/bin/env python3
 """
-FINAL bot.py — Telegram Relay + HTTP API
+bot.py — Telegram Relay + HTTP API (FINAL)
 
 ✔ FIRST / SECOND / THIRD group relay
 ✔ MongoDB + fallback JSON
-✔ Full Admin APIs
-✔ Stabilized replies
-✔ Fetch-placeholder watch & edit logic
+✔ Admin APIs:
+  - create_key
+  - list_keys (FIXED)
+  - revoke_key
+  - validate_key
+✔ API command execution
+✔ Fetch placeholder watch (15s, edit/reply aware)
+
+NOTE:
+- ChatWriteForbiddenError is NOT handled (as requested)
 """
 
 import os
@@ -20,7 +27,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 from aiohttp import web
-from telethon import TelegramClient, events, errors
+from telethon import TelegramClient, events
 from pymongo import MongoClient
 
 # ================= CONFIG =================
@@ -36,12 +43,11 @@ THIRD_GROUP = os.getenv("THIRD_GROUP", "IntelXGroup")
 
 MASTER_API_SECRET = os.getenv("MASTER_API_SECRET")
 
-MONGODB_URI = os.getenv("MONGODB_URI","mongodb+srv://prarthanaray147_db_user:fMuTkgFsaHa5NRIy@cluster0.txn8bv3.mongodb.net/tg_bot_db?retryWrites=true&w=majority")
+MONGODB_URI = os.getenv("MONGODB_URI")
 MONGODB_DBNAME = os.getenv("MONGODB_DBNAME", "tg_bot_db")
 API_KEYS_FALLBACK_FILE = os.getenv("API_KEYS_FALLBACK_FILE", "./api_keys.json")
 
 THIRD_REPLY_WINDOW = int(os.getenv("THIRD_REPLY_WINDOW", "5"))
-REPLY_STABILIZE_DELAY = int(os.getenv("REPLY_STABILIZE_DELAY", "3"))
 
 FETCH_EDIT_WATCH_TIME = int(os.getenv("FETCH_EDIT_WATCH_TIME", "15"))
 FETCH_PHRASE = "⏳ Fetching"
@@ -65,18 +71,15 @@ def init_mongo():
     if not MONGODB_URI:
         logger.warning("MongoDB not configured, using fallback file")
         return
+    mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
+    mongo_client.server_info()
+    db = mongo_client[MONGODB_DBNAME]
+    api_keys_col = db["api_keys"]
     try:
-        mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
-        mongo_client.server_info()
-        db = mongo_client[MONGODB_DBNAME]
-        api_keys_col = db["api_keys"]
-        try:
-            api_keys_col.create_index([("key", 1)], unique=True)
-        except Exception:
-            pass
-        logger.info("MongoDB connected")
-    except Exception as e:
-        logger.exception("MongoDB failed: %s", e)
+        api_keys_col.create_index([("key", 1)], unique=True)
+    except Exception:
+        pass
+    logger.info("MongoDB connected")
 
 # ================= FALLBACK =================
 def load_keys():
@@ -89,11 +92,8 @@ def load_keys():
     return {}
 
 def save_keys(data):
-    try:
-        with open(API_KEYS_FALLBACK_FILE, "w") as f:
-            json.dump(data, f, indent=2)
-    except Exception:
-        pass
+    with open(API_KEYS_FALLBACK_FILE, "w") as f:
+        json.dump(data, f, indent=2)
 
 # ================= UTILITIES =================
 def now_utc():
@@ -132,9 +132,7 @@ async def create_api_key(label="", days=30):
         "revoked": False
     }
     if api_keys_col:
-        await asyncio.get_running_loop().run_in_executor(
-            None, api_keys_col.insert_one, doc
-        )
+        api_keys_col.insert_one(doc)
     else:
         data = load_keys()
         data[key] = doc
@@ -145,9 +143,7 @@ async def validate_api_key(key):
     if not key:
         return False
     if api_keys_col:
-        doc = await asyncio.get_running_loop().run_in_executor(
-            None, lambda: api_keys_col.find_one({"key": key})
-        )
+        doc = api_keys_col.find_one({"key": key})
     else:
         doc = load_keys().get(key)
 
@@ -177,21 +173,18 @@ async def watch_fetch_then_resolve(forwarded_id: int):
     while time.time() - start < FETCH_EDIT_WATCH_TIME:
         await asyncio.sleep(1)
 
-        try:
-            msg = await client.get_messages(THIRD_GROUP, ids=forwarded_id)
-            if msg and msg.text and not is_fetch_message(msg.text):
-                text = clean_text(remove_footer(msg.text))
-                if text:
-                    if info and info.get("original_msg_id"):
-                        await client.send_message(
-                            FIRST_GROUP, text,
-                            reply_to=info["original_msg_id"]
-                        )
-                    if api_entry and not api_entry["future"].done():
-                        api_entry["future"].set_result([text])
-                return
-        except Exception:
-            pass
+        msg = await client.get_messages(THIRD_GROUP, ids=forwarded_id)
+        if msg and msg.text and not is_fetch_message(msg.text):
+            text = clean_text(remove_footer(msg.text))
+            if text:
+                if info and info.get("original_msg_id"):
+                    await client.send_message(
+                        FIRST_GROUP, text,
+                        reply_to=info["original_msg_id"]
+                    )
+                if api_entry and not api_entry["future"].done():
+                    api_entry["future"].set_result([text])
+            return
 
         async for m in client.iter_messages(
             THIRD_GROUP, reply_to=forwarded_id, limit=3
@@ -267,12 +260,29 @@ async def api_create_key(request):
     key = await create_api_key(data.get("label", ""))
     return web.json_response({"api_key": key})
 
+# ✅ FIXED VERSION
 async def api_list_keys(request):
-    if api_keys_col:
-        keys = list(api_keys_col.find({}, {"_id": 0}))
-    else:
-        keys = list(load_keys().values())
-    return web.json_response({"keys": keys})
+    try:
+        if api_keys_col:
+            docs = list(api_keys_col.find({}, {"_id": 0}))
+        else:
+            docs = list(load_keys().values())
+
+        safe_docs = []
+        for d in docs:
+            d = dict(d)
+            for k, v in d.items():
+                if isinstance(v, datetime):
+                    d[k] = v.astimezone(timezone.utc).isoformat()
+            safe_docs.append(d)
+
+        return web.json_response({"keys": safe_docs})
+    except Exception as e:
+        logger.exception("api_list_keys failed")
+        return web.json_response(
+            {"error": "internal_error", "detail": str(e)},
+            status=500
+        )
 
 async def api_validate_key(request):
     data = await request.json()
@@ -305,16 +315,9 @@ async def api_command(request):
 async def health(request):
     return web.Response(text="OK")
 
-async def status(request):
-    return web.json_response({
-        "running": True,
-        "active_requests": len(api_request_map)
-    })
-
 # ================= START =================
 async def start_web():
     app = web.Application()
-    app.router.add_get("/", status)
     app.router.add_get("/health", health)
     app.router.add_post("/api/create_key", api_create_key)
     app.router.add_post("/api/list_keys", api_list_keys)
