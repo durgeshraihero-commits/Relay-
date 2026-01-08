@@ -23,7 +23,7 @@ BOT_API_HASH = os.getenv("API_HASH", "").strip()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 
 # User account credentials (for forwarding)
-USER_SESSION_FILE = os.getenv("USER_SESSION_FILE", "user_session.session")
+USER_SESSION_FILE = os.getenv("USER_SESSION_FILE", "relay_session.session")
 USER_API_ID = int(os.getenv("USER_API_ID", "0"))
 USER_API_HASH = os.getenv("USER_API_HASH", "").strip()
 USER_PHONE = os.getenv("USER_PHONE", "").strip()
