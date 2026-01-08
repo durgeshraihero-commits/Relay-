@@ -18,10 +18,28 @@ PORT = int(os.getenv("PORT", "10000"))
 
 SESSION_FILE = os.getenv("SESSION_FILE", "bot_session.session")
 TELETHON_API_ID = int(os.getenv("API_ID", "0"))
-TELETHON_API_HASH = os.getenv("API_HASH", "").strip()  # Strip whitespace
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()  # Strip whitespace
+TELETHON_API_HASH = os.getenv("API_HASH", "").strip()
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 
-# Validate required configs
+ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
+DESTINATION_GROUP = int(os.getenv("DESTINATION_GROUP", "-1003585142645"))
+MANDATORY_CHANNEL = os.getenv("MANDATORY_CHANNEL", "@yourchannel")
+
+MONGODB_URI = os.getenv("MONGODB_URI", "mongodb+srv://prarthanaray147_db_user:fMuTkgFsaHa5NRIy@cluster0.txn8bv3.mongodb.net/tg_bot_db?retryWrites=true&w=majority")
+MONGODB_DBNAME = os.getenv("MONGODB_DBNAME", "tg_bot_db")
+
+PAYMENT_QR_CODE = os.getenv("PAYMENT_QR_CODE", "https://example.com/payment-qr.png")
+
+FETCH_WAIT_TIME = int(os.getenv("FETCH_WAIT_TIME", "3"))
+REPLY_TIMEOUT = int(os.getenv("REPLY_TIMEOUT", "30"))
+
+# ============ Logging ============
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+logger = logging.getLogger("premium_bot")
+
+# ============ Validate Config ============
+
 if TELETHON_API_ID == 0 or not TELETHON_API_HASH:
     logger.error("=" * 60)
     logger.error("CONFIGURATION ERROR!")
@@ -50,23 +68,6 @@ logger.info("BOT_TOKEN: %s", BOT_TOKEN[:10] + "..." if len(BOT_TOKEN) > 10 else 
 logger.info("ADMIN_USER_ID: %s", ADMIN_USER_ID)
 logger.info("DESTINATION_GROUP: %s", DESTINATION_GROUP)
 logger.info("=" * 60)
-
-ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))  # Your Telegram user ID
-DESTINATION_GROUP = int(os.getenv("DESTINATION_GROUP", "-1003585142645"))  # Where to forward commands (use channel ID)
-MANDATORY_CHANNEL = os.getenv("MANDATORY_CHANNEL", "@yourchannel")  # Channel users must join
-
-MONGODB_URI = os.getenv("MONGODB_URI", "mongodb+srv://prarthanaray147_db_user:fMuTkgFsaHa5NRIy@cluster0.txn8bv3.mongodb.net/tg_bot_db?retryWrites=true&w=majority")
-MONGODB_DBNAME = os.getenv("MONGODB_DBNAME", "tg_bot_db")
-
-PAYMENT_QR_CODE = os.getenv("PAYMENT_QR_CODE", "https://example.com/payment-qr.png")  # Your payment QR code URL
-
-FETCH_WAIT_TIME = int(os.getenv("FETCH_WAIT_TIME", "3"))
-REPLY_TIMEOUT = int(os.getenv("REPLY_TIMEOUT", "30"))
-
-# ============ Logging ============
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
-logger = logging.getLogger("premium_bot")
 
 # ============ MongoDB ============
 
@@ -172,7 +173,7 @@ async def log_search(user_id: int, search_type: str, query: str, result: str):
             "user_id": user_id,
             "search_type": search_type,
             "query": query,
-            "result": result[:500],  # Store first 500 chars
+            "result": result[:500],
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
         await asyncio.get_running_loop().run_in_executor(
@@ -226,14 +227,13 @@ def filter_links_and_usernames(text: str):
         r't\.me/[^\s]+',
         r'[a-zA-Z0-9-]+\.[a-zA-Z]{2,}[^\s]*',
         r'@[\w]{2,32}',
-        r'\b[a-zA-Z0-9_]{5,}\b(?=\s|$)'  # Remove standalone usernames
+        r'\b[a-zA-Z0-9_]{5,}\b(?=\s|$)'
     ]
     
     cleaned = text
     for p in patterns:
         cleaned = re.sub(p, '', cleaned, flags=re.IGNORECASE)
     
-    # Remove promotional lines
     lines = cleaned.splitlines()
     filtered_lines = []
     promotional = ['use these commands', 'join our', 'visit our', '💬 use', 'commands in']
@@ -330,7 +330,6 @@ async def start_handler(event):
     
     await create_or_update_user(user_id, user.username, user.first_name)
     
-    # Check if user is admin
     if user_id == ADMIN_USER_ID:
         await event.respond(
             f"👋 Welcome Admin!\n\n"
@@ -340,7 +339,6 @@ async def start_handler(event):
         )
         return
     
-    # Check channel membership
     is_member = await check_channel_membership(user_id)
     
     if not is_member:
@@ -353,7 +351,6 @@ async def start_handler(event):
         )
         return
     
-    # Update channel joined status
     await asyncio.get_running_loop().run_in_executor(
         None, lambda: users_col.update_one(
             {"user_id": user_id},
@@ -376,7 +373,6 @@ async def search_callback(event):
     user_id = event.sender_id
     search_type = event.data.decode().split('_')[1]
     
-    # Check if admin
     if user_id == ADMIN_USER_ID:
         user_states[user_id] = {"action": "awaiting_input", "type": search_type}
         await event.edit(
@@ -385,19 +381,16 @@ async def search_callback(event):
         )
         return
     
-    # Check user plan
     user_doc = await get_user(user_id)
     
     if not user_doc:
         await event.answer("❌ Error: User not found", alert=True)
         return
     
-    # Check if user has searches remaining
     searches_remaining = user_doc.get('searches_remaining', 0)
     plan = user_doc.get('plan', 'free')
     plan_expiry = user_doc.get('plan_expiry')
     
-    # Check if unlimited plan expired
     if plan == 'unlimited' and plan_expiry:
         expiry_dt = datetime.fromisoformat(plan_expiry)
         if expiry_dt < datetime.now(timezone.utc):
@@ -418,7 +411,6 @@ async def search_callback(event):
         )
         return
     
-    # User has access
     user_states[user_id] = {"action": "awaiting_input", "type": search_type}
     await event.edit(
         f"🔍 {SEARCH_COMMANDS[search_type]['name']}\n\n"
@@ -444,7 +436,6 @@ async def buy_plan_callback(event):
     
     user_states[user_id] = {"action": "awaiting_payment", "payment_id": payment_id, "plan": plan_key}
     
-    # Notify admin
     try:
         user = await event.get_sender()
         await client.send_message(
@@ -469,7 +460,6 @@ async def buy_plan_callback(event):
         buttons=[[Button.inline("❌ Cancel", "cancel")]]
     )
     
-    # Send QR code
     try:
         await client.send_file(event.sender_id, PAYMENT_QR_CODE, caption="Scan to pay")
     except Exception as e:
@@ -486,7 +476,6 @@ async def approve_payment_callback(event):
     payment_id = data_parts[1]
     target_user_id = int(data_parts[2])
     
-    # Get payment details
     payment = await asyncio.get_running_loop().run_in_executor(
         None, payments_col.find_one, {"payment_id": payment_id}
     )
@@ -498,7 +487,6 @@ async def approve_payment_callback(event):
     plan_key = payment['plan']
     plan_info = PLANS[plan_key]
     
-    # Update user plan
     if plan_info['searches'] == -1:
         await update_user_plan(target_user_id, "unlimited", 999999, plan_info['days'])
     else:
@@ -506,7 +494,6 @@ async def approve_payment_callback(event):
         current_searches = user_doc.get('searches_remaining', 0)
         await update_user_plan(target_user_id, "paid", current_searches + plan_info['searches'])
     
-    # Update payment status
     await asyncio.get_running_loop().run_in_executor(
         None, lambda: payments_col.update_one(
             {"payment_id": payment_id},
@@ -521,7 +508,6 @@ async def approve_payment_callback(event):
         f"Plan: {plan_info['name']}"
     )
     
-    # Notify user
     try:
         await client.send_message(
             target_user_id,
@@ -543,7 +529,6 @@ async def reject_payment_callback(event):
     payment_id = data_parts[1]
     target_user_id = int(data_parts[2])
     
-    # Update payment status
     await asyncio.get_running_loop().run_in_executor(
         None, lambda: payments_col.update_one(
             {"payment_id": payment_id},
@@ -553,7 +538,6 @@ async def reject_payment_callback(event):
     
     await event.edit(f"❌ Payment Rejected\n\nPayment ID: {payment_id}")
     
-    # Notify user
     try:
         await client.send_message(
             target_user_id,
@@ -585,7 +569,6 @@ async def message_handler(event):
     
     state = user_states[user_id]
     
-    # Handle payment screenshot
     if state.get('action') == 'awaiting_payment':
         if not event.photo:
             await event.respond("❌ Please send a screenshot image.")
@@ -595,13 +578,8 @@ async def message_handler(event):
         plan_key = state['plan']
         plan_info = PLANS[plan_key]
         
-        # Save screenshot
-        file = await event.download_media(bytes)
-        
-        # Update payment with screenshot
         await update_payment_screenshot(payment_id, event.message.id)
         
-        # Forward to admin
         try:
             user = await event.get_sender()
             await client.send_file(
@@ -626,7 +604,6 @@ async def message_handler(event):
         user_states.pop(user_id, None)
         return
     
-    # Handle search input
     if state.get('action') == 'awaiting_input':
         search_type = state['type']
         query = event.text.strip()
@@ -634,14 +611,11 @@ async def message_handler(event):
         command_info = SEARCH_COMMANDS[search_type]
         command = f"{command_info['cmd']} {query}"
         
-        # Send "fetching" message
         status_msg = await event.respond("⏳ Fetching information... Please wait.")
         
         try:
-            # Forward to destination group
             forwarded = await client.send_message(DESTINATION_GROUP, command)
             
-            # Store pending search
             future = asyncio.get_running_loop().create_future()
             pending_searches[forwarded.id] = {
                 "future": future,
@@ -651,29 +625,23 @@ async def message_handler(event):
                 "original_msg": event.message.id
             }
             
-            # Wait for response
             try:
                 result = await asyncio.wait_for(future, timeout=REPLY_TIMEOUT)
                 
-                # Clean result
                 cleaned = filter_links_and_usernames(result)
                 
                 if not cleaned.strip():
                     cleaned = "❌ No results found or data was filtered."
                 
-                # Delete status message
                 await status_msg.delete()
                 
-                # Send result
                 await event.respond(f"✅ Result:\n\n{cleaned}")
                 
-                # Decrement searches (if not admin and not unlimited)
                 if user_id != ADMIN_USER_ID:
                     user_doc = await get_user(user_id)
                     if user_doc.get('plan') != 'unlimited':
                         await decrement_search(user_id)
                 
-                # Log search
                 await log_search(user_id, search_type, query, cleaned)
                 
             except asyncio.TimeoutError:
@@ -699,10 +667,8 @@ async def handle_destination_reply(event):
     if not search_info:
         return
     
-    # Wait a bit for message to stabilize
     await asyncio.sleep(FETCH_WAIT_TIME)
     
-    # Get latest message
     try:
         latest = await client.get_messages(DESTINATION_GROUP, ids=message.id)
         if latest and latest.text:
