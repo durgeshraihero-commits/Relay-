@@ -29,7 +29,7 @@ USER_API_HASH = os.getenv("USER_API_HASH", "").strip()
 USER_PHONE = os.getenv("USER_PHONE", "").strip()
 
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
-DESTINATION_GROUP = "darkboxesv2"   # without @
+DESTINATION_GROUP = "darkboxesv3"   # without @
 MANDATORY_CHANNEL = os.getenv("MANDATORY_CHANNEL", "@yourchannel")
 
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb+srv://prarthanaray147_db_user:fMuTkgFsaHa5NRIy@cluster0.txn8bv3.mongodb.net/tg_bot_db?retryWrites=true&w=majority")
