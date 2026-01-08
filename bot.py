@@ -16,20 +16,13 @@ from pymongo import MongoClient
 
 PORT = int(os.getenv("PORT", "10000"))
 
-# Bot credentials
-BOT_SESSION_FILE = os.getenv("BOT_SESSION_FILE", "bot_session.session")
-BOT_API_ID = int(os.getenv("API_ID", "0"))
-BOT_API_HASH = os.getenv("API_HASH", "").strip()
+SESSION_FILE = os.getenv("SESSION_FILE", "bot_session.session")
+TELETHON_API_ID = int(os.getenv("API_ID", "0"))
+TELETHON_API_HASH = os.getenv("API_HASH", "").strip()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 
-# User account credentials (for forwarding)
-USER_SESSION_FILE = os.getenv("USER_SESSION_FILE", "user_session.session")
-USER_API_ID = int(os.getenv("USER_API_ID", "0"))
-USER_API_HASH = os.getenv("USER_API_HASH", "").strip()
-USER_PHONE = os.getenv("USER_PHONE", "").strip()
-
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
-DESTINATION_GROUP = "darkboxesv3"   # without @
+DESTINATION_GROUP = os.getenv("DESTINATION_GROUP", "darkboxesv3")
 MANDATORY_CHANNEL = os.getenv("MANDATORY_CHANNEL", "@yourchannel")
 
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb+srv://prarthanaray147_db_user:fMuTkgFsaHa5NRIy@cluster0.txn8bv3.mongodb.net/tg_bot_db?retryWrites=true&w=majority")
@@ -47,28 +40,34 @@ logger = logging.getLogger("premium_bot")
 
 # ============ Validate Config ============
 
-if BOT_API_ID == 0 or not BOT_API_HASH:
+if TELETHON_API_ID == 0 or not TELETHON_API_HASH:
+    logger.error("=" * 60)
+    logger.error("CONFIGURATION ERROR!")
+    logger.error("=" * 60)
     logger.error("API_ID and API_HASH must be set!")
+    logger.error("Current API_ID: %s", TELETHON_API_ID)
+    logger.error("Current API_HASH: %s", TELETHON_API_HASH[:10] + "..." if TELETHON_API_HASH else "NOT SET")
+    logger.error("")
+    logger.error("To get these credentials:")
+    logger.error("1. Go to https://my.telegram.org")
+    logger.error("2. Log in with your phone number")
+    logger.error("3. Click 'API development tools'")
+    logger.error("4. Create an app and copy api_id and api_hash")
+    logger.error("=" * 60)
     raise ValueError("Missing API_ID or API_HASH")
 
 if not BOT_TOKEN:
-    logger.error("BOT_TOKEN must be set!")
+    logger.error("BOT_TOKEN must be set! Get it from @BotFather")
     raise ValueError("Missing BOT_TOKEN")
-
-# Check if user account credentials are provided
-USE_USER_ACCOUNT = USER_API_ID != 0 and USER_API_HASH and USER_PHONE
 
 logger.info("=" * 60)
 logger.info("Configuration Check:")
-logger.info("BOT API_ID: %s", BOT_API_ID)
-logger.info("BOT API_HASH: %s", BOT_API_HASH[:10] + "...")
-logger.info("BOT_TOKEN: %s", BOT_TOKEN[:20] + "...")
+logger.info("API_ID: %s (type: %s)", TELETHON_API_ID, type(TELETHON_API_ID))
+logger.info("API_HASH length: %d chars", len(TELETHON_API_HASH))
+logger.info("API_HASH: %s", TELETHON_API_HASH)
+logger.info("BOT_TOKEN: %s", BOT_TOKEN[:20] + "..." if len(BOT_TOKEN) > 20 else "TOO SHORT")
 logger.info("ADMIN_USER_ID: %s", ADMIN_USER_ID)
 logger.info("DESTINATION_GROUP: %s", DESTINATION_GROUP)
-if USE_USER_ACCOUNT:
-    logger.info("USER ACCOUNT: Enabled (Phone: %s)", USER_PHONE)
-else:
-    logger.info("USER ACCOUNT: Disabled (will use bot to forward)")
 logger.info("=" * 60)
 
 # ============ MongoDB ============
@@ -255,17 +254,17 @@ def filter_links_and_usernames(text: str):
 # ============ Command Mapping ============
 
 SEARCH_COMMANDS = {
-    "phone": {"cmd": "/num", "name": "📱 Phone Number Info"},
-    "family": {"cmd": "/familyinfo", "name": "👨‍👩‍👧‍👦 Family Info"},
-    "aadhar": {"cmd": "/aadhar", "name": "🆔 Aadhar Info"},
-    "vehicle": {"cmd": "/vnum", "name": "🚗 Vehicle to Phone"},
-    "upi": {"cmd": "/upi", "name": "💳 UPI Info"},
-    "fampay": {"cmd": "/fampay", "name": "💰 Fampay Info"},
-    "email": {"cmd": "/email", "name": "📧 Email Info"},
-    "telegram": {"cmd": "/tg", "name": "📲 Telegram to Phone"},
-    "imei": {"cmd": "/imei", "name": "📱 IMEI Info"},
-    "pak": {"cmd": "/pak", "name": "🇵🇰 Pakistan Info"},
-    "gst": {"cmd": "/gst", "name": "🏢 GST Info"}
+    "phone": {"cmd": "/num", "name": "Phone Number Info"},
+    "family": {"cmd": "/familyinfo", "name": "Family Info"},
+    "aadhar": {"cmd": "/aadhar", "name": "Aadhar Info"},
+    "vehicle": {"cmd": "/vnum", "name": "Vehicle to Phone"},
+    "upi": {"cmd": "/upi", "name": "UPI Info"},
+    "fampay": {"cmd": "/fampay", "name": "Fampay Info"},
+    "email": {"cmd": "/email", "name": "Email Info"},
+    "telegram": {"cmd": "/tg", "name": "Telegram to Phone"},
+    "imei": {"cmd": "/imei", "name": "IMEI Info"},
+    "pak": {"cmd": "/pak", "name": "Pakistan Info"},
+    "gst": {"cmd": "/gst", "name": "GST Info"}
 }
 
 PLANS = {
@@ -279,20 +278,13 @@ PLANS = {
 user_states = {}
 pending_searches = {}
 
-# ============ Telethon Clients ============
+# ============ Telethon Client ============
 
-# Bot client (for user interface)
-bot_client = TelegramClient(BOT_SESSION_FILE, BOT_API_ID, BOT_API_HASH)
-
-# User client (for forwarding to destination group)
-if USE_USER_ACCOUNT:
-    user_client = TelegramClient(USER_SESSION_FILE, USER_API_ID, USER_API_HASH)
-else:
-    user_client = bot_client  # Fallback to bot if user account not configured
+client = TelegramClient(SESSION_FILE, TELETHON_API_ID, TELETHON_API_HASH)
 
 async def check_channel_membership(user_id: int):
     try:
-        participant = await bot_client.get_permissions(MANDATORY_CHANNEL, user_id)
+        participant = await client.get_permissions(MANDATORY_CHANNEL, user_id)
         return participant is not None
     except Exception as e:
         logger.exception("Error checking channel membership: %s", e)
@@ -332,7 +324,7 @@ def get_payment_approval_buttons(payment_id: str, user_id: int):
 
 # ============ Bot Event Handlers ============
 
-@bot_client.on(events.NewMessage(pattern='/start'))
+@client.on(events.NewMessage(pattern='/start'))
 async def start_handler(event):
     user = await event.get_sender()
     user_id = user.id
@@ -377,7 +369,7 @@ async def start_handler(event):
         buttons=get_main_menu()
     )
 
-@bot_client.on(events.CallbackQuery(pattern=r'^search_(.+)$'))
+@client.on(events.CallbackQuery(pattern=r'^search_(.+)$'))
 async def search_callback(event):
     user_id = event.sender_id
     search_type = event.data.decode().split('_')[1]
@@ -390,12 +382,7 @@ async def search_callback(event):
                 f"Please send the {search_type} to search:"
             )
         except Exception:
-            await event.answer()
-            await bot_client.send_message(
-                user_id,
-                f"🔍 {SEARCH_COMMANDS[search_type]['name']}\n\n"
-                f"Please send the {search_type} to search:"
-            )
+            await event.answer(f"🔍 {SEARCH_COMMANDS[search_type]['name']}\n\nPlease send the {search_type} to search:")
         return
     
     user_doc = await get_user(user_id)
@@ -428,7 +415,7 @@ async def search_callback(event):
                 buttons=get_plans_menu()
             )
         except Exception:
-            await event.answer("❌ Access Not Granted", alert=True)
+            await event.answer("❌ Access Not Granted - You must buy a premium pack", alert=True)
         return
     
     user_states[user_id] = {"action": "awaiting_input", "type": search_type}
@@ -439,15 +426,9 @@ async def search_callback(event):
             f"Please send the {search_type} to search:"
         )
     except Exception:
-        await event.answer()
-        await bot_client.send_message(
-            user_id,
-            f"🔍 {SEARCH_COMMANDS[search_type]['name']}\n\n"
-            f"Searches Remaining: {searches_remaining if searches_remaining > 0 else 'Unlimited'}\n\n"
-            f"Please send the {search_type} to search:"
-        )
+        await event.answer(f"🔍 Please send the {search_type} to search", alert=True)
 
-@bot_client.on(events.CallbackQuery(pattern=r'^buy_(.+)$'))
+@client.on(events.CallbackQuery(pattern=r'^buy_(.+)$'))
 async def buy_plan_callback(event):
     user_id = event.sender_id
     plan_key = event.data.decode().split('_', 1)[1]
@@ -467,7 +448,7 @@ async def buy_plan_callback(event):
     
     try:
         user = await event.get_sender()
-        await bot_client.send_message(
+        await client.send_message(
             ADMIN_USER_ID,
             f"💰 New Payment Request\n\n"
             f"User: {user.first_name} (@{user.username or 'N/A'})\n"
@@ -490,12 +471,12 @@ async def buy_plan_callback(event):
     )
     
     try:
-        await bot_client.send_file(event.sender_id, PAYMENT_QR_CODE, caption="Scan to pay")
+        await client.send_file(event.sender_id, PAYMENT_QR_CODE, caption="Scan to pay")
     except Exception as e:
         logger.exception("Error sending QR code: %s", e)
-        await event.respond("Please pay and send screenshot.")
+        await event.respond("Please pay to the UPI ID and send screenshot.")
 
-@bot_client.on(events.CallbackQuery(pattern=r'^approve_(.+)_(.+)$'))
+@client.on(events.CallbackQuery(pattern=r'^approve_(.+)_(.+)$'))
 async def approve_payment_callback(event):
     if event.sender_id != ADMIN_USER_ID:
         await event.answer("❌ Unauthorized", alert=True)
@@ -538,7 +519,7 @@ async def approve_payment_callback(event):
     )
     
     try:
-        await bot_client.send_message(
+        await client.send_message(
             target_user_id,
             f"✅ Payment Approved!\n\n"
             f"Your {plan_info['name']} plan has been activated.\n"
@@ -548,7 +529,7 @@ async def approve_payment_callback(event):
     except Exception as e:
         logger.exception("Error notifying user: %s", e)
 
-@bot_client.on(events.CallbackQuery(pattern=r'^reject_(.+)_(.+)$'))
+@client.on(events.CallbackQuery(pattern=r'^reject_(.+)_(.+)$'))
 async def reject_payment_callback(event):
     if event.sender_id != ADMIN_USER_ID:
         await event.answer("❌ Unauthorized", alert=True)
@@ -568,7 +549,7 @@ async def reject_payment_callback(event):
     await event.edit(f"❌ Payment Rejected\n\nPayment ID: {payment_id}")
     
     try:
-        await bot_client.send_message(
+        await client.send_message(
             target_user_id,
             "❌ Payment Rejected\n\n"
             "Your payment was not approved. Please contact support or try again."
@@ -576,7 +557,7 @@ async def reject_payment_callback(event):
     except Exception as e:
         logger.exception("Error notifying user: %s", e)
 
-@bot_client.on(events.CallbackQuery(pattern='^cancel$'))
+@client.on(events.CallbackQuery(pattern='^cancel$'))
 async def cancel_callback(event):
     user_id = event.sender_id
     user_states.pop(user_id, None)
@@ -585,11 +566,11 @@ async def cancel_callback(event):
         buttons=None
     )
 
-@bot_client.on(events.CallbackQuery(pattern='^start$'))
+@client.on(events.CallbackQuery(pattern='^start$'))
 async def start_button_callback(event):
     await start_handler(event)
 
-@bot_client.on(events.NewMessage(func=lambda e: e.is_private and not e.text.startswith('/')))
+@client.on(events.NewMessage(func=lambda e: e.is_private and not e.text.startswith('/')))
 async def message_handler(event):
     user_id = event.sender_id
     
@@ -611,7 +592,7 @@ async def message_handler(event):
         
         try:
             user = await event.get_sender()
-            await bot_client.send_file(
+            await client.send_file(
                 ADMIN_USER_ID,
                 event.photo,
                 caption=f"💰 Payment Screenshot Received\n\n"
@@ -643,9 +624,7 @@ async def message_handler(event):
         status_msg = await event.respond("⏳ Fetching information... Please wait.")
         
         try:
-            # Forward using user account (not bot)
-            forwarded = await user_client.send_message(DESTINATION_GROUP, command)
-            logger.info(f"Forwarded command to destination group via user account: {command}")
+            forwarded = await client.send_message(DESTINATION_GROUP, command)
             
             future = asyncio.get_running_loop().create_future()
             pending_searches[forwarded.id] = {
@@ -678,17 +657,15 @@ async def message_handler(event):
             except asyncio.TimeoutError:
                 await status_msg.delete()
                 await event.respond("❌ Request timed out. Please try again.")
-                pending_searches.pop(forwarded.id, None)
                 
         except Exception as e:
             logger.exception("Error processing search: %s", e)
             await status_msg.delete()
-            await event.respond(f"❌ An error occurred: {str(e)}")
+            await event.respond("❌ An error occurred. Please try again.")
         
         user_states.pop(user_id, None)
 
-# Listen for replies in destination group using user account
-@user_client.on(events.NewMessage(chats=DESTINATION_GROUP))
+@client.on(events.NewMessage(chats=DESTINATION_GROUP))
 async def handle_destination_reply(event):
     message = event.message
     
@@ -703,12 +680,10 @@ async def handle_destination_reply(event):
     await asyncio.sleep(FETCH_WAIT_TIME)
     
     try:
-        latest = await user_client.get_messages(DESTINATION_GROUP, ids=message.id)
+        latest = await client.get_messages(DESTINATION_GROUP, ids=message.id)
         if latest and latest.text:
             if not search_info['future'].done():
-                logger.info(f"Received reply from destination group for search {search_info['search_type']}")
                 search_info['future'].set_result(latest.text)
-                pending_searches.pop(message.reply_to_msg_id, None)
     except Exception as e:
         logger.exception("Error handling reply: %s", e)
 
@@ -731,62 +706,142 @@ async def start_web_server():
 async def start_bot():
     try:
         logger.info("Starting Telegram bot...")
-        await bot_client.start(bot_token=BOT_TOKEN)
+        await client.start(bot_token=BOT_TOKEN)
         logger.info("Bot started successfully")
-        me = await bot_client.get_me()
+        me = await client.get_me()
         logger.info(f"Bot username: @{me.username}")
-        logger.info("Bot ID: %s", me.id)
+        logger.info(f"Bot ID: {me.id}")
+        
+        # Start user client if configured
+        if USE_USER_ACCOUNT:
+            logger.info("Starting user account client for forwarding...")
+            if not user_client.is_connected():
+                await user_client.connect()
+            if not await user_client.is_user_authorized():
+                logger.error("=" * 60)
+                logger.error("USER ACCOUNT NOT AUTHORIZED!")
+                logger.error("=" * 60)
+                logger.error("You need to authorize your user account.")
+                logger.error("Run this script locally first with your phone number to create session.")
+                logger.error("=" * 60)
+            else:
+                user_me = await user_client.get_me()
+                logger.info(f"✅ User account connected: {user_me.first_name} (ID: {user_me.id})")
+                
+                # Test destination group access
+                try:
+                    dest_entity = await user_client.get_entity(DESTINATION_GROUP)
+                    logger.info(f"✅ Destination group accessible: {dest_entity.title}")
+                except Exception as e:
+                    logger.error("❌ Cannot access destination group: %s", str(e))
+        
+        logger.info("=" * 60)
+        logger.info("Bot is ready and listening for messages!")
+        logger.info("=" * 60)
+        
+        await bot_client.run_until_disconnected()
+        
     except Exception as e:
-        logger.exception("Failed to start bot: %s", e)
+        logger.error("=" * 60)
+        logger.error("TELEGRAM BOT START FAILED!")
+        logger.error("=" * 60)
+        logger.error("Error: %s", str(e))
+        logger.error("=" * 60)
         raise
 
-async def start_user_account():
-    if not USE_USER_ACCOUNT:
-        logger.warning("User account not configured, skipping user client start")
-        return
-
-    try:
-        logger.info("Starting USER account client...")
-        await user_client.start(phone=USER_PHONE)
-        me = await user_client.get_me()
-        logger.info(
-            "User account logged in as: %s (@%s)",
-            me.first_name,
-            me.username
-        )
-    except Exception as e:
-        logger.exception("Failed to start user account: %s", e)
-        raise
+async def start_user_client():
+    """Start the user client for listening to destination group"""
+    if USE_USER_ACCOUNT and user_client != bot_client:
+        try:
+            if not user_client.is_connected():
+                await user_client.connect()
+            
+            if not await user_client.is_user_authorized():
+                logger.warning("User account not authorized - using bot as fallback")
+                return
+            
+            logger.info("User client connected and listening to destination group")
+            await user_client.run_until_disconnected()
+        except Exception as e:
+            logger.exception("Error with user client: %s", e)
 
 async def main():
-    logger.info("=" * 60)
-    logger.info("🚀 Starting Premium Telegram Bot System")
-    logger.info("=" * 60)
-
-    # 1️⃣ MongoDB
     init_mongo()
-
-    # 2️⃣ Start bot client
-    await start_bot()
-
-    # 3️⃣ Start user account (for forwarding)
-    await start_user_account()
-
-    # 4️⃣ Start web server (health check)
-    await start_web_server()
-
-    logger.info("✅ System is fully running")
-    logger.info("📡 Waiting for Telegram events...")
-
-    # 5️⃣ Keep process alive forever
-    await asyncio.Event().wait()
-
-# ============ Entry Point ============
+    
+    if USE_USER_ACCOUNT and user_client != bot_client:
+        # Start both bot and user client
+        await asyncio.gather(
+            start_web_server(),
+            start_bot(),
+            start_user_client()
+        )
+    else:
+        # Start only bot (will use bot for forwarding too)
+        await asyncio.gather(
+            start_web_server(),
+            start_bot()
+        )
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("🛑 Bot stopped manually")
+        logger.info("Bot stopped by user")
+    except Exception:
+        logger.exception("Fatal error")(f"Bot ID: {me.id}")
+        
+        # Try to access destination group
+        try:
+            dest_entity = await client.get_entity(DESTINATION_GROUP)
+            logger.info(f"✅ Successfully connected to destination group: {dest_entity.title}")
+        except Exception as e:
+            logger.error("=" * 60)
+            logger.error("⚠️  DESTINATION GROUP NOT ACCESSIBLE")
+            logger.error("=" * 60)
+            logger.error("Could not access group ID: %s", DESTINATION_GROUP)
+            logger.error("Error: %s", str(e))
+            logger.error("")
+            logger.error("IMPORTANT: You must add this bot to the destination group!")
+            logger.error("Bot username: @%s", me.username)
+            logger.error("")
+            logger.error("Steps:")
+            logger.error("1. Open the destination group/channel")
+            logger.error("2. Add @%s as a member", me.username)
+            logger.error("3. Give it permission to send messages")
+            logger.error("4. Restart this bot")
+            logger.error("=" * 60)
+        
+        await client.run_until_disconnected()
     except Exception as e:
-        logger.exception("❌ Fatal startup error: %s", e)
+        logger.error("=" * 60)
+        logger.error("TELEGRAM BOT START FAILED!")
+        logger.error("=" * 60)
+        logger.error("Error: %s", str(e))
+        logger.error("")
+        logger.error("Common causes:")
+        logger.error("1. API_ID and API_HASH don't match")
+        logger.error("2. API credentials are banned/restricted")
+        logger.error("3. Wrong BOT_TOKEN")
+        logger.error("")
+        logger.error("Solutions:")
+        logger.error("1. Go to https://my.telegram.org")
+        logger.error("2. Delete your old app and create a NEW one")
+        logger.error("3. Copy the NEW api_id and api_hash")
+        logger.error("4. Make sure they match exactly (no extra spaces)")
+        logger.error("=" * 60)
+        raise
+
+async def main():
+    init_mongo()
+    await asyncio.gather(
+        start_web_server(),
+        start_bot()
+    )
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception:
+        logger.exception("Fatal error")
