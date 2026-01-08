@@ -18,11 +18,41 @@ PORT = int(os.getenv("PORT", "10000"))
 
 SESSION_FILE = os.getenv("SESSION_FILE", "bot_session.session")
 TELETHON_API_ID = int(os.getenv("API_ID", "0"))
-TELETHON_API_HASH = os.getenv("API_HASH", "")
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")  # Your bot token from @BotFather
+TELETHON_API_HASH = os.getenv("API_HASH", "").strip()  # Strip whitespace
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()  # Strip whitespace
+
+# Validate required configs
+if TELETHON_API_ID == 0 or not TELETHON_API_HASH:
+    logger.error("=" * 60)
+    logger.error("CONFIGURATION ERROR!")
+    logger.error("=" * 60)
+    logger.error("API_ID and API_HASH must be set!")
+    logger.error("Current API_ID: %s", TELETHON_API_ID)
+    logger.error("Current API_HASH: %s", TELETHON_API_HASH[:10] + "..." if TELETHON_API_HASH else "NOT SET")
+    logger.error("")
+    logger.error("To get these credentials:")
+    logger.error("1. Go to https://my.telegram.org")
+    logger.error("2. Log in with your phone number")
+    logger.error("3. Click 'API development tools'")
+    logger.error("4. Create an app and copy api_id and api_hash")
+    logger.error("=" * 60)
+    raise ValueError("Missing API_ID or API_HASH")
+
+if not BOT_TOKEN:
+    logger.error("BOT_TOKEN must be set! Get it from @BotFather")
+    raise ValueError("Missing BOT_TOKEN")
+
+logger.info("=" * 60)
+logger.info("Configuration Check:")
+logger.info("API_ID: %s", TELETHON_API_ID)
+logger.info("API_HASH: %s", TELETHON_API_HASH[:10] + "..." if len(TELETHON_API_HASH) > 10 else "TOO SHORT")
+logger.info("BOT_TOKEN: %s", BOT_TOKEN[:10] + "..." if len(BOT_TOKEN) > 10 else "TOO SHORT")
+logger.info("ADMIN_USER_ID: %s", ADMIN_USER_ID)
+logger.info("DESTINATION_GROUP: %s", DESTINATION_GROUP)
+logger.info("=" * 60)
 
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))  # Your Telegram user ID
-DESTINATION_GROUP = os.getenv("DESTINATION_GROUP", "ethicalosint")  # Where to forward commands
+DESTINATION_GROUP = int(os.getenv("DESTINATION_GROUP", "-1003585142645"))  # Where to forward commands (use channel ID)
 MANDATORY_CHANNEL = os.getenv("MANDATORY_CHANNEL", "@yourchannel")  # Channel users must join
 
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb+srv://prarthanaray147_db_user:fMuTkgFsaHa5NRIy@cluster0.txn8bv3.mongodb.net/tg_bot_db?retryWrites=true&w=majority")
