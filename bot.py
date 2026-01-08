@@ -22,7 +22,7 @@ TELETHON_API_HASH = os.getenv("API_HASH", "")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")  # Your bot token from @BotFather
 
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))  # Your Telegram user ID
-DESTINATION_GROUP = os.getenv("DESTINATION_GROUP", "ethicalosint")  # Where to forward commands
+DESTINATION_GROUP = int(os.getenv("DESTINATION_GROUP", "-1003585142645"))  # Where to forward commands (use channel ID)
 MANDATORY_CHANNEL = os.getenv("MANDATORY_CHANNEL", "@yourchannel")  # Channel users must join
 
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb+srv://prarthanaray147_db_user:fMuTkgFsaHa5NRIy@cluster0.txn8bv3.mongodb.net/tg_bot_db?retryWrites=true&w=majority")
