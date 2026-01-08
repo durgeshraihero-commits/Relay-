@@ -38,7 +38,7 @@ MONGODB_DBNAME = os.getenv("MONGODB_DBNAME", "tg_bot_db")
 PAYMENT_QR_CODE = os.getenv("PAYMENT_QR_CODE", "https://example.com/payment-qr.png")
 
 FETCH_WAIT_TIME = int(os.getenv("FETCH_WAIT_TIME", "3"))
-REPLY_TIMEOUT = int(os.getenv("REPLY_TIMEOUT", "30"))
+REPLY_TIMEOUT = int(os.getenv("REPLY_TIMEOUT", "45"))  # Increased for reliability
 
 # ============ Logging ============
 
@@ -287,6 +287,9 @@ if USE_USER_ACCOUNT:
     user_client = TelegramClient(USER_SESSION_FILE, USER_API_ID, USER_API_HASH)
 else:
     user_client = bot_client
+
+# Global entity reference (CRITICAL - DO NOT USE DESTINATION_GROUP STRING AFTER THIS)
+DEST_ENTITY = None
 
 async def check_channel_membership(user_id: int):
     try:
@@ -641,41 +644,56 @@ async def message_handler(event):
         status_msg = await event.respond("⏳ Fetching information... Please wait.")
         
         try:
-            forwarded = await user_client.send_message(DESTINATION_GROUP, command)
-            logger.info(f"Forwarded command to {DESTINATION_GROUP}: {command}")
+            # ✅ FIX: Use DEST_ENTITY instead of DESTINATION_GROUP string
+            forwarded = await user_client.send_message(DEST_ENTITY, command)
+            logger.info(f"📤 Sent to destination: {command}")
             
+            # Create future for this search
             future = asyncio.get_running_loop().create_future()
-            pending_searches[forwarded.id] = {
+            
+            # Use unique search ID with timestamp
+            search_id = f"{forwarded.id}_{int(time.time() * 1000)}"
+            pending_searches[search_id] = {
                 "future": future,
                 "user_id": user_id,
                 "query": query,
                 "search_type": search_type,
-                "original_msg": event.message.id
+                "original_msg": event.message.id,
+                "timestamp": time.time()
             }
             
+            logger.info(f"🔍 Registered search {search_id} for user {user_id}")
+            
             try:
+                # Wait for result with timeout
                 result = await asyncio.wait_for(future, timeout=REPLY_TIMEOUT)
                 
+                # Clean the result
                 cleaned = filter_links_and_usernames(result)
                 
                 if not cleaned.strip():
                     cleaned = "❌ No results found or data was filtered."
                 
                 await status_msg.delete()
-                
                 await event.respond(f"✅ Result:\n\n{cleaned}")
                 
+                # Decrement search count for non-admin users
                 if user_id != ADMIN_USER_ID:
                     user_doc = await get_user(user_id)
                     if user_doc.get('plan') != 'unlimited':
                         await decrement_search(user_id)
                 
+                # Log the search
                 await log_search(user_id, search_type, query, cleaned)
                 
             except asyncio.TimeoutError:
                 await status_msg.delete()
-                await event.respond("❌ Request timed out. Please try again.")
-                pending_searches.pop(forwarded.id, None)
+                await event.respond(
+                    "❌ Request timed out. Please try again.\n\n"
+                    "If this persists, the source bot may be down or slow."
+                )
+                pending_searches.pop(search_id, None)
+                logger.warning(f"⏱️ Timeout for search: {search_type} - {query[:20]}")
                 
         except Exception as e:
             logger.exception("Error processing search: %s", e)
@@ -688,25 +706,153 @@ async def message_handler(event):
 async def handle_destination_reply(event):
     message = event.message
     
-    if not message.reply_to_msg_id:
+    # ✅ FIX: Handle both text and media with captions
+    text = message.text or message.raw_text
+    if not text:
         return
     
-    search_info = pending_searches.get(message.reply_to_msg_id)
+    # Get current time for timeout checking
+    now = time.time()
     
-    if not search_info:
+    # Check ALL pending searches to find a match
+    matched_search = None
+    matched_key = None
+    
+    for search_id, search_info in list(pending_searches.items()):
+        # ✅ FIX: Skip if future is already resolved
+        if search_info['future'].done():
+            continue
+        
+        # ✅ FIX: Skip searches that have exceeded timeout
+        if now - search_info.get("timestamp", now) > REPLY_TIMEOUT:
+            logger.warning(f"⏱️ Skipping expired search {search_id}")
+            continue
+        
+        query = search_info['query'].strip()
+        search_type = search_info['search_type']
+        message_text_lower = text.lower()
+        
+        # Match based on search type and query content
+        is_match = False
+        
+        if search_type in ['phone', 'telegram']:
+            # For phone searches, look for the number in the response
+            clean_query = re.sub(r'[^\d]', '', query)
+            clean_msg = re.sub(r'[^\d]', '', text)
+            if clean_query and len(clean_query) >= 10 and clean_query in clean_msg:
+                is_match = True
+                logger.info(f"✅ Phone match found for {clean_query[:4]}****")
+                
+        elif search_type == 'aadhar':
+            # Match Aadhar number (12 digits)
+            clean_query = re.sub(r'[^\d]', '', query)
+            if len(clean_query) == 12 and clean_query in re.sub(r'[^\d]', '', text):
+                is_match = True
+                logger.info(f"✅ Aadhar match found")
+                
+        elif search_type == 'vehicle':
+            # Match vehicle number (alphanumeric)
+            clean_query = re.sub(r'[^a-z0-9]', '', query.lower())
+            clean_msg = re.sub(r'[^a-z0-9]', '', message_text_lower)
+            if clean_query and len(clean_query) >= 6 and clean_query in clean_msg:
+                is_match = True
+                logger.info(f"✅ Vehicle match found for {query}")
+                
+        elif search_type in ['upi', 'fampay', 'email']:
+            # Match UPI ID or email directly
+            if query.lower() in message_text_lower:
+                is_match = True
+                logger.info(f"✅ {search_type.upper()} match found for {query}")
+                
+        elif search_type == 'imei':
+            # Match IMEI (15 digits)
+            clean_query = re.sub(r'[^\d]', '', query)
+            if len(clean_query) == 15 and clean_query in re.sub(r'[^\d]', '', text):
+                is_match = True
+                logger.info(f"✅ IMEI match found")
+                
+        elif search_type == 'gst':
+            # Match GST number
+            clean_query = re.sub(r'[^a-z0-9]', '', query.lower())
+            clean_msg = re.sub(r'[^a-z0-9]', '', message_text_lower)
+            if clean_query and len(clean_query) >= 10 and clean_query in clean_msg:
+                is_match = True
+                logger.info(f"✅ GST match found")
+        
+        elif search_type == 'family':
+            # Match phone number in family info
+            clean_query = re.sub(r'[^\d]', '', query)
+            clean_msg = re.sub(r'[^\d]', '', text)
+            if clean_query and len(clean_query) >= 10 and clean_query in clean_msg:
+                is_match = True
+                logger.info(f"✅ Family info match found")
+        
+        elif search_type == 'pak':
+            # Match Pakistan phone number
+            clean_query = re.sub(r'[^\d]', '', query)
+            clean_msg = re.sub(r'[^\d]', '', text)
+            if clean_query and len(clean_query) >= 10 and clean_query in clean_msg:
+                is_match = True
+                logger.info(f"✅ Pakistan number match found")
+        
+        else:
+            # Generic match - query appears in message
+            if query.lower() in message_text_lower:
+                is_match = True
+                logger.info(f"✅ Generic match found for {search_type}")
+        
+        if is_match:
+            matched_search = search_info
+            matched_key = search_id
+            logger.info(f"🎯 Match confirmed for search_id: {search_id}, type: {search_type}")
+            break
+    
+    if not matched_search:
         return
     
+    # Wait to ensure full message is received
     await asyncio.sleep(FETCH_WAIT_TIME)
     
     try:
-        latest = await user_client.get_messages(DESTINATION_GROUP, ids=message.id)
-        if latest and latest.text:
-            if not search_info['future'].done():
-                logger.info(f"Received reply from {DESTINATION_GROUP} for search {search_info['search_type']}")
-                search_info['future'].set_result(latest.text)
-                pending_searches.pop(message.reply_to_msg_id, None)
+        # Fetch the latest version of the message
+        latest = await user_client.get_messages(DEST_ENTITY, ids=message.id)
+        if latest:
+            latest_text = latest.text or latest.raw_text
+            if latest_text:
+                if not matched_search['future'].done():
+                    logger.info(f"📨 Delivering result to user {matched_search['user_id']}")
+                    matched_search['future'].set_result(latest_text)
+                    pending_searches.pop(matched_key, None)
+                    logger.info(f"✅ Search {matched_key} completed and removed")
     except Exception as e:
-        logger.exception("Error handling reply: %s", e)
+        logger.exception("Error handling matched message: %s", e)
+
+
+# ============ Cleanup Task ============
+
+async def cleanup_old_searches():
+    """Remove searches that have been pending too long"""
+    while True:
+        await asyncio.sleep(60)  # Run every minute
+        now = time.time()
+        to_remove = []
+        
+        for search_id, info in list(pending_searches.items()):
+            age = now - info.get('timestamp', now)
+            if age > REPLY_TIMEOUT + 10:
+                if not info['future'].done():
+                    try:
+                        info['future'].set_exception(TimeoutError("Search expired"))
+                    except Exception:
+                        pass
+                to_remove.append(search_id)
+        
+        for search_id in to_remove:
+            pending_searches.pop(search_id, None)
+            logger.info(f"🧹 Cleaned up expired search: {search_id}")
+        
+        if to_remove:
+            logger.info(f"🧹 Cleanup: Removed {len(to_remove)} expired searches")
 
 # ============ Web Server ============
 
@@ -720,41 +866,62 @@ async def start_web_server():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    logger.info(f"Web server started on port {PORT}")
+    logger.info(f"🌐 Web server started on port {PORT}")
 
 # ============ Main ============
 
 async def start_bot():
+    global DEST_ENTITY
+    
     try:
-        logger.info("Starting Telegram bot...")
+        logger.info("🤖 Starting Telegram bot...")
         await bot_client.start(bot_token=BOT_TOKEN)
-        logger.info("Bot started successfully")
+        logger.info("✅ Bot started successfully")
         me = await bot_client.get_me()
         logger.info(f"Bot username: @{me.username}")
         logger.info(f"Bot ID: {me.id}")
         
         if USE_USER_ACCOUNT:
-            logger.info("Starting user account client for forwarding...")
+            logger.info("👤 Starting user account client for forwarding...")
+            
+            # ✅ FIX: Session-safe connection (NO phone login on Render)
             if not user_client.is_connected():
-                await user_client.start(phone=USER_PHONE)
-            logger.info("User account logged in successfully")
-
-            # Resolve destination entity ONCE (IMPORTANT)
-            global DEST_ENTITY
+                await user_client.connect()
+            
+            # Check if session is authorized
+            if not await user_client.is_user_authorized():
+                raise RuntimeError(
+                    "❌ User session not authorized. "
+                    "Login once locally with start(phone=...) and upload the session file to Render."
+                )
+            
+            logger.info("✅ User account session loaded successfully")
+            
+            # ✅ FIX: Resolve destination entity ONCE and store globally
             DEST_ENTITY = await user_client.get_entity(DESTINATION_GROUP)
-            logger.info(f"Resolved destination entity: {DESTINATION_GROUP}")
+            logger.info(f"✅ Resolved destination entity: {DESTINATION_GROUP}")
+            logger.info(f"   Entity type: {type(DEST_ENTITY).__name__}")
+        else:
+            logger.info("⚠️ User account disabled - will use bot for forwarding")
+            DEST_ENTITY = DESTINATION_GROUP
 
         # Start web server (for Render health checks)
         await start_web_server()
+        
+        # Start cleanup task
+        asyncio.create_task(cleanup_old_searches())
+        logger.info("🧹 Started cleanup task for old searches")
 
-        logger.info("✅ System is fully running")
-        logger.info("📡 Waiting for Telegram events...")
+        logger.info("=" * 60)
+        logger.info("✅ SYSTEM FULLY OPERATIONAL")
+        logger.info("=" * 60)
+        logger.info("📡 Listening for Telegram events...")
 
         # Keep the program alive
         await asyncio.Event().wait()
 
     except Exception as e:
-        logger.exception("Fatal error in start_bot: %s", e)
+        logger.exception("💥 Fatal error in start_bot: %s", e)
         raise
 
 
@@ -762,7 +929,7 @@ async def start_bot():
 
 if __name__ == "__main__":
     logger.info("=" * 60)
-    logger.info("🚀 Starting Premium Telegram Bot System")
+    logger.info("🚀 PREMIUM TELEGRAM BOT SYSTEM")
     logger.info("=" * 60)
 
     # Init MongoDB
@@ -772,4 +939,7 @@ if __name__ == "__main__":
     try:
         asyncio.run(start_bot())
     except KeyboardInterrupt:
-        logger.info("🛑 Bot stopped manually")
+        logger.info("🛑 Bot stopped manually (Ctrl+C)")
+    except Exception as e:
+        logger.exception("💥 Critical error: %s", e)
+        raise
