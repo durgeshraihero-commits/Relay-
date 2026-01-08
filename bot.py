@@ -29,7 +29,7 @@ USER_API_HASH = os.getenv("USER_API_HASH", "").strip()
 USER_PHONE = os.getenv("USER_PHONE", "").strip()
 
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
-DESTINATION_GROUP_ID = int(os.getenv("DESTINATION_GROUP", "-1003585142645"))
+DESTINATION_GROUP_ID = int(os.getenv("DESTINATION_GROUP", "darkboxesv2"))
 DESTINATION_GROUP = None
 MANDATORY_CHANNEL = os.getenv("MANDATORY_CHANNEL", "@yourchannel")
 
