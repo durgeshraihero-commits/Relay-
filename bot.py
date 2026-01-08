@@ -1,4 +1,3 @@
-
 import os
 import re
 import json
@@ -9,907 +8,711 @@ import asyncio
 from datetime import datetime, timezone, timedelta
 
 from aiohttp import web
-from telethon import TelegramClient, events, errors
+from telethon import TelegramClient, events, Button
+from telethon.tl.types import User
 from pymongo import MongoClient
 
-# ---------------- Config ----------------
+# ============ Config ============
+
 PORT = int(os.getenv("PORT", "10000"))
 
-SESSION_FILE = os.getenv("SESSION_FILE", "relay_session.session")
+SESSION_FILE = os.getenv("SESSION_FILE", "bot_session.session")
 TELETHON_API_ID = int(os.getenv("API_ID", "0"))
 TELETHON_API_HASH = os.getenv("API_HASH", "")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")  # Your bot token from @BotFather
 
-FIRST_GROUP = os.getenv("FIRST_GROUP", "ethicalosinterr")
-SECOND_GROUP = os.getenv("SECOND_GROUP", "ethicalosint")
-THIRD_GROUP = os.getenv("THIRD_GROUP", "IntelXGroup")
+ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))  # Your Telegram user ID
+DESTINATION_GROUP = os.getenv("DESTINATION_GROUP", "ethicalosint")  # Where to forward commands
+MANDATORY_CHANNEL = os.getenv("MANDATORY_CHANNEL", "@yourchannel")  # Channel users must join
 
-MASTER_API_SECRET = os.getenv("MASTER_API_SECRET")
-
-MONGODB_URI = os.getenv("MONGODB_URI","mongodb+srv://prarthanaray147_db_user:fMuTkgFsaHa5NRIy@cluster0.txn8bv3.mongodb.net/tg_bot_db?retryWrites=true&w=majority")
+MONGODB_URI = os.getenv("MONGODB_URI", "mongodb+srv://prarthanaray147_db_user:fMuTkgFsaHa5NRIy@cluster0.txn8bv3.mongodb.net/tg_bot_db?retryWrites=true&w=majority")
 MONGODB_DBNAME = os.getenv("MONGODB_DBNAME", "tg_bot_db")
-API_KEYS_FALLBACK_FILE = os.getenv("API_KEYS_FALLBACK_FILE", "./api_keys_fallback.json")
 
-THIRD_REPLY_WINDOW = int(os.getenv("THIRD_REPLY_WINDOW", "5"))
-REPLY_STABILIZE_DELAY = int(os.getenv("REPLY_STABILIZE_DELAY", "3"))
+PAYMENT_QR_CODE = os.getenv("PAYMENT_QR_CODE", "https://example.com/payment-qr.png")  # Your payment QR code URL
+
 FETCH_WAIT_TIME = int(os.getenv("FETCH_WAIT_TIME", "3"))
-API_REQUEST_TIMEOUT = int(os.getenv("API_REQUEST_TIMEOUT", str(THIRD_REPLY_WINDOW + REPLY_STABILIZE_DELAY + FETCH_WAIT_TIME + 8)))
-API_EDIT_WAIT_TIME = int(os.getenv("API_EDIT_WAIT_TIME", "15"))
+REPLY_TIMEOUT = int(os.getenv("REPLY_TIMEOUT", "30"))
 
-# ---------------- Logging ----------------
+# ============ Logging ============
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
-logger = logging.getLogger("relay_api_bot")
+logger = logging.getLogger("premium_bot")
 
-# ---------------- MongoDB (safe init) ----------------
+# ============ MongoDB ============
+
 mongo_client = None
 db = None
-api_keys_col = None
+users_col = None
+payments_col = None
+searches_col = None
 
 def init_mongo():
-    """
-    Initialize MongoDB connection if MONGODB_URI provided.
-    Safe behavior: if indexes already exist with different options, skip creation and continue.
-    """
-    global mongo_client, db, api_keys_col
-    if not MONGODB_URI:
-        logger.warning("MONGODB_URI not set — using fallback file storage for API keys.")
-        mongo_client = None
-        db = None
-        api_keys_col = None
-        return
-
+    global mongo_client, db, users_col, payments_col, searches_col
     try:
         mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
-        mongo_client.server_info()  # force immediate connection / failure
+        mongo_client.server_info()
         db = mongo_client[MONGODB_DBNAME]
-        api_keys_col = db["api_keys"]
-
-        # Ensure unique index on key (attempt, but ignore if it already exists)
-        try:
-            api_keys_col.create_index([("key", 1)], unique=True)
-            logger.info("MongoDB: ensured unique index on 'key'.")
-        except Exception as e:
-            logger.debug("Could not ensure unique index on 'key' (continuing): %s", e)
-
-        # Check if 'expires_at_1' index exists — create only if missing
-        try:
-            existing = api_keys_col.index_information()
-            if "expires_at_1" in existing:
-                logger.info("MongoDB: 'expires_at' index already exists; skipping creation.")
-            else:
-                api_keys_col.create_index([("expires_at", 1)])
-                logger.info("MongoDB: created index on 'expires_at'.")
-        except Exception as e:
-            logger.warning("MongoDB: could not create/check 'expires_at' index (continuing): %s", e)
-
-        logger.info("MongoDB: api_keys collection ready.")
+        users_col = db["users"]
+        payments_col = db["payments"]
+        searches_col = db["searches"]
+        
+        users_col.create_index([("user_id", 1)], unique=True)
+        payments_col.create_index([("user_id", 1)])
+        searches_col.create_index([("user_id", 1)])
+        
+        logger.info("MongoDB connected successfully")
     except Exception as e:
-        logger.exception("Could not connect to MongoDB — falling back to file storage: %s", e)
-        mongo_client = None
-        db = None
-        api_keys_col = None
+        logger.exception("MongoDB connection failed: %s", e)
+        raise
 
-# ---------------- Fallback file storage ----------------
-def load_fallback_keys():
+# ============ User Management ============
+
+async def get_user(user_id: int):
     try:
-        if os.path.exists(API_KEYS_FALLBACK_FILE):
-            with open(API_KEYS_FALLBACK_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-    except Exception:
-        logger.exception("Failed reading fallback api keys file.")
-    return {}
+        return await asyncio.get_running_loop().run_in_executor(
+            None, users_col.find_one, {"user_id": user_id}
+        )
+    except Exception as e:
+        logger.exception("Error fetching user: %s", e)
+        return None
 
-def save_fallback_keys(data):
+async def create_or_update_user(user_id: int, username: str = None, first_name: str = None):
     try:
-        with open(API_KEYS_FALLBACK_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-    except Exception:
-        logger.exception("Failed saving fallback api keys file.")
+        doc = {
+            "user_id": user_id,
+            "username": username,
+            "first_name": first_name,
+            "joined_at": datetime.now(timezone.utc).isoformat(),
+            "plan": "free",
+            "searches_remaining": 0,
+            "plan_expiry": None,
+            "total_searches": 0,
+            "channel_joined": False
+        }
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: users_col.update_one(
+                {"user_id": user_id},
+                {"$setOnInsert": doc},
+                upsert=True
+            )
+        )
+        return await get_user(user_id)
+    except Exception as e:
+        logger.exception("Error creating user: %s", e)
+        return None
 
-# ---------------- Utilities ----------------
-def _now_utc():
-    return datetime.now(timezone.utc)
-
-def _iso(dt):
-    if isinstance(dt, datetime):
-        return dt.astimezone(timezone.utc).isoformat()
-    return dt
-
-# ---------------- API key DB helpers ----------------
-async def create_api_key_in_db(key: str, label: str = "", owner: str = None, duration_days: int = 30):
-    doc = {
-        "key": key,
-        "label": label or "",
-        "owner": owner or "",
-        "created_at": _iso(_now_utc()),
-        "expires_at": _iso(_now_utc() + timedelta(days=int(duration_days))),
-        "revoked": False
-    }
-    if api_keys_col is not None:
-        try:
-            await asyncio.get_running_loop().run_in_executor(None, api_keys_col.insert_one, doc)
-            return True, doc
-        except Exception as e:
-            logger.exception("Error inserting api key to Mongo: %s", e)
-    # fallback to file
-    data = load_fallback_keys()
-    data[key] = doc
-    save_fallback_keys(data)
-    return True, doc
-
-async def find_api_key_doc(key: str):
-    if api_keys_col is not None:
-        try:
-            doc = await asyncio.get_running_loop().run_in_executor(None, api_keys_col.find_one, {"key": key})
-            if doc:
-                return doc
-        except Exception as e:
-            logger.exception("Mongo lookup error: %s", e)
-    data = load_fallback_keys()
-    return data.get(key)
-
-async def list_api_keys_from_storage():
-    """
-    Return a list of API key dicts with serializable fields (ISO datetimes).
-    Works with MongoDB (returns python datetimes) or fallback JSON file.
-    """
-    if api_keys_col is not None:
-        try:
-            cursor = api_keys_col.find({})
-            docs = await asyncio.get_running_loop().run_in_executor(None, lambda: list(cursor))
-            result = []
-            for d in docs:
-                created = d.get("created_at")
-                expires = d.get("expires_at")
-                if isinstance(created, datetime):
-                    created_iso = created.astimezone(timezone.utc).isoformat()
-                else:
-                    created_iso = created
-                if isinstance(expires, datetime):
-                    expires_iso = expires.astimezone(timezone.utc).isoformat()
-                else:
-                    expires_iso = expires
-                result.append({
-                    "key": d.get("key"),
-                    "label": d.get("label", ""),
-                    "owner": d.get("owner", ""),
-                    "created_at": created_iso,
-                    "expires_at": expires_iso,
-                    "revoked": bool(d.get("revoked", False))
-                })
-            return result
-        except Exception as e:
-            logger.exception("Mongo list error: %s", e)
-    # fallback
-    data = load_fallback_keys()
-    out = []
-    for k, d in data.items():
-        out.append({
-            "key": k,
-            "label": d.get("label", ""),
-            "owner": d.get("owner", ""),
-            "created_at": d.get("created_at"),
-            "expires_at": d.get("expires_at"),
-            "revoked": bool(d.get("revoked", False))
-        })
-    return out
-
-async def revoke_api_key_in_storage(key: str):
-    if api_keys_col is not None:
-        try:
-            res = await asyncio.get_running_loop().run_in_executor(None, lambda: api_keys_col.find_one_and_update({"key": key}, {"$set": {"revoked": True}}))
-            if res:
-                return True
-        except Exception as e:
-            logger.exception("Mongo revoke error: %s", e)
-    data = load_fallback_keys()
-    if key in data:
-        data[key]["revoked"] = True
-        save_fallback_keys(data)
+async def update_user_plan(user_id: int, plan: str, searches: int, days: int = None):
+    try:
+        update_doc = {
+            "plan": plan,
+            "searches_remaining": searches
+        }
+        if days:
+            update_doc["plan_expiry"] = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+        else:
+            update_doc["plan_expiry"] = None
+            
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: users_col.update_one(
+                {"user_id": user_id},
+                {"$set": update_doc}
+            )
+        )
         return True
-    return False
-
-async def validate_api_key_in_storage(key: str):
-    if not key:
-        return False, "missing_key"
-    doc = await find_api_key_doc(key)
-    if not doc:
-        return False, "not_found"
-    try:
-        if doc.get("revoked", False):
-            return False, "revoked"
-        expires_at = doc.get("expires_at")
-        if expires_at:
-            try:
-                exp_dt = datetime.fromisoformat(expires_at)
-                if exp_dt.replace(tzinfo=timezone.utc) < _now_utc():
-                    return False, "expired"
-            except Exception:
-                pass
-        return True, doc
     except Exception as e:
-        logger.exception("Error validating key: %s", e)
-        return False, "internal_error"
+        logger.exception("Error updating user plan: %s", e)
+        return False
 
-# ---------------- Text cleaning helpers ----------------
+async def decrement_search(user_id: int):
+    try:
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: users_col.update_one(
+                {"user_id": user_id},
+                {"$inc": {"searches_remaining": -1, "total_searches": 1}}
+            )
+        )
+        return True
+    except Exception as e:
+        logger.exception("Error decrementing search: %s", e)
+        return False
+
+async def log_search(user_id: int, search_type: str, query: str, result: str):
+    try:
+        doc = {
+            "user_id": user_id,
+            "search_type": search_type,
+            "query": query,
+            "result": result[:500],  # Store first 500 chars
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        await asyncio.get_running_loop().run_in_executor(
+            None, searches_col.insert_one, doc
+        )
+    except Exception as e:
+        logger.exception("Error logging search: %s", e)
+
+async def create_payment_request(user_id: int, plan: str, amount: int):
+    try:
+        doc = {
+            "payment_id": uuid.uuid4().hex,
+            "user_id": user_id,
+            "plan": plan,
+            "amount": amount,
+            "status": "pending",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "screenshot_file_id": None,
+            "approved_at": None
+        }
+        result = await asyncio.get_running_loop().run_in_executor(
+            None, payments_col.insert_one, doc
+        )
+        return doc["payment_id"]
+    except Exception as e:
+        logger.exception("Error creating payment: %s", e)
+        return None
+
+async def update_payment_screenshot(payment_id: str, file_id: str):
+    try:
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: payments_col.update_one(
+                {"payment_id": payment_id},
+                {"$set": {"screenshot_file_id": file_id, "screenshot_at": datetime.now(timezone.utc).isoformat()}}
+            )
+        )
+        return True
+    except Exception as e:
+        logger.exception("Error updating payment screenshot: %s", e)
+        return False
+
+# ============ Text Cleaning ============
+
 def filter_links_and_usernames(text: str):
     if not text:
-        return text, False
-    original_text = text
-    url_patterns = [
+        return text
+    
+    patterns = [
         r'https?://[^\s]+',
         r'www\.[^\s]+',
         r't\.me/[^\s]+',
-        r'[a-zA-Z0-9-]+\.[a-zA-Z]{2,}[^\s]*'
+        r'[a-zA-Z0-9-]+\.[a-zA-Z]{2,}[^\s]*',
+        r'@[\w]{2,32}',
+        r'\b[a-zA-Z0-9_]{5,}\b(?=\s|$)'  # Remove standalone usernames
     ]
-    username_patterns = [r'@[\w]{2,32}']
+    
     cleaned = text
-    for p in (url_patterns + username_patterns):
+    for p in patterns:
         cleaned = re.sub(p, '', cleaned, flags=re.IGNORECASE)
-    # remove promotional lines
+    
+    # Remove promotional lines
     lines = cleaned.splitlines()
     filtered_lines = []
-    promotional = ['use these commands in:', 'join our group', 'visit our channel', '💬 use these commands', 'commands in:']
+    promotional = ['use these commands', 'join our', 'visit our', '💬 use', 'commands in']
+    
     for line in lines:
         l = line.strip()
-        if not l:
-            continue
-        if any(k in l.lower() for k in promotional):
+        if not l or any(k in l.lower() for k in promotional):
             continue
         filtered_lines.append(line)
+    
     cleaned = "\n".join(filtered_lines)
     cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
     cleaned = re.sub(r' {2,}', ' ', cleaned).strip()
-    was_filtered = (original_text != cleaned)
-    return cleaned, was_filtered
-
-def remove_footer(text: str):
-    if not text:
-        return text
-    try:
-        data = json.loads(text)
-        if isinstance(data, dict) and "footer" in data:
-            del data["footer"]
-            return json.dumps(data, indent=2, ensure_ascii=False)
-    except Exception:
-        lines = text.splitlines()
-        filtered = [L for L in lines if '"footer"' not in L and '@frappeash' not in L]
-        return "\n".join(filtered)
-    return text
-
-def get_fetch_message(command: str):
-    cmd_lower = command.lower()
-    if 'vnum' in cmd_lower or 'vehicle' in cmd_lower:
-        return "⏳ Fetching vehicle info… Please wait."
-    if 'family' in cmd_lower:
-        return "⏳ Fetching family info… Please wait."
-    if 'aadhar' in cmd_lower or 'aadhaar' in cmd_lower:
-        return "⏳ Fetching Aadhar info… Please wait."
-    if 'pan' in cmd_lower:
-        return "⏳ Fetching PAN info… Please wait."
-    if 'voter' in cmd_lower:
-        return "⏳ Fetching voter info… Please wait."
-    if 'insta' in cmd_lower:
-        return "⏳ Fetching Instagram info… Please wait."
-    if 'bomber' in cmd_lower:
-        return "⏳ Processing bomber request… Please wait."
-    return "⏳ Fetching info… Please wait."
-
-def is_waiting_message(text: str):
-    """Check if a message is a 'please wait' or 'fetching' type message"""
-    if not text:
-        return False
-    text_lower = text.lower()
-    waiting_keywords = [
-        'please wait', 'fetching', 'processing', 'loading',
-        'wait', 'searching', 'looking up', 'retrieving'
-    ]
-    return any(keyword in text_lower for keyword in waiting_keywords)
-
-def extract_search_params(command: str):
-    """Extract search parameters like phone numbers, vehicle numbers, etc. from command"""
-    params = []
-    # Extract phone numbers (10 digits)
-    phone_pattern = r'\b\d{10}\b'
-    params.extend(re.findall(phone_pattern, command))
     
-    # Extract vehicle numbers (various formats)
-    vehicle_pattern = r'\b[A-Z]{2}[\s-]?\d{1,2}[\s-]?[A-Z]{1,2}[\s-]?\d{1,4}\b'
-    params.extend(re.findall(vehicle_pattern, command, re.IGNORECASE))
-    
-    # Extract PAN numbers
-    pan_pattern = r'\b[A-Z]{5}\d{4}[A-Z]\b'
-    params.extend(re.findall(pan_pattern, command, re.IGNORECASE))
-    
-    # Extract Aadhar numbers (12 digits)
-    aadhar_pattern = r'\b\d{12}\b'
-    params.extend(re.findall(aadhar_pattern, command))
-    
-    return params
+    return cleaned
 
-def response_matches_search(response_text: str, search_params: list):
-    """Check if response contains any of the search parameters"""
-    if not response_text or not search_params:
-        return False
-    response_lower = response_text.lower()
-    for param in search_params:
-        # Remove spaces and hyphens for comparison
-        param_normalized = re.sub(r'[\s-]', '', str(param).lower())
-        response_normalized = re.sub(r'[\s-]', '', response_lower)
-        if param_normalized in response_normalized:
-            return True
-    return False
+# ============ Command Mapping ============
 
-# ---------------- Runtime maps ----------------
-message_map = {}
-reverse_map = {}
-message_map_third = {}
-reverse_map_third = {}
-forwarded_from_third = {}
-status_messages = {}
-api_request_map = {}
-bot_status = {"running": False, "messages_forwarded": 0, "filtered_content": 0}
+SEARCH_COMMANDS = {
+    "phone": {"cmd": "/num", "name": "Phone Number Info"},
+    "family": {"cmd": "/familyinfo", "name": "Family Info"},
+    "aadhar": {"cmd": "/aadhar", "name": "Aadhar Info"},
+    "vehicle": {"cmd": "/vnum", "name": "Vehicle to Phone"},
+    "upi": {"cmd": "/upi", "name": "UPI Info"},
+    "fampay": {"cmd": "/fampay", "name": "Fampay Info"},
+    "email": {"cmd": "/email", "name": "Email Info"},
+    "telegram": {"cmd": "/tg", "name": "Telegram to Phone"},
+    "imei": {"cmd": "/imei", "name": "IMEI Info"},
+    "pak": {"cmd": "/pak", "name": "Pakistan Info"},
+    "gst": {"cmd": "/gst", "name": "GST Info"}
+}
 
-# ---------------- Telethon client ----------------
+PLANS = {
+    "plan_5": {"searches": 5, "price": 100, "name": "5 Searches", "days": None},
+    "plan_15": {"searches": 15, "price": 200, "name": "15 Searches", "days": None},
+    "plan_week": {"searches": -1, "price": 500, "name": "Unlimited (7 Days)", "days": 7}
+}
+
+# ============ Bot State ============
+
+user_states = {}
+pending_searches = {}
+
+# ============ Telethon Client ============
+
 client = TelegramClient(SESSION_FILE, TELETHON_API_ID, TELETHON_API_HASH)
 
-def _get_text(msg):
-    return msg.text if msg and getattr(msg, "text", None) is not None else ""
-
-# ---------------- Stabilizer ----------------
-async def _stabilize_and_forward_third_reply(forwarded_msg_id: int, reply_msg_id: int):
+async def check_channel_membership(user_id: int):
     try:
-        await asyncio.sleep(REPLY_STABILIZE_DELAY)
-        info = forwarded_from_third.get(forwarded_msg_id)
-        if not info:
-            return
-        if info['count'] >= info['max']:
-            return
-        latest = await client.get_messages(THIRD_GROUP, ids=reply_msg_id)
-        if not latest:
-            return
-        latest_text = _get_text(latest)
-        if not latest_text:
-            return
-        cleaned = remove_footer(latest_text)
-        filtered_text, was_filtered = filter_links_and_usernames(cleaned)
-        if was_filtered:
-            bot_status["filtered_content"] += 1
-        if not filtered_text.strip():
-            return
-        original_msg_id = info.get('original_msg_id')
-        if original_msg_id and original_msg_id in status_messages:
-            try:
-                await status_messages[original_msg_id]['status_msg'].delete()
-                del status_messages[original_msg_id]
-            except Exception:
-                pass
-        if original_msg_id:
-            await client.send_message(FIRST_GROUP, filtered_text, reply_to=original_msg_id)
-        forwarded_from_third[forwarded_msg_id]['count'] += 1
-        bot_status["messages_forwarded"] += 1
-        api_entry = api_request_map.get(forwarded_msg_id)
-        if api_entry:
-            api_entry['responses'].append(filtered_text)
-            if len(api_entry['responses']) >= api_entry['max']:
-                if not api_entry['future'].done():
-                    api_entry['future'].set_result(api_entry['responses'])
+        participant = await client.get_permissions(MANDATORY_CHANNEL, user_id)
+        return participant is not None
     except Exception as e:
-        logger.exception("Error in stabilize task: %s", e)
+        logger.exception("Error checking channel membership: %s", e)
+        return False
 
-async def _wait_for_api_response_update(forwarded_msg_id: int, initial_reply_msg_id: int, search_params: list):
-    """
-    Waits for 15 seconds to check if the initial 'waiting' message gets edited 
-    or if a new reply with actual data arrives that matches the search parameters.
-    Returns the final response text or None.
-    """
+# ============ Keyboard Menus ============
+
+def get_main_menu():
+    buttons = []
+    row = []
+    for key, info in SEARCH_COMMANDS.items():
+        row.append(Button.inline(info["name"], f"search_{key}"))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    return buttons
+
+def get_plans_menu():
+    buttons = []
+    for plan_key, plan_info in PLANS.items():
+        buttons.append([Button.inline(
+            f"{plan_info['name']} - ₹{plan_info['price']}", 
+            f"buy_{plan_key}"
+        )])
+    buttons.append([Button.inline("❌ Cancel", "cancel")])
+    return buttons
+
+def get_payment_approval_buttons(payment_id: str, user_id: int):
+    return [
+        [
+            Button.inline("✅ Approve", f"approve_{payment_id}_{user_id}"),
+            Button.inline("❌ Reject", f"reject_{payment_id}_{user_id}")
+        ]
+    ]
+
+# ============ Bot Event Handlers ============
+
+@client.on(events.NewMessage(pattern='/start'))
+async def start_handler(event):
+    user = await event.get_sender()
+    user_id = user.id
+    
+    await create_or_update_user(user_id, user.username, user.first_name)
+    
+    # Check if user is admin
+    if user_id == ADMIN_USER_ID:
+        await event.respond(
+            f"👋 Welcome Admin!\n\n"
+            f"You have full access to all features.\n"
+            f"Use the menu below to perform searches:",
+            buttons=get_main_menu()
+        )
+        return
+    
+    # Check channel membership
+    is_member = await check_channel_membership(user_id)
+    
+    if not is_member:
+        await event.respond(
+            f"👋 Welcome to Premium Info Bot!\n\n"
+            f"To use this bot, you must first join our channel:\n"
+            f"{MANDATORY_CHANNEL}\n\n"
+            f"After joining, click /start again.",
+            buttons=[[Button.url("Join Channel", f"https://t.me/{MANDATORY_CHANNEL.replace('@', '')}")]]
+        )
+        return
+    
+    # Update channel joined status
+    await asyncio.get_running_loop().run_in_executor(
+        None, lambda: users_col.update_one(
+            {"user_id": user_id},
+            {"$set": {"channel_joined": True}}
+        )
+    )
+    
+    user_doc = await get_user(user_id)
+    
+    await event.respond(
+        f"👋 Welcome {user.first_name}!\n\n"
+        f"📊 Your Plan: {user_doc.get('plan', 'free').upper()}\n"
+        f"🔍 Searches Remaining: {user_doc.get('searches_remaining', 0)}\n\n"
+        f"Select a search type below:",
+        buttons=get_main_menu()
+    )
+
+@client.on(events.CallbackQuery(pattern=r'^search_(.+)$'))
+async def search_callback(event):
+    user_id = event.sender_id
+    search_type = event.data.decode().split('_')[1]
+    
+    # Check if admin
+    if user_id == ADMIN_USER_ID:
+        user_states[user_id] = {"action": "awaiting_input", "type": search_type}
+        await event.edit(
+            f"🔍 {SEARCH_COMMANDS[search_type]['name']}\n\n"
+            f"Please send the {search_type} to search:"
+        )
+        return
+    
+    # Check user plan
+    user_doc = await get_user(user_id)
+    
+    if not user_doc:
+        await event.answer("❌ Error: User not found", alert=True)
+        return
+    
+    # Check if user has searches remaining
+    searches_remaining = user_doc.get('searches_remaining', 0)
+    plan = user_doc.get('plan', 'free')
+    plan_expiry = user_doc.get('plan_expiry')
+    
+    # Check if unlimited plan expired
+    if plan == 'unlimited' and plan_expiry:
+        expiry_dt = datetime.fromisoformat(plan_expiry)
+        if expiry_dt < datetime.now(timezone.utc):
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: users_col.update_one(
+                    {"user_id": user_id},
+                    {"$set": {"plan": "free", "searches_remaining": 0}}
+                )
+            )
+            searches_remaining = 0
+    
+    if searches_remaining <= 0 and plan != 'unlimited':
+        await event.edit(
+            "❌ Access Not Granted\n\n"
+            "You must buy a premium pack to use this bot.\n\n"
+            "Select a plan below:",
+            buttons=get_plans_menu()
+        )
+        return
+    
+    # User has access
+    user_states[user_id] = {"action": "awaiting_input", "type": search_type}
+    await event.edit(
+        f"🔍 {SEARCH_COMMANDS[search_type]['name']}\n\n"
+        f"Searches Remaining: {searches_remaining if searches_remaining > 0 else 'Unlimited'}\n\n"
+        f"Please send the {search_type} to search:"
+    )
+
+@client.on(events.CallbackQuery(pattern=r'^buy_(.+)$'))
+async def buy_plan_callback(event):
+    user_id = event.sender_id
+    plan_key = event.data.decode().split('_', 1)[1]
+    
+    if plan_key not in PLANS:
+        await event.answer("❌ Invalid plan", alert=True)
+        return
+    
+    plan_info = PLANS[plan_key]
+    payment_id = await create_payment_request(user_id, plan_key, plan_info['price'])
+    
+    if not payment_id:
+        await event.answer("❌ Error creating payment request", alert=True)
+        return
+    
+    user_states[user_id] = {"action": "awaiting_payment", "payment_id": payment_id, "plan": plan_key}
+    
+    # Notify admin
     try:
-        initial_msg = await client.get_messages(THIRD_GROUP, ids=initial_reply_msg_id)
-        if not initial_msg:
-            return None
-        
-        initial_text = _get_text(initial_msg)
-        
-        # Wait for 15 seconds and check for edits or new replies
-        for _ in range(API_EDIT_WAIT_TIME):
-            await asyncio.sleep(1)
-            
-            # Check if the message was edited
-            current_msg = await client.get_messages(THIRD_GROUP, ids=initial_reply_msg_id)
-            if current_msg:
-                current_text = _get_text(current_msg)
-                # If message was edited and is no longer a waiting message
-                if current_text != initial_text and not is_waiting_message(current_text):
-                    if response_matches_search(current_text, search_params):
-                        return current_text
-            
-            # Check for new replies to the forwarded message
-            api_entry = api_request_map.get(forwarded_msg_id)
-            if api_entry:
-                # Check if we got new responses
-                for resp in api_entry['responses']:
-                    if not is_waiting_message(resp) and response_matches_search(resp, search_params):
-                        return resp
-        
-        # After 15 seconds, get the final state
-        final_msg = await client.get_messages(THIRD_GROUP, ids=initial_reply_msg_id)
-        if final_msg:
-            final_text = _get_text(final_msg)
-            if not is_waiting_message(final_text):
-                return final_text
-        
-        return None
+        user = await event.get_sender()
+        await client.send_message(
+            ADMIN_USER_ID,
+            f"💰 New Payment Request\n\n"
+            f"User: {user.first_name} (@{user.username or 'N/A'})\n"
+            f"User ID: {user_id}\n"
+            f"Plan: {plan_info['name']}\n"
+            f"Amount: ₹{plan_info['price']}\n"
+            f"Payment ID: {payment_id}\n\n"
+            f"Waiting for payment screenshot..."
+        )
     except Exception as e:
-        logger.exception("Error in wait_for_api_response_update: %s", e)
-        return None
-
-# ---------------- Telethon event handlers ----------------
-@client.on(events.NewMessage(chats=FIRST_GROUP))
-async def forward_command(event):
-    message = event.message
-    text = _get_text(message)
-    if not text or not (text.startswith('/') or text.startswith('2/')):
-        return
-    target = SECOND_GROUP
-    clean_command = text
-    is_third = False
-    if text.startswith('2/'):
-        is_third = True
-        target = THIRD_GROUP
-        clean_command = '/' + text[2:]
-    cmd_token = clean_command.split()[0].lower()
-    if cmd_token == '/start':
-        logger.info("Ignored /start from source group.")
-        return
+        logger.exception("Error notifying admin: %s", e)
+    
+    await event.edit(
+        f"💳 Payment Required\n\n"
+        f"Plan: {plan_info['name']}\n"
+        f"Amount: ₹{plan_info['price']}\n\n"
+        f"Please scan the QR code below and send the payment screenshot:\n\n"
+        f"Payment ID: `{payment_id}`",
+        buttons=[[Button.inline("❌ Cancel", "cancel")]]
+    )
+    
+    # Send QR code
     try:
-        status_msg = await client.send_message(FIRST_GROUP, get_fetch_message(clean_command), reply_to=message.id)
-        status_messages[message.id] = {'status_msg': status_msg, 'responses': []}
-        await asyncio.sleep(5)
-        latest = await client.get_messages(FIRST_GROUP, ids=message.id)
-        if not latest or _get_text(latest) != text:
-            try:
-                await status_msg.delete()
-            except Exception:
-                pass
-            status_messages.pop(message.id, None)
-            return
-        forwarded = await client.send_message(target, clean_command)
-        if is_third:
-            message_map_third[message.id] = forwarded.id
-            reverse_map_third[forwarded.id] = message.id
-            allowed = 1
-            stabilize = False
-            if cmd_token in ['/vnum', '/bomber', '/familyinfo', '/insta']:
-                allowed = 2
-                stabilize = True
-            forwarded_from_third[forwarded.id] = {
-                'count': 0, 'max': allowed, 'deadline': time.time() + THIRD_REPLY_WINDOW,
-                'original_msg_id': message.id, 'stabilize': stabilize
-            }
-        else:
-            message_map[message.id] = forwarded.id
-            reverse_map[forwarded.id] = message.id
-        bot_status["messages_forwarded"] += 1
-    except errors.rpcerrorlist.ChatWriteForbiddenError:
-        logger.warning("Chat write forbidden when forwarding; informing source group.")
-        try:
-            await client.send_message(FIRST_GROUP, "⚠️ Bot cannot write to the destination group. Check permissions.", reply_to=message.id)
-        except Exception:
-            pass
+        await client.send_file(event.sender_id, PAYMENT_QR_CODE, caption="Scan to pay")
     except Exception as e:
-        logger.exception("Error forwarding command from source: %s", e)
-        if message.id in status_messages:
-            try:
-                await status_messages[message.id]['status_msg'].delete()
-                del status_messages[message.id]
-            except Exception:
-                pass
+        logger.exception("Error sending QR code: %s", e)
+        await event.respond("Please pay to the UPI ID and send screenshot.")
 
-@client.on(events.NewMessage(chats=SECOND_GROUP))
-async def forward_reply_second(event):
-    message = event.message
-    if not message.reply_to_msg_id:
+@client.on(events.CallbackQuery(pattern=r'^approve_(.+)_(.+)$'))
+async def approve_payment_callback(event):
+    if event.sender_id != ADMIN_USER_ID:
+        await event.answer("❌ Unauthorized", alert=True)
         return
-    original_id = reverse_map.get(message.reply_to_msg_id)
-    if original_id:
-        try:
-            await asyncio.sleep(FETCH_WAIT_TIME)
-            latest = await client.get_messages(SECOND_GROUP, ids=message.id)
-            if not latest:
-                return
-            filtered, was_filtered = filter_links_and_usernames(_get_text(latest))
-            if was_filtered:
-                bot_status["filtered_content"] += 1
-            if not filtered.strip():
-                return
-            if original_id in status_messages:
-                try:
-                    await status_messages[original_id]['status_msg'].delete()
-                    del status_messages[original_id]
-                except Exception:
-                    pass
-            await client.send_message(FIRST_GROUP, filtered, reply_to=original_id)
-            bot_status["messages_forwarded"] += 1
-            api_entry = api_request_map.get(message.reply_to_msg_id)
-            if api_entry:
-                api_entry['responses'].append(filtered)
-                if len(api_entry['responses']) >= api_entry['max']:
-                    if not api_entry['future'].done():
-                        api_entry['future'].set_result(api_entry['responses'])
-        except Exception as e:
-            logger.exception("Error forwarding reply from second: %s", e)
-
-@client.on(events.NewMessage(chats=THIRD_GROUP))
-async def forward_reply_third(event):
-    message = event.message
-    if not message.reply_to_msg_id:
+    
+    data_parts = event.data.decode().split('_')
+    payment_id = data_parts[1]
+    target_user_id = int(data_parts[2])
+    
+    # Get payment details
+    payment = await asyncio.get_running_loop().run_in_executor(
+        None, payments_col.find_one, {"payment_id": payment_id}
+    )
+    
+    if not payment:
+        await event.answer("❌ Payment not found", alert=True)
         return
-    original_id = reverse_map_third.get(message.reply_to_msg_id)
-    if original_id:
-        reply_info = forwarded_from_third.get(message.reply_to_msg_id)
-        if not reply_info:
-            return
-        now = time.time()
-        if now > reply_info['deadline']:
-            return
-        if reply_info['count'] >= reply_info['max']:
-            return
-        try:
-            if reply_info.get('stabilize'):
-                asyncio.create_task(_stabilize_and_forward_third_reply(message.reply_to_msg_id, message.id))
-            else:
-                await asyncio.sleep(FETCH_WAIT_TIME)
-                latest = await client.get_messages(THIRD_GROUP, ids=message.id)
-                if not latest:
-                    return
-                cleaned = remove_footer(_get_text(latest))
-                filtered, was_filtered = filter_links_and_usernames(cleaned)
-                if was_filtered:
-                    bot_status["filtered_content"] += 1
-                if not filtered.strip():
-                    return
-                if reply_info['original_msg_id'] in status_messages:
-                    try:
-                        await status_messages[reply_info['original_msg_id']]['status_msg'].delete()
-                        del status_messages[reply_info['original_msg_id']]
-                    except Exception:
-                        pass
-                await client.send_message(FIRST_GROUP, filtered, reply_to=reply_info['original_msg_id'])
-                forwarded_from_third[message.reply_to_msg_id]['count'] += 1
-                bot_status["messages_forwarded"] += 1
-                api_entry = api_request_map.get(message.reply_to_msg_id)
-                if api_entry:
-                    api_entry['responses'].append(filtered)
-                    if len(api_entry['responses']) >= api_entry['max']:
-                        if not api_entry['future'].done():
-                            api_entry['future'].set_result(api_entry['responses'])
-        except Exception as e:
-            logger.exception("Error handling third_group reply: %s", e)
+    
+    plan_key = payment['plan']
+    plan_info = PLANS[plan_key]
+    
+    # Update user plan
+    if plan_info['searches'] == -1:
+        await update_user_plan(target_user_id, "unlimited", 999999, plan_info['days'])
     else:
-        api_entry = api_request_map.get(message.reply_to_msg_id)
-        if api_entry:
-            try:
-                if api_entry.get('stabilize'):
-                    asyncio.create_task(_stabilize_and_forward_third_reply(message.reply_to_msg_id, message.id))
-                else:
-                    await asyncio.sleep(FETCH_WAIT_TIME)
-                    latest = await client.get_messages(THIRD_GROUP, ids=message.id)
-                    if not latest:
-                        return
-                    cleaned = remove_footer(_get_text(latest))
-                    filtered, was_filtered = filter_links_and_usernames(cleaned)
-                    if was_filtered:
-                        bot_status["filtered_content"] += 1
-                    if not filtered.strip():
-                        return
-                    
-                    # Store initial_reply_id for API tracking
-                    if 'initial_reply_id' not in api_entry or api_entry['initial_reply_id'] is None:
-                        api_entry['initial_reply_id'] = message.id
-                    
-                    api_entry['responses'].append(filtered)
-                    if len(api_entry['responses']) >= api_entry['max']:
-                        if not api_entry['future'].done():
-                            api_entry['future'].set_result(api_entry['responses'])
-            except Exception as e:
-                logger.exception("Error handling third_group API reply: %s", e)
-
-# ---------------- Telegram startup ----------------
-async def start_telegram():
-    await client.start()
-    bot_status["running"] = True
-    logger.info("Telegram session started — monitoring groups.")
-
-# ---------------- HTTP helpers ----------------
-async def json_request(request):
-    try:
-        return await request.json()
-    except Exception:
-        return None
-
-# ---------------- HTTP API handlers ----------------
-async def api_create_key(request):
-    data = await json_request(request)
-    if not data:
-        return web.json_response({"error": "invalid_json"}, status=400)
-    if not MASTER_API_SECRET:
-        return web.json_response({"error": "server_not_configured"}, status=500)
-    if data.get("master_secret") != MASTER_API_SECRET:
-        return web.json_response({"error": "unauthorized"}, status=401)
-    label = data.get("label", "")
-    owner = data.get("owner", "")
+        user_doc = await get_user(target_user_id)
+        current_searches = user_doc.get('searches_remaining', 0)
+        await update_user_plan(target_user_id, "paid", current_searches + plan_info['searches'])
     
-    # Handle duration_days with better None handling
-    duration_days = data.get("duration_days") or 30
-    try:
-        duration_days = int(duration_days)
-        if duration_days <= 0:
-            duration_days = 30
-    except (ValueError, TypeError):
-        duration_days = 30
+    # Update payment status
+    await asyncio.get_running_loop().run_in_executor(
+        None, lambda: payments_col.update_one(
+            {"payment_id": payment_id},
+            {"$set": {"status": "approved", "approved_at": datetime.now(timezone.utc).isoformat()}}
+        )
+    )
     
-    token = uuid.uuid4().hex
-    ok, doc = await create_api_key_in_db(token, label=label, owner=owner, duration_days=duration_days)
-    if not ok:
-        return web.json_response({"error": "db_error"}, status=500)
-    return web.json_response({"api_key": token, "label": label, "duration_days": duration_days})
-
-async def api_list_keys(request):
-    data = await json_request(request)
-    if not data:
-        return web.json_response({"error": "invalid_json"}, status=400)
-    if not MASTER_API_SECRET or data.get("master_secret") != MASTER_API_SECRET:
-        return web.json_response({"error": "unauthorized"}, status=401)
+    await event.edit(
+        f"✅ Payment Approved\n\n"
+        f"Payment ID: {payment_id}\n"
+        f"User ID: {target_user_id}\n"
+        f"Plan: {plan_info['name']}"
+    )
+    
+    # Notify user
     try:
-        docs = await list_api_keys_from_storage()
-        return web.json_response({"keys": docs})
+        await client.send_message(
+            target_user_id,
+            f"✅ Payment Approved!\n\n"
+            f"Your {plan_info['name']} plan has been activated.\n"
+            f"Use /start to begin searching.",
+            buttons=[[Button.inline("🚀 Start Searching", "start")]]
+        )
     except Exception as e:
-        logger.exception("api_list_keys error: %s", e)
-        return web.json_response({"error": "internal_error"}, status=500)
+        logger.exception("Error notifying user: %s", e)
 
-async def api_revoke_key(request):
-    data = await json_request(request)
-    if not data:
-        return web.json_response({"error": "invalid_json"}, status=400)
-    if not MASTER_API_SECRET or data.get("master_secret") != MASTER_API_SECRET:
-        return web.json_response({"error": "unauthorized"}, status=401)
-    key = data.get("key")
-    if not key:
-        return web.json_response({"error": "missing_key"}, status=400)
-    ok = await revoke_api_key_in_storage(key)
-    return web.json_response({"revoked": bool(ok)})
+@client.on(events.CallbackQuery(pattern=r'^reject_(.+)_(.+)$'))
+async def reject_payment_callback(event):
+    if event.sender_id != ADMIN_USER_ID:
+        await event.answer("❌ Unauthorized", alert=True)
+        return
+    
+    data_parts = event.data.decode().split('_')
+    payment_id = data_parts[1]
+    target_user_id = int(data_parts[2])
+    
+    # Update payment status
+    await asyncio.get_running_loop().run_in_executor(
+        None, lambda: payments_col.update_one(
+            {"payment_id": payment_id},
+            {"$set": {"status": "rejected", "rejected_at": datetime.now(timezone.utc).isoformat()}}
+        )
+    )
+    
+    await event.edit(f"❌ Payment Rejected\n\nPayment ID: {payment_id}")
+    
+    # Notify user
+    try:
+        await client.send_message(
+            target_user_id,
+            "❌ Payment Rejected\n\n"
+            "Your payment was not approved. Please contact support or try again."
+        )
+    except Exception as e:
+        logger.exception("Error notifying user: %s", e)
 
-async def api_validate_key(request):
-    data = await json_request(request)
-    if not data:
-        return web.json_response({"error": "invalid_json"}, status=400)
-    key = data.get("api_key")
-    if not key:
-        return web.json_response({"valid": False, "reason": "missing_key"}, status=401)
-    valid, doc_or_reason = await validate_api_key_in_storage(key)
-    if not valid:
-        return web.json_response({"valid": False, "reason": doc_or_reason}, status=401)
-    doc = doc_or_reason
-    expires_at = doc.get("expires_at")
-    days_left = None
-    if expires_at:
+@client.on(events.CallbackQuery(pattern='^cancel$'))
+async def cancel_callback(event):
+    user_id = event.sender_id
+    user_states.pop(user_id, None)
+    await event.edit(
+        "❌ Cancelled\n\nUse /start to begin again.",
+        buttons=None
+    )
+
+@client.on(events.CallbackQuery(pattern='^start$'))
+async def start_button_callback(event):
+    await start_handler(event)
+
+@client.on(events.NewMessage(func=lambda e: e.is_private and not e.text.startswith('/')))
+async def message_handler(event):
+    user_id = event.sender_id
+    
+    if user_id not in user_states:
+        return
+    
+    state = user_states[user_id]
+    
+    # Handle payment screenshot
+    if state.get('action') == 'awaiting_payment':
+        if not event.photo:
+            await event.respond("❌ Please send a screenshot image.")
+            return
+        
+        payment_id = state['payment_id']
+        plan_key = state['plan']
+        plan_info = PLANS[plan_key]
+        
+        # Save screenshot
+        file = await event.download_media(bytes)
+        
+        # Update payment with screenshot
+        await update_payment_screenshot(payment_id, event.message.id)
+        
+        # Forward to admin
         try:
-            exp_dt = datetime.fromisoformat(expires_at)
-            delta = exp_dt - _now_utc()
-            days_left = max(0, int(delta.total_seconds() // 86400))
-        except Exception:
-            days_left = None
-    return web.json_response({"valid": True, "expires_at": expires_at, "days_left": days_left, "revoked": bool(doc.get("revoked", False))})
-
-async def api_command(request):
-    """
-    Client API: {"api_key":"...","command":"2/vnum MH12AB1234"}
-    Only commands prefixed with '2/' are allowed.
-    Enhanced: If initial response is a 'waiting' message, waits 15s for edits or matching replies.
-    """
-    try:
-        data = await request.json()
-    except Exception:
-        return web.json_response({"error": "invalid_json"}, status=400)
-
-    api_key = data.get("api_key")
-    command = data.get("command")
-    if not api_key or not command:
-        return web.json_response({"error": "missing_parameters"}, status=400)
-
-    valid, doc_or_reason = await validate_api_key_in_storage(api_key)
-    if not valid:
-        return web.json_response({"error": "invalid_api_key", "reason": doc_or_reason}, status=401)
-
-    if not command.startswith("2/"):
-        return web.json_response({"error": "forbidden_command", "reason": "must_prefix_with_2_slash"}, status=400)
-
-    clean_command = "/" + command[2:]
-    
-    # Extract search parameters from command for matching responses
-    search_params = extract_search_params(command)
-    
-    # post status in FIRST_GROUP (best-effort)
-    try:
-        await client.send_message(FIRST_GROUP, f"[API] {get_fetch_message(clean_command)}")
-    except Exception:
-        pass
-
-    try:
-        forwarded = await client.send_message(THIRD_GROUP, clean_command)
-    except errors.rpcerrorlist.ChatWriteForbiddenError:
-        return web.json_response({"error": "telegram_send_failed", "detail": "chat_write_forbidden"}, status=403)
-    except Exception as e:
-        logger.exception("Failed sending command to third_group: %s", e)
-        return web.json_response({"error": "telegram_send_failed", "detail": str(e)}, status=500)
-
-    cmd_token = clean_command.split()[0].lower()
-    allowed = 1
-    stabilize = False
-    if cmd_token in ['/vnum', '/bomber', '/familyinfo', '/insta']:
-        allowed = 2
-        stabilize = True
-
-    fut = asyncio.get_running_loop().create_future()
-    api_entry = {
-        "future": fut,
-        "responses": [],
-        "max": allowed,
-        "deadline": time.time() + THIRD_REPLY_WINDOW,
-        "stabilize": stabilize,
-        "original_api_req_id": uuid.uuid4().hex,
-        "search_params": search_params,
-        "initial_reply_id": None,
-        "waiting_detected": False
-    }
-    api_request_map[forwarded.id] = api_entry
-
-    forwarded_from_third[forwarded.id] = {
-        'count': 0, 'max': allowed, 'deadline': time.time() + THIRD_REPLY_WINDOW,
-        'original_msg_id': None, 'stabilize': stabilize
-    }
-
-    try:
-        # Wait for initial response
-        results = await asyncio.wait_for(fut, timeout=API_REQUEST_TIMEOUT)
+            user = await event.get_sender()
+            await client.send_file(
+                ADMIN_USER_ID,
+                event.photo,
+                caption=f"💰 Payment Screenshot Received\n\n"
+                        f"User: {user.first_name} (@{user.username or 'N/A'})\n"
+                        f"User ID: {user_id}\n"
+                        f"Plan: {plan_info['name']}\n"
+                        f"Amount: ₹{plan_info['price']}\n"
+                        f"Payment ID: {payment_id}",
+                buttons=get_payment_approval_buttons(payment_id, user_id)
+            )
+        except Exception as e:
+            logger.exception("Error forwarding to admin: %s", e)
         
-        # Check if we got a waiting message
-        if results and len(results) > 0:
-            first_response = results[0]
-            if is_waiting_message(first_response):
-                logger.info("API: Detected waiting message, initiating 15s wait for update...")
-                api_entry['waiting_detected'] = True
+        await event.respond(
+            "✅ Payment screenshot received!\n\n"
+            "Your payment is being reviewed. You'll be notified once approved."
+        )
+        
+        user_states.pop(user_id, None)
+        return
+    
+    # Handle search input
+    if state.get('action') == 'awaiting_input':
+        search_type = state['type']
+        query = event.text.strip()
+        
+        command_info = SEARCH_COMMANDS[search_type]
+        command = f"{command_info['cmd']} {query}"
+        
+        # Send "fetching" message
+        status_msg = await event.respond("⏳ Fetching information... Please wait.")
+        
+        try:
+            # Forward to destination group
+            forwarded = await client.send_message(DESTINATION_GROUP, command)
+            
+            # Store pending search
+            future = asyncio.get_running_loop().create_future()
+            pending_searches[forwarded.id] = {
+                "future": future,
+                "user_id": user_id,
+                "query": query,
+                "search_type": search_type,
+                "original_msg": event.message.id
+            }
+            
+            # Wait for response
+            try:
+                result = await asyncio.wait_for(future, timeout=REPLY_TIMEOUT)
                 
-                # Wait for the actual response (15 seconds)
-                initial_reply_id = api_entry.get('initial_reply_id')
-                if initial_reply_id:
-                    updated_response = await _wait_for_api_response_update(
-                        forwarded.id, 
-                        initial_reply_id, 
-                        search_params
-                    )
-                    
-                    if updated_response:
-                        # Clean and filter the updated response
-                        cleaned = remove_footer(updated_response)
-                        filtered_text, was_filtered = filter_links_and_usernames(cleaned)
-                        if was_filtered:
-                            bot_status["filtered_content"] += 1
-                        
-                        if filtered_text.strip():
-                            results = [filtered_text]
-                            logger.info("API: Successfully retrieved updated response after waiting")
-                        else:
-                            logger.warning("API: Updated response was empty after filtering")
-                    else:
-                        logger.warning("API: No updated response found after 15s wait")
-                else:
-                    # Check if we got any additional responses during the wait
-                    additional_responses = api_entry['responses'][1:]  # Skip the first waiting message
-                    if additional_responses:
-                        # Filter for non-waiting messages that match search params
-                        valid_responses = [
-                            resp for resp in additional_responses 
-                            if not is_waiting_message(resp) and 
-                            (not search_params or response_matches_search(resp, search_params))
-                        ]
-                        if valid_responses:
-                            results = valid_responses
-                            logger.info("API: Found valid responses in additional messages")
+                # Clean result
+                cleaned = filter_links_and_usernames(result)
+                
+                if not cleaned.strip():
+                    cleaned = "❌ No results found or data was filtered."
+                
+                # Delete status message
+                await status_msg.delete()
+                
+                # Send result
+                await event.respond(f"✅ Result:\n\n{cleaned}")
+                
+                # Decrement searches (if not admin and not unlimited)
+                if user_id != ADMIN_USER_ID:
+                    user_doc = await get_user(user_id)
+                    if user_doc.get('plan') != 'unlimited':
+                        await decrement_search(user_id)
+                
+                # Log search
+                await log_search(user_id, search_type, query, cleaned)
+                
+            except asyncio.TimeoutError:
+                await status_msg.delete()
+                await event.respond("❌ Request timed out. Please try again.")
+                
+        except Exception as e:
+            logger.exception("Error processing search: %s", e)
+            await status_msg.delete()
+            await event.respond("❌ An error occurred. Please try again.")
         
-        api_request_map.pop(forwarded.id, None)
-        forwarded_from_third.pop(forwarded.id, None)
-        return web.json_response({"success": True, "responses": results})
-        
-    except asyncio.TimeoutError:
-        responses = api_entry['responses'][:]
-        
-        # If we detected a waiting message but timeout occurred, try one final check
-        if api_entry.get('waiting_detected') and responses and is_waiting_message(responses[0]):
-            logger.info("API: Timeout with waiting message, performing final check...")
-            initial_reply_id = api_entry.get('initial_reply_id')
-            if initial_reply_id:
-                try:
-                    final_msg = await client.get_messages(THIRD_GROUP, ids=initial_reply_id)
-                    if final_msg:
-                        final_text = _get_text(final_msg)
-                        if not is_waiting_message(final_text) and final_text.strip():
-                            cleaned = remove_footer(final_text)
-                            filtered_text, was_filtered = filter_links_and_usernames(cleaned)
-                            if filtered_text.strip():
-                                responses = [filtered_text]
-                                logger.info("API: Retrieved final response on timeout")
-                except Exception as e:
-                    logger.exception("Error in final check: %s", e)
-        
-        api_request_map.pop(forwarded.id, None)
-        forwarded_from_third.pop(forwarded.id, None)
-        
-        if responses:
-            # Filter out waiting messages from final response
-            final_responses = [r for r in responses if not is_waiting_message(r)]
-            if final_responses:
-                return web.json_response({"success": True, "responses": final_responses, "note": "partial/timeout"})
-        
-        return web.json_response({"success": False, "error": "timeout_no_response"}, status=504)
-        
-    except Exception as e:
-        logger.exception("Error while waiting for API response: %s", e)
-        api_request_map.pop(forwarded.id, None)
-        forwarded_from_third.pop(forwarded.id, None)
-        return web.json_response({"success": False, "error": "internal_error", "detail": str(e)}, status=500)
+        user_states.pop(user_id, None)
 
-# ---------------- Health & status ----------------
+@client.on(events.NewMessage(chats=DESTINATION_GROUP))
+async def handle_destination_reply(event):
+    message = event.message
+    
+    if not message.reply_to_msg_id:
+        return
+    
+    search_info = pending_searches.get(message.reply_to_msg_id)
+    
+    if not search_info:
+        return
+    
+    # Wait a bit for message to stabilize
+    await asyncio.sleep(FETCH_WAIT_TIME)
+    
+    # Get latest message
+    try:
+        latest = await client.get_messages(DESTINATION_GROUP, ids=message.id)
+        if latest and latest.text:
+            if not search_info['future'].done():
+                search_info['future'].set_result(latest.text)
+    except Exception as e:
+        logger.exception("Error handling reply: %s", e)
+
+# ============ Web Server ============
+
 async def health_check(request):
     return web.Response(text="OK", status=200)
 
-async def status_page(request):
-    active_windows = []
-    now = time.time()
-    for fid, info in forwarded_from_third.items():
-        remaining = max(0, int(info['deadline'] - now))
-        active_windows.append(f"forwarded_id={fid}, original_msg={info.get('original_msg_id')}, count={info['count']}/{info['max']}, remaining_s={remaining}, stabilize={info.get('stabilize', False)}")
-    active_text = "\n".join(active_windows) if active_windows else "None"
-    html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head><title>Relay API Bot</title></head>
-    <body>
-      <h1>Telegram Relay API Bot</h1>
-      <p>Status: {'Running' if bot_status['running'] else 'Stopped'}</p>
-      <p>Messages Forwarded: {bot_status['messages_forwarded']}</p>
-      <p>Content Filtered: {bot_status['filtered_content']}</p>
-      <pre>Active reply-windows:\n{active_text}</pre>
-    </body>
-    </html>
-    """
-    return web.Response(text=html, content_type='text/html')
-
-# ---------------- Web server startup ----------------
 async def start_web_server():
     app = web.Application()
-    app.router.add_post("/api/create_key", api_create_key)
-    app.router.add_post("/api/list_keys", api_list_keys)
-    app.router.add_post("/api/revoke_key", api_revoke_key)
-    app.router.add_post("/api/validate_key", api_validate_key)
-    app.router.add_post("/api/command", api_command)
     app.router.add_get("/health", health_check)
-    app.router.add_get("/", status_page)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    logger.info("Web server started on port %s", PORT)
-    await asyncio.Event().wait()
+    logger.info(f"Web server started on port {PORT}")
 
-# ---------------- Main ----------------
+# ============ Main ============
+
+async def start_bot():
+    await client.start(bot_token=BOT_TOKEN)
+    logger.info("Bot started successfully")
+    await client.run_until_disconnected()
+
 async def main():
     init_mongo()
-    await asyncio.gather(start_web_server(), start_telegram())
+    await asyncio.gather(
+        start_web_server(),
+        start_bot()
+    )
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("Stopped by user")
+        logger.info("Bot stopped by user")
     except Exception:
-        logger.exception("Fatal error on startup")
+        logger.exception("Fatal error")
