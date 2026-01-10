@@ -104,8 +104,8 @@ def init_mongo():
 
 # ============ API Key Management ============
 
-async def create_api_key(user_id: int, name: str = "Default Key", searches_limit: int = -1):
-    """Create a new API key for a user"""
+async def create_api_key(user_id: int, name: str = "Default Key"):
+    """Create a new API key for a user - uses creator's credit balance"""
     try:
         api_key = f"sk_{secrets.token_urlsafe(32)}"
         doc = {
@@ -113,7 +113,6 @@ async def create_api_key(user_id: int, name: str = "Default Key", searches_limit
             "user_id": user_id,
             "name": name,
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "searches_limit": searches_limit,
             "searches_used": 0,
             "active": True,
             "last_used": None
@@ -809,22 +808,28 @@ async def message_handler(event):
             return
         
         user_doc = await get_user(user_id)
-        searches_limit = user_doc.get('searches_remaining', 0)
         
-        if user_doc.get('plan') == 'unlimited':
-            searches_limit = -1
-        
-        api_key = await create_api_key(user_id, key_name, searches_limit)
+        api_key = await create_api_key(user_id, key_name)
         
         if api_key:
+            # Get current credits
+            if user_doc.get('plan') == 'unlimited':
+                credits_info = "Unlimited credits ♾️"
+            else:
+                credits_info = f"{user_doc.get('searches_remaining', 0)} credits remaining"
+            
             await event.respond(
                 f"✅ API Key Created Successfully!\n\n"
                 f"**Name:** {key_name}\n"
-                f"**API Key:** `{api_key}`\n\n"
-                f"⚠️ **Important:** Save this key securely. You won't be able to see it again!\n\n"
+                f"**API Key:** `{api_key}`\n"
+                f"**Your Credits:** {credits_info}\n\n"
+                f"⚠️ **Important:** \n"
+                f"• Save this key securely\n"
+                f"• API uses YOUR account credits\n"
+                f"• Recharge to get more credits\n\n"
                 f"**Usage Example:**\n"
                 f"```bash\n"
-                f"curl -X POST https://your-bot-url.com/api/search \\\n"
+                f"curl -X POST https://relay-wzlz.onrender.com/api/search \\\n"
                 f"  -H 'X-API-Key: {api_key}' \\\n"
                 f"  -H 'Content-Type: application/json' \\\n"
                 f"  -d '{{\n"
@@ -1039,7 +1044,7 @@ async def cleanup_old_searches():
 # ============ API Endpoints ============
 
 async def verify_api_key(request):
-    """Middleware to verify API key"""
+    """Middleware to verify API key and check creator's credit balance"""
     api_key = request.headers.get('X-API-Key')
     
     if not api_key:
@@ -1062,17 +1067,7 @@ async def verify_api_key(request):
             status=401
         )
     
-    # Check search limit
-    searches_limit = key_info.get('searches_limit', 0)
-    searches_used = key_info.get('searches_used', 0)
-    
-    if searches_limit != -1 and searches_used >= searches_limit:
-        return web.json_response(
-            {"success": False, "error": "API key search limit exceeded"},
-            status=403
-        )
-    
-    # Check user plan
+    # Check creator's (user's) current credit balance
     user_id = key_info['user_id']
     user_doc = await get_user(user_id)
     
@@ -1082,11 +1077,16 @@ async def verify_api_key(request):
             status=404
         )
     
-    # Check if user has searches remaining
+    # Check if creator has searches remaining in their account
     if user_doc.get('plan') != 'unlimited':
-        if user_doc.get('searches_remaining', 0) <= 0:
+        searches_remaining = user_doc.get('searches_remaining', 0)
+        if searches_remaining <= 0:
             return web.json_response(
-                {"success": False, "error": "No searches remaining. Please upgrade your plan."},
+                {
+                    "success": False, 
+                    "error": "API creator has no credits remaining. Please recharge your account.",
+                    "creator_credits": 0
+                },
                 status=403
             )
     
@@ -1095,7 +1095,7 @@ async def verify_api_key(request):
     return None
 
 async def api_search_handler(request):
-    """Handle API search requests"""
+    """Handle API search requests - uses creator's credit balance"""
     
     # Verify API key
     auth_error = await verify_api_key(request)
@@ -1128,29 +1128,35 @@ async def api_search_handler(request):
             status=400
         )
     
-    # Perform search
+    # Perform search using creator's account
     user_id = key_info['user_id']
     result = await perform_search(search_type, query, user_id)
     
     if result['success']:
-        # Increment API key usage
+        # Increment API key usage counter (for statistics)
         await increment_api_key_usage(key_info['api_key'])
         
-        # Decrement user searches if not unlimited
+        # Deduct credit from creator's account (not from API key limit)
         if user_doc.get('plan') != 'unlimited':
             await decrement_search(user_id)
+            # Get updated credits after deduction
+            updated_user = await get_user(user_id)
+            remaining_credits = updated_user.get('searches_remaining', 0)
+        else:
+            remaining_credits = -1  # Unlimited
         
         return web.json_response({
             "success": True,
             "search_type": search_type,
             "query": query,
-            "result": result['result']
+            "result": result['result'],
+            "creator_credits_remaining": remaining_credits
         })
     else:
         return web.json_response(result, status=500)
 
 async def api_info_handler(request):
-    """Get API key info"""
+    """Get API key info and creator's credit balance"""
     
     auth_error = await verify_api_key(request)
     if auth_error:
@@ -1159,15 +1165,23 @@ async def api_info_handler(request):
     key_info = request['api_key_info']
     user_doc = request['user_doc']
     
+    # Calculate credits remaining
+    if user_doc.get('plan') == 'unlimited':
+        credits_remaining = -1  # Unlimited
+        plan_status = "Unlimited"
+    else:
+        credits_remaining = user_doc.get('searches_remaining', 0)
+        plan_status = user_doc.get('plan', 'free').upper()
+    
     return web.json_response({
         "success": True,
         "api_key_name": key_info['name'],
         "created_at": key_info['created_at'],
-        "searches_used": key_info.get('searches_used', 0),
-        "searches_limit": key_info.get('searches_limit', 0),
-        "user_plan": user_doc.get('plan', 'free'),
-        "user_searches_remaining": user_doc.get('searches_remaining', 0),
-        "last_used": key_info.get('last_used')
+        "api_searches_used": key_info.get('searches_used', 0),
+        "last_used": key_info.get('last_used'),
+        "creator_plan": plan_status,
+        "creator_credits_remaining": credits_remaining,
+        "note": "API uses creator's account credits. Recharge your account to get more credits."
     })
 
 async def api_types_handler(request):
