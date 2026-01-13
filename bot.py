@@ -514,11 +514,11 @@ async def fetch_vehicle_api(vehicle_no: str):
 
 SEARCH_COMMANDS = {
     "phone": {"cmd": "/num", "name": "📱 Phone Number Info"},
-    "family": {"cmd": "/familyinfo", "name": "👨‍👩‍👧‍👦 Family Info"},
-    "aadhar": {"cmd": "/aadhar", "name": "🆔 Aadhar Info"},
+    "family": {"cmd": "/family", "name": "👨‍👩‍👧‍👦 Family Info"},
+    "aadhar": {"cmd": "/adhar", "name": "🆔 Aadhar Info"},
     "vehicle": {"cmd": "/vnum", "name": "🚗 Vehicle to Phone"},
-    "upi": {"cmd": "/upi", "name": "💳 UPI Info"},
-    "fampay": {"cmd": "/fampay", "name": "💰 Fampay Info"},
+    "upi": {"cmd": "/upiinfo", "name": "💳 UPI Info"},
+    "fampay": {"cmd": "/fam", "name": "💰 Fampay Info"},
     "email": {"cmd": "/email", "name": "📧 Email Info"},
     "telegram": {"cmd": "/tg", "name": "📲 Telegram to Phone"},
     "imei": {"cmd": "/imei", "name": "📱 IMEI Info"},
