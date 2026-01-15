@@ -85,9 +85,10 @@ users_col = None
 payments_col = None
 searches_col = None
 api_keys_col = None
+referrals_col = None
 
 def init_mongo():
-    global mongo_client, db, users_col, payments_col, searches_col, api_keys_col
+    global mongo_client, db, users_col, payments_col, searches_col, api_keys_col, referrals_col
     try:
         mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
         mongo_client.server_info()
@@ -96,12 +97,16 @@ def init_mongo():
         payments_col = db["payments"]
         searches_col = db["searches"]
         api_keys_col = db["api_keys"]
+        referrals_col = db["referrals"]
         
         users_col.create_index([("user_id", 1)], unique=True)
+        users_col.create_index([("referral_code", 1)], unique=True)
         payments_col.create_index([("user_id", 1)])
         searches_col.create_index([("user_id", 1)])
         api_keys_col.create_index([("api_key", 1)], unique=True)
         api_keys_col.create_index([("user_id", 1)])
+        referrals_col.create_index([("referrer_id", 1)])
+        referrals_col.create_index([("referred_id", 1)])
         
         logger.info("MongoDB connected successfully")
     except Exception as e:
@@ -193,30 +198,128 @@ async def get_user(user_id: int):
         logger.exception("Error fetching user: %s", e)
         return None
 
-async def create_or_update_user(user_id: int, username: str = None, first_name: str = None):
+async def create_or_update_user(user_id: int, username: str = None, first_name: str = None, referred_by: int = None):
     try:
+        # Generate unique referral code for this user
+        referral_code = f"REF{user_id}{secrets.token_hex(3).upper()}"
+        
         doc = {
             "user_id": user_id,
             "username": username,
             "first_name": first_name,
             "joined_at": datetime.now(timezone.utc).isoformat(),
             "plan": "free",
-            "searches_remaining": 0,
+            "searches_remaining": 2,  # 2 free trial credits
             "plan_expiry": None,
             "total_searches": 0,
-            "channel_joined": False
+            "channel_joined": False,
+            "referral_code": referral_code,
+            "referred_by": referred_by,
+            "referral_reward_claimed": False
         }
-        await asyncio.get_running_loop().run_in_executor(
+        
+        result = await asyncio.get_running_loop().run_in_executor(
             None, lambda: users_col.update_one(
                 {"user_id": user_id},
                 {"$setOnInsert": doc},
                 upsert=True
             )
         )
+        
+        # If this is a new user with a referrer, record the referral
+        if result.upserted_id and referred_by:
+            await asyncio.get_running_loop().run_in_executor(
+                None, referrals_col.insert_one, {
+                    "referrer_id": referred_by,
+                    "referred_id": user_id,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "reward_given": False,
+                    "referred_searched": False
+                }
+            )
+            logger.info(f"✨ User {user_id} referred by {referred_by}")
+        
         return await get_user(user_id)
     except Exception as e:
         logger.exception("Error creating user: %s", e)
         return None
+
+async def process_referral_reward(user_id: int):
+    """Give referrer 2 credits when referee completes first search"""
+    try:
+        # Check if this user was referred
+        referral = await asyncio.get_running_loop().run_in_executor(
+            None, referrals_col.find_one, {
+                "referred_id": user_id,
+                "reward_given": False
+            }
+        )
+        
+        if not referral:
+            return False
+        
+        referrer_id = referral['referrer_id']
+        
+        # Give referrer 2 credits
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: users_col.update_one(
+                {"user_id": referrer_id},
+                {"$inc": {"searches_remaining": 2}}
+            )
+        )
+        
+        # Mark reward as given
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: referrals_col.update_one(
+                {"_id": referral['_id']},
+                {"$set": {
+                    "reward_given": True,
+                    "referred_searched": True,
+                    "reward_given_at": datetime.now(timezone.utc).isoformat()
+                }}
+            )
+        )
+        
+        # Notify referrer
+        try:
+            await bot_client.send_message(
+                referrer_id,
+                "🎉 Congratulations!\n\n"
+                "Your referral completed their first search.\n"
+                "You've received 2 bonus credits! 🎁"
+            )
+        except Exception as e:
+            logger.warning(f"Could not notify referrer {referrer_id}: {e}")
+        
+        logger.info(f"✅ Referral reward given: {referrer_id} got 2 credits for referring {user_id}")
+        return True
+        
+    except Exception as e:
+        logger.exception("Error processing referral reward: %s", e)
+        return False
+
+async def get_referral_stats(user_id: int):
+    """Get referral statistics for a user"""
+    try:
+        total_referrals = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: referrals_col.count_documents({"referrer_id": user_id})
+        )
+        
+        rewarded_referrals = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: referrals_col.count_documents({
+                "referrer_id": user_id,
+                "reward_given": True
+            })
+        )
+        
+        return {
+            "total": total_referrals,
+            "rewarded": rewarded_referrals,
+            "pending": total_referrals - rewarded_referrals
+        }
+    except Exception as e:
+        logger.exception("Error getting referral stats: %s", e)
+        return {"total": 0, "rewarded": 0, "pending": 0}
 
 async def update_user_plan(user_id: int, plan: str, searches: int, days: int = None):
     try:
@@ -259,7 +362,7 @@ async def log_search(user_id: int, search_type: str, query: str, result: str):
             "user_id": user_id,
             "search_type": search_type,
             "query": query,
-            "result": result[:500],
+            "result": str(result)[:500],
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
         await asyncio.get_running_loop().run_in_executor(
@@ -314,7 +417,6 @@ def filter_links_and_usernames(text: str):
         r't\.me/[^\s]+',               # Telegram links
         r'[a-zA-Z0-9-]+\.[a-zA-Z]{2,}[^\s]*',  # Domain names
         r'@[\w]{2,32}',                # @usernames
-        r'\b[a-zA-Z0-9_]{5,}\b(?=\s|$)'  # Potential usernames
     ]
     
     cleaned = text
@@ -343,128 +445,52 @@ def filter_links_and_usernames(text: str):
 
 
 def format_phone_api_response(data, phone_number: str):
-    """Format phone API response into readable text"""
+    """Format phone API response - returns JSON data directly without filtering names"""
     try:
-        result = f"📱 Phone Number Information\n\n"
-        result += f"Number: {phone_number}\n\n"
-        
-        # If data has a 'Result' key with list of records
+        # Return the data as-is, only removing promotional fields
         if isinstance(data, dict):
-            # Remove unwanted fields
+            # Only remove promotional/developer fields
             data.pop('Developer', None)
             data.pop('Powered_By', None)
             data.pop('developer', None)
             data.pop('powered_by', None)
-            
-            # Check if there's a Result field with records
-            if 'Result' in data and isinstance(data['Result'], list):
-                records = data['Result']
-                if records:
-                    result += f"Found {len(records)} record(s):\n\n"
-                    
-                    for idx, record in enumerate(records, 1):
-                        if len(records) > 1:
-                            result += f"━━━ Record {idx} ━━━\n"
-                        
-                        # Format each field nicely
-                        if 'name' in record and record['name']:
-                            result += f"👤 Name: {record['name'].strip()}\n"
-                        
-                        if 'mobile' in record and record['mobile']:
-                            result += f"📱 Mobile: {record['mobile']}\n"
-                        
-                        if 'alt_mobile' in record and record['alt_mobile']:
-                            result += f"📞 Alternate: {record['alt_mobile']}\n"
-                        
-                        if 'circle' in record and record['circle']:
-                            result += f"📡 Circle: {record['circle']}\n"
-                        
-                        if 'father_name' in record and record['father_name']:
-                            result += f"👨 Father: {record['father_name']}\n"
-                        
-                        if 'address' in record and record['address']:
-                            # Clean address - replace ! with proper formatting
-                            addr = record['address'].replace('!', ', ').strip(', ')
-                            result += f"📍 Address: {addr}\n"
-                        
-                        if 'email' in record and record['email']:
-                            result += f"📧 Email: {record['email']}\n"
-                        
-                        if 'id_number' in record and record['id_number']:
-                            result += f"🆔 ID: {record['id_number']}\n"
-                        
-                        if idx < len(records):
-                            result += "\n"
-                else:
-                    result += "No records found.\n"
-            else:
-                # Handle other response formats
-                for key, value in data.items():
-                    if key.lower() not in ['status', 'success', 'developer', 'powered_by']:
-                        result += f"{key.replace('_', ' ').title()}: {value}\n"
-        else:
-            result += str(data)
         
-        return filter_links_and_usernames(result)
+        # Return JSON structure directly
+        return {
+            "success": True,
+            "result": data.get('Result', data) if isinstance(data, dict) else data,
+            "developer": ""
+        }
     except Exception as e:
         logger.exception(f"Error formatting phone API response: {e}")
-        return f"📱 Phone Number: {phone_number}\n\nData received but formatting failed."
+        return {
+            "success": False,
+            "error": "Formatting failed",
+            "raw_data": str(data)
+        }
 
 
 def format_vehicle_api_response(data, vehicle_no: str):
-    """Format vehicle API response into readable text"""
+    """Format vehicle API response - returns JSON data directly"""
     try:
-        result = f"🚗 Vehicle Information\n\n"
-        result += f"Vehicle Number: {vehicle_no}\n\n"
-        
         if isinstance(data, dict):
-            # Remove unwanted fields
+            # Only remove promotional fields
             data.pop('Developer', None)
             data.pop('Powered_By', None)
             data.pop('developer', None)
             data.pop('powered_by', None)
-            
-            # Check if there's owner info
-            if 'owner_name' in data and data['owner_name']:
-                result += f"👤 Owner: {data['owner_name']}\n"
-            
-            if 'mobile_number' in data and data['mobile_number']:
-                result += f"📱 Mobile: {data['mobile_number']}\n"
-            
-            if 'father_name' in data and data['father_name']:
-                result += f"👨 Father: {data['father_name']}\n"
-            
-            if 'vehicle_type' in data and data['vehicle_type']:
-                result += f"🚙 Type: {data['vehicle_type']}\n"
-            
-            if 'registration_date' in data and data['registration_date']:
-                result += f"📅 Registration: {data['registration_date']}\n"
-            
-            if 'maker_model' in data and data['maker_model']:
-                result += f"🏭 Make/Model: {data['maker_model']}\n"
-            
-            if 'address' in data and data['address']:
-                addr = data['address'].replace('!', ', ').strip(', ')
-                result += f"📍 Address: {addr}\n"
-            
-            if 'state' in data and data['state']:
-                result += f"🗺️ State: {data['state']}\n"
-            
-            # Add any other fields not explicitly handled
-            skip_keys = ['owner_name', 'mobile_number', 'father_name', 'vehicle_type', 
-                        'registration_date', 'maker_model', 'address', 'state',
-                        'status', 'success', 'developer', 'powered_by']
-            
-            for key, value in data.items():
-                if key.lower() not in skip_keys and value:
-                    result += f"{key.replace('_', ' ').title()}: {value}\n"
-        else:
-            result += str(data)
         
-        return filter_links_and_usernames(result)
+        return {
+            "success": True,
+            "result": data,
+            "developer": ""
+        }
     except Exception as e:
         logger.exception(f"Error formatting vehicle API response: {e}")
-        return f"🚗 Vehicle Number: {vehicle_no}\n\nData received but formatting failed."
+        return {
+            "success": False,
+            "error": "Formatting failed"
+        }
 
 
 async def fetch_phone_api(phone_number: str):
@@ -607,7 +633,7 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                 
                 if api_result:
                     if user_id:
-                        await log_search(user_id, search_type, query, api_result)
+                        await log_search(user_id, search_type, query, json.dumps(api_result))
                     return {"success": True, "result": api_result, "search_type": search_type, "source": "backup"}
             
             # Try API fallback for vehicle numbers
@@ -617,7 +643,7 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                 
                 if api_result:
                     if user_id:
-                        await log_search(user_id, search_type, query, api_result)
+                        await log_search(user_id, search_type, query, json.dumps(api_result))
                     return {"success": True, "result": api_result, "search_type": search_type, "source": "backup"}
             
             return {"success": False, "error": "Request timed out and no backup available"}
@@ -639,6 +665,7 @@ def get_main_menu():
     if row:
         buttons.append(row)
     buttons.append([Button.inline("🔑 API Keys", "api_menu")])
+    buttons.append([Button.inline("👥 Refer & Earn", "refer_menu")])
     return buttons
 
 def get_api_menu():
@@ -673,7 +700,25 @@ async def start_handler(event):
     user = await event.get_sender()
     user_id = user.id
     
-    await create_or_update_user(user_id, user.username, user.first_name)
+    # Extract referral code if present
+    referred_by = None
+    message_text = event.message.text or ""
+    parts = message_text.split()
+    
+    if len(parts) > 1:
+        ref_code = parts[1].strip()
+        # Find referrer by code
+        try:
+            referrer = await asyncio.get_running_loop().run_in_executor(
+                None, users_col.find_one, {"referral_code": ref_code}
+            )
+            if referrer and referrer['user_id'] != user_id:
+                referred_by = referrer['user_id']
+                logger.info(f"👥 User {user_id} joining via referral code {ref_code}")
+        except Exception as e:
+            logger.exception(f"Error processing referral code: {e}")
+    
+    await create_or_update_user(user_id, user.username, user.first_name, referred_by)
     
     if user_id == ADMIN_USER_ID:
         await event.respond(
@@ -704,13 +749,77 @@ async def start_handler(event):
     )
     
     user_doc = await get_user(user_id)
+    ref_stats = await get_referral_stats(user_id)
     
-    await event.respond(
-        f"👋 Welcome {user.first_name}!\n\n"
-        f"📊 Your Plan: {user_doc.get('plan', 'free').upper()}\n"
-        f"🔍 Searches Remaining: {user_doc.get('searches_remaining', 0)}\n\n"
-        f"Select an option below:",
-        buttons=get_main_menu()
+    welcome_msg = f"👋 Welcome {user.first_name}!\n\n"
+    welcome_msg += f"📊 Your Plan: {user_doc.get('plan', 'free').upper()}\n"
+    welcome_msg += f"🔍 Searches Remaining: {user_doc.get('searches_remaining', 0)}\n"
+    
+    if ref_stats['total'] > 0:
+        welcome_msg += f"\n👥 Referrals: {ref_stats['total']} (✅ {ref_stats['rewarded']} rewarded)\n"
+    
+    if referred_by:
+        welcome_msg += f"\n🎁 Welcome! You got 2 free trial credits!\n"
+    
+    welcome_msg += "\nSelect an option below:"
+    
+    await event.respond(welcome_msg, buttons=get_main_menu())
+
+@bot_client.on(events.NewMessage(pattern='/refer'))
+async def refer_handler(event):
+    user_id = event.sender_id
+    user_doc = await get_user(user_id)
+    
+    if not user_doc:
+        await event.respond("❌ User not found. Use /start first.")
+        return
+    
+    ref_code = user_doc.get('referral_code', '')
+    bot_username = (await bot_client.get_me()).username
+    ref_link = f"https://t.me/{bot_username}?start={ref_code}"
+    
+    ref_stats = await get_referral_stats(user_id)
+    
+    msg = f"👥 **Your Referral Program**\n\n"
+    msg += f"🎁 **How it works:**\n"
+    msg += f"• Share your link with friends\n"
+    msg += f"• They get 2 free credits\n"
+    msg += f"• You get 2 credits when they search!\n\n"
+    msg += f"📊 **Your Stats:**\n"
+    msg += f"• Total Referrals: {ref_stats['total']}\n"
+    msg += f"• Credits Earned: {ref_stats['rewarded'] * 2}\n"
+    msg += f"• Pending: {ref_stats['pending']}\n\n"
+    msg += f"🔗 **Your Referral Link:**\n"
+    msg += f"`{ref_link}`\n\n"
+    msg += f"Share this link to earn credits!"
+    
+    await event.respond(msg)
+
+@bot_client.on(events.CallbackQuery(pattern='^refer_menu$'))
+async def refer_menu_callback(event):
+    user_id = event.sender_id
+    user_doc = await get_user(user_id)
+    
+    ref_code = user_doc.get('referral_code', '')
+    bot_username = (await bot_client.get_me()).username
+    ref_link = f"https://t.me/{bot_username}?start={ref_code}"
+    
+    ref_stats = await get_referral_stats(user_id)
+    
+    msg = f"👥 **Refer & Earn Credits**\n\n"
+    msg += f"🎁 **Benefits:**\n"
+    msg += f"• Friend gets 2 free credits\n"
+    msg += f"• You get 2 credits per referral\n\n"
+    msg += f"📊 **Your Stats:**\n"
+    msg += f"Referrals: {ref_stats['total']} | Earned: {ref_stats['rewarded'] * 2} credits\n\n"
+    msg += f"🔗 **Your Link:**\n`{ref_link}`"
+    
+    await event.edit(
+        msg,
+        buttons=[
+            [Button.url("📤 Share Link", f"https://t.me/share/url?url={ref_link}&text=Join this awesome bot and get 2 free searches!")],
+            [Button.inline("🔙 Back", "back_main")]
+        ]
     )
 
 @bot_client.on(events.CallbackQuery(pattern='^api_menu$'))
@@ -1030,7 +1139,7 @@ async def message_handler(event):
                 f"• Recharge to get more credits\n\n"
                 f"**Usage Example:**\n"
                 f"```bash\n"
-                f"curl -X POST https://relay-wzlz.onrender.com/api/search \\\n"
+                f"curl -X POST https://your-api-url.com/api/search \\\n"
                 f"  -H 'X-API-Key: {api_key}' \\\n"
                 f"  -H 'Content-Type: application/json' \\\n"
                 f"  -d '{{\n"
@@ -1096,17 +1205,30 @@ async def message_handler(event):
         await status_msg.delete()
         
         if result['success']:
+            # Format result for display
+            result_data = result['result']
+            
+            # If result is dict (from API), convert to JSON
+            if isinstance(result_data, dict):
+                formatted_result = json.dumps(result_data, indent=2, ensure_ascii=False)
+            else:
+                formatted_result = str(result_data)
+            
             # Show if backup was used
             if result.get('source') == 'backup':
-                await event.respond(f"✅ Result (via backup):\n\n{result['result']}")
+                await event.respond(f"✅ Result (via backup):\n\n```json\n{formatted_result}\n```")
             else:
-                await event.respond(f"✅ Result:\n\n{result['result']}")
+                await event.respond(f"✅ Result:\n\n{formatted_result}")
             
             # Decrement search count for non-admin users
             if user_id != ADMIN_USER_ID:
                 user_doc = await get_user(user_id)
                 if user_doc.get('plan') != 'unlimited':
                     await decrement_search(user_id)
+                
+                # Check if this is first search and process referral reward
+                if user_doc.get('total_searches', 0) == 1:  # Just completed first search
+                    await process_referral_reward(user_id)
         else:
             await event.respond(
                 "❌ This command is not available right now.\n\n"
@@ -1468,6 +1590,11 @@ async def start_bot():
         asyncio.create_task(start_web_server())
 
         logger.info("🚀 Bot is fully operational")
+        logger.info("✨ Features enabled:")
+        logger.info("   - 2 free trial credits for new users")
+        logger.info("   - Referral system (2 credits per successful referral)")
+        logger.info("   - Full data preservation (no name/address filtering)")
+        logger.info("   - API fallback for phone and vehicle searches")
 
         # Keep running forever
         await asyncio.Event().wait()
