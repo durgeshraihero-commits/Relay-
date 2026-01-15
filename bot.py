@@ -1283,8 +1283,8 @@ async def message_handler(event):
                     await decrement_search(user_id)
                 
                 # Check if this is first search and process referral reward
-                if user_doc.get('total_searches', 0) == 1:  # Just completed first search
-                    await process_referral_reward(user_id)
+                if user_doc.get('total_searches', 0) == 0:
+    await process_referral_reward(user_id)
         else:
             await event.respond(
                 "❌ This command is not available right now.\n\n"
@@ -1552,10 +1552,7 @@ async def api_info_handler(request):
     key_info = request['api_key_info']
     user_doc = request['user_doc']
     
-    # Calculate credits remaining
-    if user_doc.get('plan') == 'unlimited':
-        credits_remaining = -1  # Unlimited
-        plan_status = "Unlimited"
+    
     else:
         credits_remaining = user_doc.get('searches_remaining', 0)
         plan_status = user_doc.get('plan', 'free').upper()
@@ -1572,17 +1569,24 @@ async def api_info_handler(request):
     })
 
 async def api_types_handler(request):
-    """List available search types"""
+    user_doc = request.get("user_doc")  # assuming middleware sets this
+
+    if user_doc.get("plan") == "unlimited":
+        credits_remaining = -1
+        plan_status = "Unlimited"
+    else:
+        credits_remaining = user_doc.get("searches_remaining", 0)
+        plan_status = user_doc.get("plan", "free")
+
     return web.json_response({
         "success": True,
+        "plan": plan_status,
+        "credits_remaining": credits_remaining,
         "search_types": {
-            key: info['name'] 
+            key: info["name"]
             for key, info in SEARCH_COMMANDS.items()
         }
     })
-
-async def health_check(request):
-    return web.Response(text="OK", status=200)
 
 # ============ Web Server ============
 
