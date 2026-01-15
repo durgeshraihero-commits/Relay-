@@ -99,8 +99,8 @@ def init_mongo():
         api_keys_col = db["api_keys"]
         referrals_col = db["referrals"]
         
+        # Create indexes
         users_col.create_index([("user_id", 1)], unique=True)
-        users_col.create_index([("referral_code", 1)], unique=True)
         payments_col.create_index([("user_id", 1)])
         searches_col.create_index([("user_id", 1)])
         api_keys_col.create_index([("api_key", 1)], unique=True)
@@ -108,10 +108,66 @@ def init_mongo():
         referrals_col.create_index([("referrer_id", 1)])
         referrals_col.create_index([("referred_id", 1)])
         
+        # Migrate existing users to add referral codes
+        migrate_existing_users()
+        
+        # Now create the unique index on referral_code (after migration)
+        try:
+            users_col.create_index([("referral_code", 1)], unique=True, sparse=True)
+        except Exception as e:
+            logger.warning(f"Referral code index already exists or error: {e}")
+        
         logger.info("MongoDB connected successfully")
     except Exception as e:
         logger.exception("MongoDB connection failed: %s", e)
         raise
+
+def migrate_existing_users():
+    """Add referral codes to existing users who don't have them"""
+    try:
+        # Find users without referral codes
+        users_without_codes = users_col.find({"referral_code": {"$exists": False}})
+        count = 0
+        
+        for user in users_without_codes:
+            user_id = user['user_id']
+            referral_code = f"REF{user_id}{secrets.token_hex(3).upper()}"
+            
+            users_col.update_one(
+                {"user_id": user_id},
+                {
+                    "$set": {
+                        "referral_code": referral_code,
+                        "referred_by": None,
+                        "referral_reward_claimed": False
+                    }
+                }
+            )
+            count += 1
+        
+        # Also update users with null referral codes
+        users_with_null = users_col.find({"referral_code": None})
+        for user in users_with_null:
+            user_id = user['user_id']
+            referral_code = f"REF{user_id}{secrets.token_hex(3).upper()}"
+            
+            users_col.update_one(
+                {"user_id": user_id},
+                {
+                    "$set": {
+                        "referral_code": referral_code,
+                        "referred_by": None,
+                        "referral_reward_claimed": False
+                    }
+                }
+            )
+            count += 1
+        
+        if count > 0:
+            logger.info(f"✅ Migrated {count} existing users with referral codes")
+        
+    except Exception as e:
+        logger.exception(f"Error migrating existing users: {e}")
 
 # ============ API Key Management ============
 
