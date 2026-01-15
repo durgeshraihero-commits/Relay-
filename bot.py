@@ -1256,42 +1256,46 @@ async def message_handler(event):
         status_msg = await event.respond("⏳ Fetching information... Please wait.")
         
         # Perform search using core function
-        result = await perform_search(search_type, query, user_id)
-        
-        await status_msg.delete()
-        
-        if result['success']:
-            # Format result for display
-            result_data = result['result']
-            
-            # If result is dict (from API), convert to JSON
-            if isinstance(result_data, dict):
-                formatted_result = json.dumps(result_data, indent=2, ensure_ascii=False)
-            else:
-                formatted_result = str(result_data)
-            
-            # Show if backup was used
-            if result.get('source') == 'backup':
-                await event.respond(f"✅ Result (via backup):\n\n```json\n{formatted_result}\n```")
-            else:
-                await event.respond(f"✅ Result:\n\n{formatted_result}")
-            
-            # Decrement search count for non-admin users
-            if user_id != ADMIN_USER_ID:
-                user_doc = await get_user(user_id)
-                if user_doc.get('plan') != 'unlimited':
-                    await decrement_search(user_id)
-                
-                # Check if this is first search and process referral reward
-                if user_doc.get('total_searches', 0) == 0:
-    await process_referral_reward(user_id)
-        else:
-            await event.respond(
-                "❌ This command is not available right now.\n\n"
-                "We're working to bring it back soon. Please try again later."
-            )
-        
-        user_states.pop(user_id, None)
+result = await perform_search(search_type, query, user_id)
+
+await status_msg.delete()
+
+if result['success']:
+    # Format result for display
+    result_data = result['result']
+
+    # If result is dict (from API), convert to JSON
+    if isinstance(result_data, dict):
+        formatted_result = json.dumps(result_data, indent=2, ensure_ascii=False)
+    else:
+        formatted_result = str(result_data)
+
+    # Show if backup was used
+    if result.get('source') == 'backup':
+        await event.respond(
+            f"✅ Result (via backup):\n\n```json\n{formatted_result}\n```"
+        )
+    else:
+        await event.respond(f"✅ Result:\n\n{formatted_result}")
+
+    # Decrement search count for non-admin users
+    if user_id != ADMIN_USER_ID:
+        user_doc = await get_user(user_id)
+
+        if user_doc.get('plan') != 'unlimited':
+            await decrement_search(user_id)
+
+        # Check if this is first search and process referral reward
+        if user_doc.get('total_searches', 0) == 0:
+            await process_referral_reward(user_id)
+
+else:
+    await event.respond(
+        "❌ This command is not available right now.\n\n"
+        "We're working to bring it back soon. Please try again later."
+    )
+
+user_states.pop(user_id, None)
 
 @user_client.on(events.NewMessage(chats=DESTINATION_GROUP))
 async def handle_destination_reply(event):
