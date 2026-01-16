@@ -503,43 +503,61 @@ async def update_payment_screenshot(payment_id: str, file_id: str):
         return False
 
 # ============ Text Cleaning ============
+# ============ Text Cleaning ============
 
 def filter_links_and_usernames(text: str):
-    """Remove links, usernames, and promotional content from text"""
+    """
+    Remove ONLY:
+    - URLs
+    - Telegram links
+    - Telegram usernames
+    - Known promo tags
+    KEEP all OSINT data intact
+    """
     if not text:
         return text
-    
+
     patterns = [
-        r'https?://[^\s]+',           # HTTP/HTTPS links
-        r'www\.[^\s]+',                # www links
-        r't\.me/[^\s]+',               # Telegram links
-        r'[a-zA-Z0-9-]+\.[a-zA-Z]{2,}[^\s]*',  # Domain names
-        r'@[\w]{2,32}',                # @usernames
-        r'\b[a-zA-Z0-9_]{5,}\b(?=\s|$)'  # Potential usernames
+        r'https?://[^\s]+',          # http / https links
+        r'www\.[^\s]+',              # www links
+        r't\.me/[^\s]+',             # telegram links
+        r'@[a-zA-Z0-9_]{3,32}',      # telegram usernames only
+        r'\bfrappeash\.?\b',         # specific promo word
+        r'\bzerocyph\.?\b',          # specific promo word
     ]
-    
+
     cleaned = text
     for p in patterns:
         cleaned = re.sub(p, '', cleaned, flags=re.IGNORECASE)
-    
-    lines = cleaned.splitlines()
-    filtered_lines = []
+
     promotional = [
-        'use these commands', 'join our', 'visit our', '💬 use', 
-        'commands in', 'contact us', 'follow us', 'subscribe',
-        'click here', 'check out', 'visit us', 'join us'
+        'use these commands',
+        'join our',
+        'visit our',
+        'contact us',
+        'follow us',
+        'subscribe',
+        'click here',
+        'check out',
+        'telegram channel',
+        'telegram group'
     ]
-    
+
+    lines = cleaned.splitlines()
+    safe_lines = []
+
     for line in lines:
         l = line.strip()
-        if not l or any(k in l.lower() for k in promotional):
+        if not l:
             continue
-        filtered_lines.append(line)
-    
-    cleaned = "\n".join(filtered_lines)
+        if any(k in l.lower() for k in promotional):
+            continue
+        safe_lines.append(line)
+
+    cleaned = "\n".join(safe_lines)
     cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
     cleaned = re.sub(r' {2,}', ' ', cleaned).strip()
-    
+
     return cleaned
 
 
@@ -548,48 +566,47 @@ def format_phone_api_response(data, phone_number: str):
     try:
         result = f"📱 Phone Number Information\n\n"
         result += f"Number: {phone_number}\n\n"
-        
+
         if isinstance(data, dict):
-            # Remove unwanted fields
             data.pop('Developer', None)
             data.pop('Powered_By', None)
             data.pop('developer', None)
             data.pop('powered_by', None)
-            
+
             if 'Result' in data and isinstance(data['Result'], list):
                 records = data['Result']
                 if records:
                     result += f"Found {len(records)} record(s):\n\n"
-                    
+
                     for idx, record in enumerate(records, 1):
                         if len(records) > 1:
                             result += f"━━━ Record {idx} ━━━\n"
-                        
-                        if 'name' in record and record['name']:
+
+                        if record.get('name'):
                             result += f"👤 Name: {record['name'].strip()}\n"
-                        
-                        if 'mobile' in record and record['mobile']:
+
+                        if record.get('mobile'):
                             result += f"📱 Mobile: {record['mobile']}\n"
-                        
-                        if 'alt_mobile' in record and record['alt_mobile']:
-                            result += f"📞 Alternate: {record['alt_mobile']}\n"
-                        
-                        if 'circle' in record and record['circle']:
+
+                        if record.get('alt_mobile'):
+                            result += f"📞 Alt Mobile: {record['alt_mobile']}\n"
+
+                        if record.get('circle'):
                             result += f"📡 Circle: {record['circle']}\n"
-                        
-                        if 'father_name' in record and record['father_name']:
+
+                        if record.get('father_name'):
                             result += f"👨 Father: {record['father_name']}\n"
-                        
-                        if 'address' in record and record['address']:
+
+                        if record.get('address'):
                             addr = record['address'].replace('!', ', ').strip(', ')
                             result += f"📍 Address: {addr}\n"
-                        
-                        if 'email' in record and record['email']:
+
+                        if record.get('email'):
                             result += f"📧 Email: {record['email']}\n"
-                        
-                        if 'id_number' in record and record['id_number']:
+
+                        if record.get('id_number'):
                             result += f"🆔 ID: {record['id_number']}\n"
-                        
+
                         if idx < len(records):
                             result += "\n"
                 else:
@@ -600,11 +617,12 @@ def format_phone_api_response(data, phone_number: str):
                         result += f"{key.replace('_', ' ').title()}: {value}\n"
         else:
             result += str(data)
-        
+
         return filter_links_and_usernames(result)
+
     except Exception as e:
         logger.exception(f"Error formatting phone API response: {e}")
-        return f"📱 Phone Number: {phone_number}\n\nData received but formatting failed."
+        return f"📱 Phone Number: {phone_number}\n\nFormatting failed."
 
 
 def format_vehicle_api_response(data, vehicle_no: str):
@@ -612,96 +630,50 @@ def format_vehicle_api_response(data, vehicle_no: str):
     try:
         result = f"🚗 Vehicle Information\n\n"
         result += f"Vehicle Number: {vehicle_no}\n\n"
-        
+
         if isinstance(data, dict):
             data.pop('Developer', None)
             data.pop('Powered_By', None)
             data.pop('developer', None)
             data.pop('powered_by', None)
-            
-            if 'owner_name' in data and data['owner_name']:
+
+            if data.get('owner_name'):
                 result += f"👤 Owner: {data['owner_name']}\n"
-            
-            if 'mobile_number' in data and data['mobile_number']:
-                result += f"📱 Mobile: {data['mobile_number']}\n"
-            
-            if 'father_name' in data and data['father_name']:
+
+            if data.get('father_name'):
                 result += f"👨 Father: {data['father_name']}\n"
-            
-            if 'vehicle_type' in data and data['vehicle_type']:
-                result += f"🚙 Type: {data['vehicle_type']}\n"
-            
-            if 'registration_date' in data and data['registration_date']:
-                result += f"📅 Registration: {data['registration_date']}\n"
-            
-            if 'maker_model' in data and data['maker_model']:
-                result += f"🏭 Make/Model: {data['maker_model']}\n"
-            
-            if 'address' in data and data['address']:
+
+            if data.get('mobile_number'):
+                result += f"📱 Mobile: {data['mobile_number']}\n"
+
+            if data.get('address'):
                 addr = data['address'].replace('!', ', ').strip(', ')
                 result += f"📍 Address: {addr}\n"
-            
-            if 'state' in data and data['state']:
+
+            if data.get('state'):
                 result += f"🗺️ State: {data['state']}\n"
-            
-            skip_keys = ['owner_name', 'mobile_number', 'father_name', 'vehicle_type', 
-                        'registration_date', 'maker_model', 'address', 'state',
-                        'status', 'success', 'developer', 'powered_by']
-            
-            for key, value in data.items():
-                if key.lower() not in skip_keys and value:
-                    result += f"{key.replace('_', ' ').title()}: {value}\n"
-        else:
-            result += str(data)
-        
+
+            if data.get('maker_model'):
+                result += f"🏭 Make/Model: {data['maker_model']}\n"
+
+            if data.get('registration_date'):
+                result += f"📅 Registration Date: {data['registration_date']}\n"
+
+            skip = {
+                'owner_name', 'father_name', 'mobile_number', 'address',
+                'state', 'maker_model', 'registration_date',
+                'status', 'success', 'developer', 'powered_by'
+            }
+
+            for k, v in data.items():
+                if k not in skip and v:
+                    result += f"{k.replace('_', ' ').title()}: {v}\n"
+
         return filter_links_and_usernames(result)
+
     except Exception as e:
         logger.exception(f"Error formatting vehicle API response: {e}")
-        return f"🚗 Vehicle Number: {vehicle_no}\n\nData received but formatting failed."
-
-
-async def fetch_phone_api(phone_number: str):
-    """New phone API for phone number lookup"""
-    try:
-        clean_number = re.sub(r'[^\d]', '', phone_number)
-        
-        async with ClientSession() as session:
-            url = f"{PHONE_API_URL}?key={PHONE_API_KEY}&mobile={clean_number}"
-            async with session.get(url, timeout=30) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    return format_phone_api_response(data, clean_number)
-                else:
-                    logger.warning(f"Phone API returned status {response.status}")
-                    return None
-    except asyncio.TimeoutError:
-        logger.error("Phone API timeout")
-        return None
-    except Exception as e:
-        logger.exception(f"Error fetching phone API: {e}")
-        return None
-
-
-async def fetch_vehicle_api(vehicle_no: str):
-    """Fallback API for vehicle lookup"""
-    try:
-        clean_vehicle = vehicle_no.strip().upper()
-        
-        async with ClientSession() as session:
-            url = f"{VEHICLE_API_URL}?key={VEHICLE_API_KEY}&vehicle_no={clean_vehicle}"
-            async with session.get(url, timeout=30) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    return format_vehicle_api_response(data, clean_vehicle)
-                else:
-                    logger.warning(f"Vehicle API returned status {response.status}")
-                    return None
-    except asyncio.TimeoutError:
-        logger.error("Vehicle API timeout")
-        return None
-    except Exception as e:
-        logger.exception(f"Error fetching vehicle API: {e}")
-        return None
+        return f"🚗 Vehicle Number: {vehicle_no}\n\nFormatting failed."
 
 # ============ Command Mapping ============
 
