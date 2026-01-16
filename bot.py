@@ -624,56 +624,155 @@ def format_phone_api_response(data, phone_number: str):
         logger.exception(f"Error formatting phone API response: {e}")
         return f"📱 Phone Number: {phone_number}\n\nFormatting failed."
 
-
 def format_vehicle_api_response(data, vehicle_no: str):
-    """Format vehicle API response into readable text"""
+    """Format vehicle / IntelX API response into full readable text"""
     try:
-        result = f"🚗 Vehicle Information\n\n"
-        result += f"Vehicle Number: {vehicle_no}\n\n"
+        result = (
+            "╔══════════════════════════════════╗\n"
+            f"║  🚗 VEHICLE DETAILS: {vehicle_no} ║\n"
+            "╚══════════════════════════════════╝\n\n"
+        )
 
-        if isinstance(data, dict):
-            data.pop('Developer', None)
-            data.pop('Powered_By', None)
-            data.pop('developer', None)
-            data.pop('powered_by', None)
+        if not isinstance(data, dict):
+            return "❌ Invalid vehicle data received."
 
-            if data.get('owner_name'):
-                result += f"👤 Owner: {data['owner_name']}\n"
+        # --- Clean meta keys ---
+        for k in ('Developer', 'Powered_By', 'developer', 'powered_by', 'success', 'status'):
+            data.pop(k, None)
 
-            if data.get('father_name'):
-                result += f"👨 Father: {data['father_name']}\n"
+        # --- OWNER INFO ---
+        owner = data.get('owner_name') or data.get('owner')
+        father = data.get('father_name')
+        mobile = data.get('mobile_number') or data.get('mobile')
 
-            if data.get('mobile_number'):
-                result += f"📱 Mobile: {data['mobile_number']}\n"
+        if owner or father or mobile:
+            result += "┌─ 👤 OWNER INFORMATION ─┐\n"
+            if owner:
+                result += f" Owner Name: {owner}\n"
+            if father:
+                result += f" Father's Name: {father}\n"
+            if mobile:
+                result += f" Mobile Number: {mobile}\n"
+            result += "└───────────────────────┘\n\n"
 
-            if data.get('address'):
-                addr = data['address'].replace('!', ', ').strip(', ')
-                result += f"📍 Address: {addr}\n"
+        # --- ADDRESS ---
+        address = data.get('address')
+        state = data.get('state')
 
-            if data.get('state'):
-                result += f"🗺️ State: {data['state']}\n"
+        if address or state:
+            result += "┌─ 🏠 ADDRESS DETAILS ─┐\n"
+            if address:
+                addr = address.replace('!', ', ').strip(', ')
+                result += f" Address: {addr}\n"
+            if state:
+                result += f" State: {state}\n"
+            result += "└───────────────────────┘\n\n"
 
-            if data.get('maker_model'):
-                result += f"🏭 Make/Model: {data['maker_model']}\n"
+        # --- VEHICLE SPECS ---
+        manufacturer = data.get('manufacturer') or data.get('maker')
+        model = data.get('model') or data.get('maker_model')
+        body = data.get('body_type')
+        fuel = data.get('fuel_type')
+        color = data.get('color')
+        mfg = data.get('manufacturing_date')
 
-            if data.get('registration_date'):
-                result += f"📅 Registration Date: {data['registration_date']}\n"
+        if any([manufacturer, model, body, fuel, color, mfg]):
+            result += "┌─ 🔧 VEHICLE SPECIFICATIONS ─┐\n"
+            if manufacturer:
+                result += f" Manufacturer: {manufacturer}\n"
+            if model:
+                result += f" Model: {model}\n"
+            if body:
+                result += f" Body Type: {body}\n"
+            if fuel:
+                result += f" Fuel Type: {fuel}\n"
+            if color:
+                result += f" Color: {color}\n"
+            if mfg:
+                result += f" Manufacturing Date: {mfg}\n"
+            result += "└───────────────────────┘\n\n"
 
-            skip = {
-                'owner_name', 'father_name', 'mobile_number', 'address',
-                'state', 'maker_model', 'registration_date',
-                'status', 'success', 'developer', 'powered_by'
-            }
+        # --- TECHNICAL IDS ---
+        chassis = data.get('chassis_number')
+        engine = data.get('engine_number')
 
-            for k, v in data.items():
-                if k not in skip and v:
-                    result += f"{k.replace('_', ' ').title()}: {v}\n"
+        if chassis or engine:
+            result += "┌─ 🆔 TECHNICAL IDENTIFIERS ─┐\n"
+            if chassis:
+                result += f" Chassis Number: {chassis}\n"
+            if engine:
+                result += f" Engine Number: {engine}\n"
+            result += "└───────────────────────┘\n\n"
+
+        # --- REGISTRATION ---
+        reg_date = data.get('registration_date')
+        reg_valid = data.get('registration_valid_till')
+        rto = data.get('registered_at')
+        fitness = data.get('fitness_valid_till')
+        status = data.get('vehicle_status')
+
+        if any([reg_date, reg_valid, rto, fitness, status]):
+            result += "┌─ 📋 REGISTRATION & VALIDITY ─┐\n"
+            if reg_date:
+                result += f" Registration Date: {reg_date}\n"
+            if reg_valid:
+                result += f" Registration Valid Till: {reg_valid}\n"
+            if rto:
+                result += f" Registered At: {rto}\n"
+            if fitness:
+                result += f" Fitness Valid Till: {fitness}\n"
+            if status:
+                result += f" Status: {status}\n"
+            result += "└───────────────────────┘\n\n"
+
+        # --- INSURANCE / PUC ---
+        insurer = data.get('insurance_company')
+        ins_valid = data.get('insurance_valid_till')
+        policy = data.get('policy_number')
+        puc_no = data.get('puc_number')
+        puc_valid = data.get('puc_valid_till')
+
+        if any([insurer, ins_valid, policy, puc_no, puc_valid]):
+            result += "┌─ 🛡️ INSURANCE & PUC ─┐\n"
+            if insurer:
+                result += f" Insurance Company: {insurer}\n"
+            if ins_valid:
+                result += f" Insurance Valid Till: {ins_valid}\n"
+            if policy:
+                result += f" Policy Number: {policy}\n"
+            if puc_no:
+                result += f" PUC Certificate No: {puc_no}\n"
+            if puc_valid:
+                result += f" PUC Valid Till: {puc_valid}\n"
+            result += "└───────────────────────┘\n\n"
+
+        # --- EXTRA INFO ---
+        value = data.get('resale_value')
+        age = data.get('vehicle_age')
+        norms = data.get('fuel_norms')
+        category = data.get('vehicle_category')
+        rto_code = data.get('rto_code')
+
+        if any([value, age, norms, category, rto_code]):
+            result += "┌─ ℹ️ ADDITIONAL INFORMATION ─┐\n"
+            if value:
+                result += f" Resale Value: {value}\n"
+            if age:
+                result += f" Vehicle Age: {age}\n"
+            if norms:
+                result += f" Fuel Norms: {norms}\n"
+            if category:
+                result += f" Vehicle Category: {category}\n"
+            if rto_code:
+                result += f" RTO Code: {rto_code}\n"
+            result += "└───────────────────────┘\n"
 
         return filter_links_and_usernames(result)
 
     except Exception as e:
-        logger.exception(f"Error formatting vehicle API response: {e}")
+        logger.exception("Vehicle formatter error")
         return f"🚗 Vehicle Number: {vehicle_no}\n\nFormatting failed."
+
 
 # ============ Command Mapping ============
 
