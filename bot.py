@@ -31,8 +31,8 @@ USER_PHONE = os.getenv("USER_PHONE", "").strip()
 
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
 DESTINATION_GROUP = os.getenv("DESTINATION_GROUP", "darkboxesv3")
-DESTINATION_GROUP_2 = os.getenv("DESTINATION_GROUP_2", "nex_chats")  # Second fallback
-DESTINATION_GROUP_3 = os.getenv("DESTINATION_GROUP_3", "epicmoders")  # Third fallback
+DESTINATION_GROUP_2 = os.getenv("DESTINATION_GROUP_2", "")  # Second fallback
+DESTINATION_GROUP_3 = os.getenv("DESTINATION_GROUP_3", "")  # Third fallback
 VEHICLE_GROUP = "IntelXGroup"  # For vehicle to number lookups
 MANDATORY_CHANNEL = os.getenv("MANDATORY_CHANNEL", "darkboxesv1")
 
@@ -107,14 +107,57 @@ def init_mongo():
         api_keys_col = db["api_keys"]
         referrals_col = db["referrals"]
         
-        users_col.create_index([("user_id", 1)], unique=True)
-        users_col.create_index([("referral_code", 1)], unique=True)
-        payments_col.create_index([("user_id", 1)])
-        searches_col.create_index([("user_id", 1)])
-        api_keys_col.create_index([("api_key", 1)], unique=True)
-        api_keys_col.create_index([("user_id", 1)])
-        referrals_col.create_index([("referrer_id", 1)])
-        referrals_col.create_index([("referred_id", 1)])
+        # Create indexes with error handling for existing indexes
+        try:
+            users_col.create_index([("user_id", 1)], unique=True)
+        except Exception as e:
+            if "already exists" not in str(e).lower() and "index" not in str(e).lower():
+                raise
+            logger.info("user_id index already exists, skipping")
+        
+        try:
+            # Drop the old sparse index if it exists and create new one
+            try:
+                users_col.drop_index("referral_code_1")
+                logger.info("Dropped old referral_code index")
+            except:
+                pass
+            users_col.create_index([("referral_code", 1)], unique=True, sparse=True)
+        except Exception as e:
+            if "already exists" not in str(e).lower() and "index" not in str(e).lower():
+                logger.warning(f"Could not create referral_code index: {e}")
+            else:
+                logger.info("referral_code index already exists, skipping")
+        
+        try:
+            payments_col.create_index([("user_id", 1)])
+        except Exception as e:
+            logger.info("payments user_id index already exists, skipping")
+        
+        try:
+            searches_col.create_index([("user_id", 1)])
+        except Exception as e:
+            logger.info("searches user_id index already exists, skipping")
+        
+        try:
+            api_keys_col.create_index([("api_key", 1)], unique=True)
+        except Exception as e:
+            logger.info("api_key index already exists, skipping")
+        
+        try:
+            api_keys_col.create_index([("user_id", 1)])
+        except Exception as e:
+            logger.info("api_keys user_id index already exists, skipping")
+        
+        try:
+            referrals_col.create_index([("referrer_id", 1)])
+        except Exception as e:
+            logger.info("referrer_id index already exists, skipping")
+        
+        try:
+            referrals_col.create_index([("referred_id", 1)])
+        except Exception as e:
+            logger.info("referred_id index already exists, skipping")
         
         logger.info("MongoDB connected successfully")
     except Exception as e:
