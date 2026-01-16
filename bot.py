@@ -30,10 +30,6 @@ USER_API_HASH = os.getenv("USER_API_HASH", "").strip()
 USER_PHONE = os.getenv("USER_PHONE", "").strip()
 
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
-DESTINATION_GROUP = os.getenv("DESTINATION_GROUP", "darkboxesv3")
-DESTINATION_GROUP_2 = os.getenv("DESTINATION_GROUP_2", "nex_chats")  # Second fallback
-DESTINATION_GROUP_3 = os.getenv("DESTINATION_GROUP_3", "epicmoders")  # Third fallback
-VEHICLE_GROUP = "IntelXGroup"  # For vehicle to number lookups
 MANDATORY_CHANNEL = os.getenv("MANDATORY_CHANNEL", "darkboxesv1")
 
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb+srv://prarthanaray147_db_user:fMuTkgFsaHa5NRIy@cluster0.txn8bv3.mongodb.net/tg_bot_db?retryWrites=true&w=majority")
@@ -42,6 +38,7 @@ MONGODB_DBNAME = os.getenv("MONGODB_DBNAME", "tg_bot_db")
 PAYMENT_QR_CODE = os.getenv("PAYMENT_QR_CODE", "https://example.com/payment-qr.png")
 
 FETCH_WAIT_TIME = int(os.getenv("FETCH_WAIT_TIME", "3"))
+GROUP_TIMEOUT = int(os.getenv("GROUP_TIMEOUT", "5"))  # Timeout per group
 REPLY_TIMEOUT = int(os.getenv("REPLY_TIMEOUT", "45"))
 
 # API endpoints
@@ -51,8 +48,8 @@ VEHICLE_API_URL = "https://vehicle-6bh6.onrender.com/vehicle_info"
 VEHICLE_API_KEY = "URSLASH123"
 
 # Referral settings
-REFERRAL_REWARD = 2  # Credits given to referrer
-NEW_USER_CREDITS = 2  # Free trial credits for new users
+REFERRAL_REWARD = 2
+NEW_USER_CREDITS = 2
 
 # ============ Logging ============
 
@@ -77,13 +74,174 @@ logger.info("BOT API_ID: %s", BOT_API_ID)
 logger.info("BOT API_HASH: %s", BOT_API_HASH[:10] + "...")
 logger.info("BOT_TOKEN: %s", BOT_TOKEN[:20] + "...")
 logger.info("ADMIN_USER_ID: %s", ADMIN_USER_ID)
-logger.info("DESTINATION_GROUP: %s", DESTINATION_GROUP)
-logger.info("VEHICLE_GROUP: %s", VEHICLE_GROUP)
 if USE_USER_ACCOUNT:
     logger.info("USER ACCOUNT: Enabled (Phone: %s)", USER_PHONE)
 else:
     logger.info("USER ACCOUNT: Disabled (will use bot to forward)")
 logger.info("=" * 60)
+
+# ============ Destination Groups Configuration ============
+
+DESTINATION_GROUPS = [
+    {
+        "name": "Main Group",
+        "identifier": "darkboxesv3",
+        "timeout": GROUP_TIMEOUT,
+        "entity": None  # Will be resolved at runtime
+    },
+    {
+        "name": "Backup Group 2",
+        "identifier": "nex_chats",
+        "timeout": GROUP_TIMEOUT,
+        "entity": None
+    },
+    {
+        "name": "Backup Group 3",
+        "identifier": "epicmoders",
+        "timeout": GROUP_TIMEOUT,
+        "entity": None
+    }
+]
+
+# Special bot for Telegram username lookup
+TELEGRAM_BOT = {
+    "name": "Telegram Lookup Bot",
+    "identifier": "@YourTelegramLookupBot",  # Replace with actual bot username
+    "timeout": GROUP_TIMEOUT,
+    "entity": None
+}
+
+# Vehicle group
+VEHICLE_GROUP = {
+    "name": "Vehicle Group",
+    "identifier": "IntelXGroup",
+    "timeout": GROUP_TIMEOUT,
+    "entity": None
+}
+
+# ============ Command Mapping with Custom Prefixes ============
+
+SEARCH_COMMANDS = {
+    "phone": {
+        "name": "📱 Phone Number Info",
+        "type": "group",
+        "commands": {
+            0: "/num",      # Main group command
+            1: "/num",      # Backup group 2 command
+            2: "/num"       # Backup group 3 command
+        }
+    },
+    "family": {
+        "name": "👨‍👩‍👧‍👦 Family Info",
+        "type": "group",
+        "commands": {
+            0: "/family",
+            1: "/family",
+            2: "/family"
+        }
+    },
+    "aadhar": {
+        "name": "🆔 Aadhar Info",
+        "type": "group",
+        "commands": {
+            0: "/adh",       # Main group uses /adh
+            1: "/aadhar",    # Backup 2 uses /aadhar
+            2: "/aadhar"     # Backup 3 uses /aadhar
+        }
+    },
+    "vehicle": {
+        "name": "🚗 Vehicle to Phone",
+        "type": "vehicle_group",
+        "commands": {
+            0: "/vnum"  # Vehicle group command
+        }
+    },
+    "vehicle_detail": {
+        "name": "🚙 Vehicle Details",
+        "type": "group",
+        "commands": {
+            0: "/vehicle",
+            1: "/vehicle",
+            2: "/vnum"
+        }
+    },
+    "upi": {
+        "name": "💳 UPI Info",
+        "type": "group",
+        "commands": {
+            0: "/upiinfo",
+            1: "/upiinfo",
+            2: "/upiinfo"
+        }
+    },
+    "fampay": {
+        "name": "💰 Fampay Info",
+        "type": "group",
+        "commands": {
+            0: "/fam",
+            1: "/fam",
+            2: "/fam"
+        }
+    },
+    "email": {
+        "name": "📧 Email Info",
+        "type": "group",
+        "commands": {
+            0: "/email",
+            1: "/email",
+            2: "/email"
+        }
+    },
+    "telegram": {
+        "name": "📲 Telegram to Phone",
+        "type": "telegram_bot",  # Special type for telegram bot
+        "commands": {
+            0: "/tg"  # Command for telegram bot
+        }
+    },
+    "imei": {
+        "name": "📱 IMEI Info",
+        "type": "group",
+        "commands": {
+            0: "/imei",
+            1: "/imei",
+            2: "/imei"
+        }
+    },
+    "pak": {
+        "name": "🇵🇰 Pakistan Info",
+        "type": "group",
+        "commands": {
+            0: "/cnic",
+            1: "/cnic",
+            2: "/cnic"
+        }
+    },
+    "gst": {
+        "name": "🏢 GST Info",
+        "type": "group",
+        "commands": {
+            0: "/gst",
+            1: "/gst",
+            2: "/gst"
+        }
+    },
+    "insta": {
+        "name": "📷 Instagram Info",
+        "type": "group",
+        "commands": {
+            0: "/insta",
+            1: "/insta",
+            2: "/insta"
+        }
+    }
+}
+
+PLANS = {
+    "plan_5": {"searches": 5, "price": 100, "name": "5 Searches", "days": None},
+    "plan_15": {"searches": 15, "price": 200, "name": "15 Searches", "days": None},
+    "plan_week": {"searches": -1, "price": 500, "name": "Unlimited (7 Days)", "days": 7}
+}
 
 # ============ MongoDB ============
 
@@ -107,57 +265,36 @@ def init_mongo():
         api_keys_col = db["api_keys"]
         referrals_col = db["referrals"]
         
-        # Create indexes with error handling for existing indexes
+        # Create indexes with error handling
         try:
             users_col.create_index([("user_id", 1)], unique=True)
         except Exception as e:
-            if "already exists" not in str(e).lower() and "index" not in str(e).lower():
+            if "already exists" not in str(e).lower():
                 raise
-            logger.info("user_id index already exists, skipping")
+            logger.info("user_id index already exists")
         
         try:
-            # Drop the old sparse index if it exists and create new one
             try:
                 users_col.drop_index("referral_code_1")
-                logger.info("Dropped old referral_code index")
             except:
                 pass
             users_col.create_index([("referral_code", 1)], unique=True, sparse=True)
         except Exception as e:
-            if "already exists" not in str(e).lower() and "index" not in str(e).lower():
+            if "already exists" not in str(e).lower():
                 logger.warning(f"Could not create referral_code index: {e}")
-            else:
-                logger.info("referral_code index already exists, skipping")
         
-        try:
-            payments_col.create_index([("user_id", 1)])
-        except Exception as e:
-            logger.info("payments user_id index already exists, skipping")
-        
-        try:
-            searches_col.create_index([("user_id", 1)])
-        except Exception as e:
-            logger.info("searches user_id index already exists, skipping")
+        for col, field in [(payments_col, "user_id"), (searches_col, "user_id"), 
+                           (api_keys_col, "user_id"), (referrals_col, "referrer_id"), 
+                           (referrals_col, "referred_id")]:
+            try:
+                col.create_index([(field, 1)])
+            except:
+                pass
         
         try:
             api_keys_col.create_index([("api_key", 1)], unique=True)
-        except Exception as e:
-            logger.info("api_key index already exists, skipping")
-        
-        try:
-            api_keys_col.create_index([("user_id", 1)])
-        except Exception as e:
-            logger.info("api_keys user_id index already exists, skipping")
-        
-        try:
-            referrals_col.create_index([("referrer_id", 1)])
-        except Exception as e:
-            logger.info("referrer_id index already exists, skipping")
-        
-        try:
-            referrals_col.create_index([("referred_id", 1)])
-        except Exception as e:
-            logger.info("referred_id index already exists, skipping")
+        except:
+            pass
         
         logger.info("MongoDB connected successfully")
     except Exception as e:
@@ -167,17 +304,14 @@ def init_mongo():
 # ============ Referral System ============
 
 def generate_referral_code():
-    """Generate unique referral code"""
     return secrets.token_urlsafe(6).upper()
 
 async def get_or_create_referral_code(user_id: int):
-    """Get or create referral code for user"""
     try:
         user = await get_user(user_id)
         if user and user.get('referral_code'):
             return user['referral_code']
         
-        # Generate new code
         while True:
             code = generate_referral_code()
             existing = await asyncio.get_running_loop().run_in_executor(
@@ -196,9 +330,7 @@ async def get_or_create_referral_code(user_id: int):
         return None
 
 async def apply_referral(referred_user_id: int, referral_code: str):
-    """Apply referral code when new user joins"""
     try:
-        # Find referrer by code
         referrer = await asyncio.get_running_loop().run_in_executor(
             None, users_col.find_one, {"referral_code": referral_code.upper()}
         )
@@ -208,16 +340,13 @@ async def apply_referral(referred_user_id: int, referral_code: str):
         
         referrer_id = referrer['user_id']
         
-        # Don't allow self-referral
         if referrer_id == referred_user_id:
             return False
         
-        # Check if user already used a referral
         user = await get_user(referred_user_id)
         if user.get('referred_by'):
             return False
         
-        # Record referral
         referral_doc = {
             "referrer_id": referrer_id,
             "referred_id": referred_user_id,
@@ -229,7 +358,6 @@ async def apply_referral(referred_user_id: int, referral_code: str):
             None, referrals_col.insert_one, referral_doc
         )
         
-        # Mark user as referred
         await asyncio.get_running_loop().run_in_executor(
             None, lambda: users_col.update_one(
                 {"user_id": referred_user_id},
@@ -243,9 +371,7 @@ async def apply_referral(referred_user_id: int, referral_code: str):
         return False
 
 async def reward_referrer(referred_user_id: int):
-    """Give reward to referrer when referred user uses bot"""
     try:
-        # Find referral record
         referral = await asyncio.get_running_loop().run_in_executor(
             None, referrals_col.find_one, {"referred_id": referred_user_id, "reward_given": False}
         )
@@ -255,7 +381,6 @@ async def reward_referrer(referred_user_id: int):
         
         referrer_id = referral['referrer_id']
         
-        # Give credits to referrer
         await asyncio.get_running_loop().run_in_executor(
             None, lambda: users_col.update_one(
                 {"user_id": referrer_id},
@@ -263,7 +388,6 @@ async def reward_referrer(referred_user_id: int):
             )
         )
         
-        # Mark reward as given
         await asyncio.get_running_loop().run_in_executor(
             None, lambda: referrals_col.update_one(
                 {"_id": referral['_id']},
@@ -271,7 +395,6 @@ async def reward_referrer(referred_user_id: int):
             )
         )
         
-        # Notify referrer
         try:
             await bot_client.send_message(
                 referrer_id,
@@ -288,7 +411,6 @@ async def reward_referrer(referred_user_id: int):
         return False
 
 async def get_referral_stats(user_id: int):
-    """Get referral statistics for user"""
     try:
         total_referrals = await asyncio.get_running_loop().run_in_executor(
             None, lambda: referrals_col.count_documents({"referrer_id": user_id})
@@ -310,7 +432,6 @@ async def get_referral_stats(user_id: int):
 # ============ API Key Management ============
 
 async def create_api_key(user_id: int, name: str = "Default Key"):
-    """Create a new API key for a user - uses creator's credit balance"""
     try:
         api_key = f"sk_{secrets.token_urlsafe(32)}"
         doc = {
@@ -331,7 +452,6 @@ async def create_api_key(user_id: int, name: str = "Default Key"):
         return None
 
 async def get_api_key_info(api_key: str):
-    """Get API key information"""
     try:
         return await asyncio.get_running_loop().run_in_executor(
             None, api_keys_col.find_one, {"api_key": api_key}
@@ -341,7 +461,6 @@ async def get_api_key_info(api_key: str):
         return None
 
 async def list_user_api_keys(user_id: int):
-    """List all API keys for a user"""
     try:
         cursor = api_keys_col.find({"user_id": user_id})
         return await asyncio.get_running_loop().run_in_executor(
@@ -352,7 +471,6 @@ async def list_user_api_keys(user_id: int):
         return []
 
 async def delete_api_key(api_key: str, user_id: int):
-    """Delete an API key"""
     try:
         result = await asyncio.get_running_loop().run_in_executor(
             None, lambda: api_keys_col.delete_one(
@@ -365,7 +483,6 @@ async def delete_api_key(api_key: str, user_id: int):
         return False
 
 async def increment_api_key_usage(api_key: str):
-    """Increment API key usage counter"""
     try:
         await asyncio.get_running_loop().run_in_executor(
             None, lambda: api_keys_col.update_one(
@@ -400,7 +517,7 @@ async def create_or_update_user(user_id: int, username: str = None, first_name: 
             "first_name": first_name,
             "joined_at": datetime.now(timezone.utc).isoformat(),
             "plan": "free",
-            "searches_remaining": NEW_USER_CREDITS,  # Give free trial credits
+            "searches_remaining": NEW_USER_CREDITS,
             "plan_expiry": None,
             "total_searches": 0,
             "channel_joined": False,
@@ -503,27 +620,18 @@ async def update_payment_screenshot(payment_id: str, file_id: str):
         return False
 
 # ============ Text Cleaning ============
-# ============ Text Cleaning ============
 
 def filter_links_and_usernames(text: str):
-    """
-    Remove ONLY:
-    - URLs
-    - Telegram links
-    - Telegram usernames
-    - Known promo tags
-    KEEP all OSINT data intact
-    """
     if not text:
         return text
 
     patterns = [
-        r'https?://[^\s]+',          # http / https links
-        r'www\.[^\s]+',              # www links
-        r't\.me/[^\s]+',             # telegram links
-        r'@[a-zA-Z0-9_]{3,32}',      # telegram usernames only
-        r'\bfrappeash\.?\b',         # specific promo word
-        r'\bzerocyph\.?\b',          # specific promo word
+        r'https?://[^\s]+',
+        r'www\.[^\s]+',
+        r't\.me/[^\s]+',
+        r'@[a-zA-Z0-9_]{3,32}',
+        r'\bfrappeash\.?\b',
+        r'\bzerocyph\.?\b',
     ]
 
     cleaned = text
@@ -560,12 +668,9 @@ def filter_links_and_usernames(text: str):
 
     return cleaned
 
-
 def format_phone_api_response(data, phone_number: str):
-    """Format phone API response into readable text"""
     try:
-        result = f"📱 Phone Number Information\n\n"
-        result += f"Number: {phone_number}\n\n"
+        result = f"📱 Phone Number Information\n\nNumber: {phone_number}\n\n"
 
         if isinstance(data, dict):
             data.pop('Developer', None)
@@ -584,26 +689,19 @@ def format_phone_api_response(data, phone_number: str):
 
                         if record.get('name'):
                             result += f"👤 Name: {record['name'].strip()}\n"
-
                         if record.get('mobile'):
                             result += f"📱 Mobile: {record['mobile']}\n"
-
                         if record.get('alt_mobile'):
                             result += f"📞 Alt Mobile: {record['alt_mobile']}\n"
-
                         if record.get('circle'):
                             result += f"📡 Circle: {record['circle']}\n"
-
                         if record.get('father_name'):
                             result += f"👨 Father: {record['father_name']}\n"
-
                         if record.get('address'):
                             addr = record['address'].replace('!', ', ').strip(', ')
                             result += f"📍 Address: {addr}\n"
-
                         if record.get('email'):
                             result += f"📧 Email: {record['email']}\n"
-
                         if record.get('id_number'):
                             result += f"🆔 ID: {record['id_number']}\n"
 
@@ -625,7 +723,6 @@ def format_phone_api_response(data, phone_number: str):
         return f"📱 Phone Number: {phone_number}\n\nFormatting failed."
 
 def format_vehicle_api_response(data, vehicle_no: str):
-    """Format vehicle / IntelX API response into full readable text"""
     try:
         result = (
             "╔══════════════════════════════════╗\n"
@@ -636,11 +733,9 @@ def format_vehicle_api_response(data, vehicle_no: str):
         if not isinstance(data, dict):
             return "❌ Invalid vehicle data received."
 
-        # --- Clean meta keys ---
         for k in ('Developer', 'Powered_By', 'developer', 'powered_by', 'success', 'status'):
             data.pop(k, None)
 
-        # --- OWNER INFO ---
         owner = data.get('owner_name') or data.get('owner')
         father = data.get('father_name')
         mobile = data.get('mobile_number') or data.get('mobile')
@@ -655,7 +750,6 @@ def format_vehicle_api_response(data, vehicle_no: str):
                 result += f" Mobile Number: {mobile}\n"
             result += "└───────────────────────┘\n\n"
 
-        # --- ADDRESS ---
         address = data.get('address')
         state = data.get('state')
 
@@ -668,7 +762,6 @@ def format_vehicle_api_response(data, vehicle_no: str):
                 result += f" State: {state}\n"
             result += "└───────────────────────┘\n\n"
 
-        # --- VEHICLE SPECS ---
         manufacturer = data.get('manufacturer') or data.get('maker')
         model = data.get('model') or data.get('maker_model')
         body = data.get('body_type')
@@ -692,7 +785,6 @@ def format_vehicle_api_response(data, vehicle_no: str):
                 result += f" Manufacturing Date: {mfg}\n"
             result += "└───────────────────────┘\n\n"
 
-        # --- TECHNICAL IDS ---
         chassis = data.get('chassis_number')
         engine = data.get('engine_number')
 
@@ -704,7 +796,6 @@ def format_vehicle_api_response(data, vehicle_no: str):
                 result += f" Engine Number: {engine}\n"
             result += "└───────────────────────┘\n\n"
 
-        # --- REGISTRATION ---
         reg_date = data.get('registration_date')
         reg_valid = data.get('registration_valid_till')
         rto = data.get('registered_at')
@@ -725,7 +816,6 @@ def format_vehicle_api_response(data, vehicle_no: str):
                 result += f" Status: {status}\n"
             result += "└───────────────────────┘\n\n"
 
-        # --- INSURANCE / PUC ---
         insurer = data.get('insurance_company')
         ins_valid = data.get('insurance_valid_till')
         policy = data.get('policy_number')
@@ -746,7 +836,6 @@ def format_vehicle_api_response(data, vehicle_no: str):
                 result += f" PUC Valid Till: {puc_valid}\n"
             result += "└───────────────────────┘\n\n"
 
-        # --- EXTRA INFO ---
         value = data.get('resale_value')
         age = data.get('vehicle_age')
         norms = data.get('fuel_norms')
@@ -773,31 +862,6 @@ def format_vehicle_api_response(data, vehicle_no: str):
         logger.exception("Vehicle formatter error")
         return f"🚗 Vehicle Number: {vehicle_no}\n\nFormatting failed."
 
-
-# ============ Command Mapping ============
-
-SEARCH_COMMANDS = {
-    "phone": {"cmd": "/num", "name": "📱 Phone Number Info", "groups": ["main", "backup2", "backup3"]},
-    "family": {"cmd": "/family", "name": "👨‍👩‍👧‍👦 Family Info", "groups": ["main", "backup2", "backup3"]},
-    "aadhar": {"cmd": "/aadhar", "name": "🆔 Aadhar Info", "groups": ["main", "backup2", "backup3"]},
-    "vehicle": {"cmd": "/vnum", "name": "🚗 Vehicle to Phone", "groups": ["vehicle"]},
-    "vehicle_detail": {"cmd": "/vehicle", "name": "🚙 Vehicle Details", "groups": ["main", "backup3"]},
-    "upi": {"cmd": "/upiinfo", "name": "💳 UPI Info", "groups": ["main", "backup2", "backup3"]},
-    "fampay": {"cmd": "/fam", "name": "💰 Fampay Info", "groups": ["main"]},
-    "email": {"cmd": "/email", "name": "📧 Email Info", "groups": ["main", "backup2", "backup3"]},
-    "telegram": {"cmd": "/tg", "name": "📲 Telegram to Phone", "groups": ["main"]},
-    "imei": {"cmd": "/imei", "name": "📱 IMEI Info", "groups": ["main", "backup2", "backup3"]},
-    "pak": {"cmd": "/cnic", "name": "🇵🇰 Pakistan Info", "groups": ["main", "backup2", "backup3"]},
-    "gst": {"cmd": "/gst", "name": "🏢 GST Info", "groups": ["main"]},
-    "insta": {"cmd": "/insta", "name": "📷 Instagram Info", "groups": ["main", "backup2", "backup3"]}
-}
-
-PLANS = {
-    "plan_5": {"searches": 5, "price": 100, "name": "5 Searches", "days": None},
-    "plan_15": {"searches": 15, "price": 200, "name": "15 Searches", "days": None},
-    "plan_week": {"searches": -1, "price": 500, "name": "Unlimited (7 Days)", "days": 7}
-}
-
 # ============ Bot State ============
 
 user_states = {}
@@ -812,11 +876,6 @@ if USE_USER_ACCOUNT:
 else:
     user_client = bot_client
 
-DEST_ENTITY = None
-DEST_ENTITY_2 = None
-DEST_ENTITY_3 = None
-VEHICLE_ENTITY = None
-
 async def check_channel_membership(user_id: int):
     try:
         participant = await bot_client.get_permissions(MANDATORY_CHANNEL, user_id)
@@ -825,42 +884,54 @@ async def check_channel_membership(user_id: int):
         logger.exception("Error checking channel membership: %s", e)
         return False
 
-# ============ Core Search Function ============
+# ============ Core Search Function with Timeout-Based Fallback ============
 
 async def perform_search(search_type: str, query: str, user_id: int = None):
-    """Core search function with multiple destination group fallback"""
+    """
+    Core search function with timeout-based fallback to multiple groups
+    Tries each group with timeout, moves to next if timeout occurs
+    """
     
     if search_type not in SEARCH_COMMANDS:
         return {"success": False, "error": "Invalid search type"}
     
     command_info = SEARCH_COMMANDS[search_type]
-    command = f"{command_info['cmd']} {query}"
-    group_types = command_info.get('groups', ['main'])
+    search_dest_type = command_info.get('type', 'group')
     
-    # Determine which groups to try
-    destination_entities = []
-    if 'vehicle' in group_types:
-        destination_entities = [VEHICLE_ENTITY]
+    # Determine destination based on type
+    if search_dest_type == 'telegram_bot':
+        # Special handling for telegram bot
+        return await perform_telegram_bot_search(query, user_id)
+    elif search_dest_type == 'vehicle_group':
+        # Use vehicle group
+        destinations = [VEHICLE_GROUP]
     else:
-        if 'main' in group_types and DEST_ENTITY:
-            destination_entities.append(DEST_ENTITY)
-        if 'backup2' in group_types and DEST_ENTITY_2:
-            destination_entities.append(DEST_ENTITY_2)
-        if 'backup3' in group_types and DEST_ENTITY_3:
-            destination_entities.append(DEST_ENTITY_3)
+        # Use regular destination groups
+        destinations = DESTINATION_GROUPS
     
-    if not destination_entities:
-        destination_entities = [DEST_ENTITY]  # Fallback to main
-    
-    # Try each destination group
-    for idx, dest_entity in enumerate(destination_entities):
+    # Try each destination with timeout
+    for idx, dest_config in enumerate(destinations):
+        dest_entity = dest_config.get('entity')
+        
         if not dest_entity:
+            logger.warning(f"Destination {idx} ({dest_config['name']}) not resolved, skipping")
             continue
-            
+        
+        # Get the appropriate command for this group
+        command_prefix = command_info['commands'].get(idx)
+        if not command_prefix:
+            logger.warning(f"No command configured for {search_type} in group {idx}")
+            continue
+        
+        command = f"{command_prefix} {query}"
+        timeout = dest_config.get('timeout', GROUP_TIMEOUT)
+        
         try:
+            # Send command to destination
             forwarded = await user_client.send_message(dest_entity, command)
-            logger.info(f"📤 Sent to destination group {idx+1}: {command}")
+            logger.info(f"📤 Sent to {dest_config['name']} (Group {idx}): {command}")
             
+            # Create future for this search
             future = asyncio.get_running_loop().create_future()
             search_id = f"{forwarded.id}_{int(time.time() * 1000)}_{idx}"
             
@@ -870,13 +941,15 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                 "query": query,
                 "search_type": search_type,
                 "timestamp": time.time(),
-                "group_index": idx
+                "group_index": idx,
+                "group_name": dest_config['name']
             }
             
-            logger.info(f"🔍 Registered search {search_id} in group {idx+1}")
+            logger.info(f"🔍 Registered search {search_id} in {dest_config['name']}")
             
             try:
-                result = await asyncio.wait_for(future, timeout=REPLY_TIMEOUT)
+                # Wait for result with timeout
+                result = await asyncio.wait_for(future, timeout=timeout)
                 cleaned = filter_links_and_usernames(result)
                 
                 if not cleaned.strip():
@@ -885,46 +958,153 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                 if user_id:
                     await log_search(user_id, search_type, query, cleaned)
                 
-                return {"success": True, "result": cleaned, "search_type": search_type, "source": f"group_{idx+1}"}
+                logger.info(f"✅ Success from {dest_config['name']}")
+                return {
+                    "success": True, 
+                    "result": cleaned, 
+                    "search_type": search_type, 
+                    "source": dest_config['name'],
+                    "group_index": idx
+                }
                 
             except asyncio.TimeoutError:
+                # Clean up this search
                 pending_searches.pop(search_id, None)
-                logger.warning(f"⏱️ Timeout for search in group {idx+1}: {search_type} - {query[:20]}")
+                logger.warning(f"⏱️ Timeout ({timeout}s) in {dest_config['name']} for {search_type}")
                 
-                # If this was the last group, try API fallback
-                if idx == len(destination_entities) - 1:
+                # If this is the last destination, try API fallback
+                if idx == len(destinations) - 1:
+                    logger.info(f"🔄 All groups timed out, trying API fallback")
+                    
                     # Try API fallback for phone numbers
                     if search_type in ['phone', 'telegram']:
-                        logger.info(f"🔄 Attempting phone API fallback for {query}")
                         api_result = await fetch_phone_api(query)
-                        
                         if api_result:
                             if user_id:
                                 await log_search(user_id, search_type, query, api_result)
-                            return {"success": True, "result": api_result, "search_type": search_type, "source": "api_backup"}
+                            return {
+                                "success": True, 
+                                "result": api_result, 
+                                "search_type": search_type, 
+                                "source": "Phone API (Backup)"
+                            }
                     
                     # Try API fallback for vehicle numbers
                     elif search_type in ['vehicle', 'vehicle_detail']:
-                        logger.info(f"🔄 Attempting vehicle API fallback for {query}")
                         api_result = await fetch_vehicle_api(query)
-                        
                         if api_result:
                             if user_id:
                                 await log_search(user_id, search_type, query, api_result)
-                            return {"success": True, "result": api_result, "search_type": search_type, "source": "api_backup"}
+                            return {
+                                "success": True, 
+                                "result": api_result, 
+                                "search_type": search_type, 
+                                "source": "Vehicle API (Backup)"
+                            }
                     
-                    return {"success": False, "error": "Request timed out in all groups and no backup available"}
+                    return {"success": False, "error": "All groups timed out and no API backup available"}
                 else:
                     # Continue to next group
+                    logger.info(f"➡️ Moving to next group: {destinations[idx + 1]['name']}")
                     continue
                 
         except Exception as e:
-            logger.exception(f"Error performing search in group {idx+1}: %s", e)
-            if idx == len(destination_entities) - 1:
+            logger.exception(f"Error in {dest_config['name']}: %s", e)
+            if idx == len(destinations) - 1:
                 return {"success": False, "error": str(e)}
             continue
     
-    return {"success": False, "error": "All destination groups failed"}
+    return {"success": False, "error": "All destinations failed"}
+
+async def perform_telegram_bot_search(query: str, user_id: int = None):
+    """Special handler for Telegram bot searches"""
+    
+    bot_entity = TELEGRAM_BOT.get('entity')
+    
+    if not bot_entity:
+        return {"success": False, "error": "Telegram bot not configured"}
+    
+    try:
+        # Get command for telegram bot (index 0)
+        command_prefix = SEARCH_COMMANDS['telegram']['commands'].get(0, '/tg')
+        command = f"{command_prefix} {query}"
+        timeout = TELEGRAM_BOT.get('timeout', GROUP_TIMEOUT)
+        
+        # Send command to bot
+        forwarded = await user_client.send_message(bot_entity, command)
+        logger.info(f"📤 Sent to Telegram Bot: {command}")
+        
+        # Create future for this search
+        future = asyncio.get_running_loop().create_future()
+        search_id = f"tgbot_{forwarded.id}_{int(time.time() * 1000)}"
+        
+        pending_searches[search_id] = {
+            "future": future,
+            "user_id": user_id,
+            "query": query,
+            "search_type": "telegram",
+            "timestamp": time.time(),
+            "bot_search": True
+        }
+        
+        logger.info(f"🔍 Registered telegram bot search {search_id}")
+        
+        try:
+            # Wait for result with timeout
+            result = await asyncio.wait_for(future, timeout=timeout)
+            cleaned = filter_links_and_usernames(result)
+            
+            if not cleaned.strip():
+                cleaned = "No results found."
+            
+            if user_id:
+                await log_search(user_id, "telegram", query, cleaned)
+            
+            return {
+                "success": True, 
+                "result": cleaned, 
+                "search_type": "telegram", 
+                "source": "Telegram Bot"
+            }
+            
+        except asyncio.TimeoutError:
+            pending_searches.pop(search_id, None)
+            logger.warning(f"⏱️ Timeout from Telegram Bot")
+            return {"success": False, "error": "Telegram bot request timed out"}
+            
+    except Exception as e:
+        logger.exception(f"Error with Telegram Bot: %s", e)
+        return {"success": False, "error": str(e)}
+
+async def fetch_phone_api(phone_number: str):
+    """Fallback API for phone lookups"""
+    try:
+        async with ClientSession() as session:
+            headers = {"X-API-Key": PHONE_API_KEY}
+            params = {"phone": phone_number}
+            
+            async with session.get(PHONE_API_URL, headers=headers, params=params, timeout=10) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return format_phone_api_response(data, phone_number)
+    except Exception as e:
+        logger.exception(f"Phone API error: {e}")
+    return None
+
+async def fetch_vehicle_api(vehicle_no: str):
+    """Fallback API for vehicle lookups"""
+    try:
+        async with ClientSession() as session:
+            headers = {"X-API-Key": VEHICLE_API_KEY}
+            params = {"vehicle_number": vehicle_no}
+            
+            async with session.get(VEHICLE_API_URL, headers=headers, params=params, timeout=10) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return format_vehicle_api_response(data, vehicle_no)
+    except Exception as e:
+        logger.exception(f"Vehicle API error: {e}")
+    return None
 
 # ============ Keyboard Menus ============
 
@@ -980,18 +1160,15 @@ async def start_handler(event):
     user = await event.get_sender()
     user_id = user.id
     
-    # Extract referral code if present
     referral_code = None
     if event.pattern_match.group(2):
         referral_code = event.pattern_match.group(2).strip()
     
     user_doc = await get_user(user_id)
     
-    # Create new user or update existing
     if not user_doc:
         await create_or_update_user(user_id, user.username, user.first_name)
         
-        # Apply referral if provided
         if referral_code:
             success = await apply_referral(user_id, referral_code)
             if success:
@@ -1375,7 +1552,6 @@ async def message_handler(event):
     
     state = user_states[user_id]
     
-    # Handle API key name input
     if state.get('action') == 'awaiting_api_key_name':
         key_name = event.text.strip()
         
@@ -1464,34 +1640,23 @@ async def message_handler(event):
         
         status_msg = await event.respond("⏳ Fetching information... Please wait.")
         
-        # Check if this is user's first search (for referral reward)
         user_doc = await get_user(user_id)
         is_first_search = user_doc.get('total_searches', 0) == 0 and user_doc.get('referred_by')
         
-        # Perform search using core function
         result = await perform_search(search_type, query, user_id)
         
         await status_msg.delete()
         
         if result['success']:
-            # Show source if backup was used
-            source_info = ""
-            if result.get('source') == 'api_backup':
-                source_info = " (via backup API)"
-            elif result.get('source', '').startswith('group_'):
-                group_num = result['source'].split('_')[1]
-                if group_num != '1':
-                    source_info = f" (via backup group {group_num})"
+            source_info = f" (via {result['source']})" if result.get('source') else ""
             
             await event.respond(f"✅ Result{source_info}:\n\n{result['result']}")
             
-            # Decrement search count for non-admin users
             if user_id != ADMIN_USER_ID:
                 user_doc = await get_user(user_id)
                 if user_doc.get('plan') != 'unlimited':
                     await decrement_search(user_id)
                 
-                # Reward referrer on first search
                 if is_first_search:
                     await reward_referrer(user_id)
         else:
@@ -1502,10 +1667,11 @@ async def message_handler(event):
         
         user_states.pop(user_id, None)
 
-# ============ Message Handler for All Groups ============
+# ============ Message Handler for All Groups and Bots ============
 
-@user_client.on(events.NewMessage(chats=[DESTINATION_GROUP, VEHICLE_GROUP]))
-async def handle_destination_reply(event):
+@user_client.on(events.NewMessage())
+async def handle_all_replies(event):
+    """Universal handler for all group and bot messages"""
     message = event.message
     
     text = message.text or message.raw_text
@@ -1522,7 +1688,6 @@ async def handle_destination_reply(event):
             continue
         
         if now - search_info.get("timestamp", now) > REPLY_TIMEOUT:
-            logger.warning(f"⏱️ Skipping expired search {search_id}")
             continue
         
         query = search_info['query'].strip()
@@ -1536,62 +1701,52 @@ async def handle_destination_reply(event):
             clean_msg = re.sub(r'[^\d]', '', text)
             if clean_query and len(clean_query) >= 10 and clean_query in clean_msg:
                 is_match = True
-                logger.info(f"✅ Phone match found for {clean_query[:4]}****")
                 
         elif search_type == 'aadhar':
             clean_query = re.sub(r'[^\d]', '', query)
             if len(clean_query) == 12 and clean_query in re.sub(r'[^\d]', '', text):
                 is_match = True
-                logger.info(f"✅ Aadhar match found")
                 
         elif search_type in ['vehicle', 'vehicle_detail']:
             clean_query = re.sub(r'[^a-z0-9]', '', query.lower())
             clean_msg = re.sub(r'[^a-z0-9]', '', message_text_lower)
             if clean_query and len(clean_query) >= 6 and clean_query in clean_msg:
                 is_match = True
-                logger.info(f"✅ Vehicle match found for {query}")
                 
         elif search_type in ['upi', 'fampay', 'email']:
             if query.lower() in message_text_lower:
                 is_match = True
-                logger.info(f"✅ {search_type.upper()} match found for {query}")
                 
         elif search_type == 'imei':
             clean_query = re.sub(r'[^\d]', '', query)
             if len(clean_query) == 15 and clean_query in re.sub(r'[^\d]', '', text):
                 is_match = True
-                logger.info(f"✅ IMEI match found")
                 
         elif search_type == 'gst':
             clean_query = re.sub(r'[^a-z0-9]', '', query.lower())
             clean_msg = re.sub(r'[^a-z0-9]', '', message_text_lower)
             if clean_query and len(clean_query) >= 10 and clean_query in clean_msg:
                 is_match = True
-                logger.info(f"✅ GST match found")
         
         elif search_type == 'family':
             clean_query = re.sub(r'[^\d]', '', query)
             clean_msg = re.sub(r'[^\d]', '', text)
             if clean_query and len(clean_query) >= 10 and clean_query in clean_msg:
                 is_match = True
-                logger.info(f"✅ Family info match found")
         
         elif search_type == 'pak':
             clean_query = re.sub(r'[^\d]', '', query)
             clean_msg = re.sub(r'[^\d]', '', text)
             if clean_query and len(clean_query) >= 10 and clean_query in clean_msg:
                 is_match = True
-                logger.info(f"✅ Pakistan number match found")
         
         elif search_type == 'insta':
             if query.lower() in message_text_lower:
                 is_match = True
-                logger.info(f"✅ Instagram match found for {query}")
         
         else:
             if query.lower() in message_text_lower:
                 is_match = True
-                logger.info(f"✅ Generic match found for {search_type}")
         
         if is_match:
             matched_search = search_info
@@ -1605,7 +1760,6 @@ async def handle_destination_reply(event):
     await asyncio.sleep(FETCH_WAIT_TIME)
     
     try:
-        # Get the chat entity
         chat = await event.get_chat()
         latest = await user_client.get_messages(chat, ids=message.id)
         if latest:
@@ -1622,7 +1776,6 @@ async def handle_destination_reply(event):
 # ============ Cleanup Task ============
 
 async def cleanup_old_searches():
-    """Remove searches that have been pending too long"""
     while True:
         await asyncio.sleep(60)
         now = time.time()
@@ -1640,7 +1793,6 @@ async def cleanup_old_searches():
         
         for search_id in to_remove:
             pending_searches.pop(search_id, None)
-            logger.info(f"🧹 Cleaned up expired search: {search_id}")
         
         if to_remove:
             logger.info(f"🧹 Cleanup: Removed {len(to_remove)} expired searches")
@@ -1648,7 +1800,6 @@ async def cleanup_old_searches():
 # ============ API Endpoints ============
 
 async def verify_api_key(request):
-    """Middleware to verify API key and check creator's credit balance"""
     api_key = request.headers.get('X-API-Key')
     
     if not api_key:
@@ -1671,7 +1822,6 @@ async def verify_api_key(request):
             status=401
         )
     
-    # Check creator's (user's) current credit balance
     user_id = key_info['user_id']
     user_doc = await get_user(user_id)
     
@@ -1681,7 +1831,6 @@ async def verify_api_key(request):
             status=404
         )
     
-    # Check if creator has searches remaining in their account
     if user_doc.get('plan') != 'unlimited':
         searches_remaining = user_doc.get('searches_remaining', 0)
         if searches_remaining <= 0:
@@ -1699,9 +1848,6 @@ async def verify_api_key(request):
     return None
 
 async def api_search_handler(request):
-    """Handle API search requests - uses creator's credit balance"""
-    
-    # Verify API key
     auth_error = await verify_api_key(request)
     if auth_error:
         return auth_error
@@ -1732,22 +1878,18 @@ async def api_search_handler(request):
             status=400
         )
     
-    # Perform search using creator's account
     user_id = key_info['user_id']
     result = await perform_search(search_type, query, user_id)
     
     if result['success']:
-        # Increment API key usage counter (for statistics)
         await increment_api_key_usage(key_info['api_key'])
         
-        # Deduct credit from creator's account (not from API key limit)
         if user_doc.get('plan') != 'unlimited':
             await decrement_search(user_id)
-            # Get updated credits after deduction
             updated_user = await get_user(user_id)
             remaining_credits = updated_user.get('searches_remaining', 0)
         else:
-            remaining_credits = -1  # Unlimited
+            remaining_credits = -1
         
         return web.json_response({
             "success": True,
@@ -1761,8 +1903,6 @@ async def api_search_handler(request):
         return web.json_response(result, status=500)
 
 async def api_info_handler(request):
-    """Get API key info and creator's credit balance"""
-    
     auth_error = await verify_api_key(request)
     if auth_error:
         return auth_error
@@ -1770,9 +1910,8 @@ async def api_info_handler(request):
     key_info = request['api_key_info']
     user_doc = request['user_doc']
     
-    # Calculate credits remaining
     if user_doc.get('plan') == 'unlimited':
-        credits_remaining = -1  # Unlimited
+        credits_remaining = -1
         plan_status = "Unlimited"
     else:
         credits_remaining = user_doc.get('searches_remaining', 0)
@@ -1790,7 +1929,6 @@ async def api_info_handler(request):
     })
 
 async def api_types_handler(request):
-    """List available search types"""
     return web.json_response({
         "success": True,
         "search_types": {
@@ -1807,10 +1945,7 @@ async def health_check(request):
 async def start_web_server():
     app = web.Application()
     
-    # Health check
     app.router.add_get("/health", health_check)
-    
-    # API endpoints
     app.router.add_post("/api/search", api_search_handler)
     app.router.add_get("/api/info", api_info_handler)
     app.router.add_get("/api/types", api_types_handler)
@@ -1820,80 +1955,65 @@ async def start_web_server():
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
     logger.info(f"🌐 Web server started on port {PORT}")
-    logger.info(f"📡 API endpoints:")
-    logger.info(f"   POST /api/search - Perform search")
-    logger.info(f"   GET  /api/info - Get API key info")
-    logger.info(f"   GET  /api/types - List search types")
 
 # ============ Main ============
 
 async def start_bot():
-    global DEST_ENTITY, DEST_ENTITY_2, DEST_ENTITY_3, VEHICLE_ENTITY
-    
     try:
         logger.info("🤖 Starting Telegram bot...")
         await bot_client.start(bot_token=BOT_TOKEN)
         logger.info("✅ Bot started successfully")
+        
         me = await bot_client.get_me()
         logger.info(f"Bot username: @{me.username}")
-        logger.info(f"Bot ID: {me.id}")
         
         if USE_USER_ACCOUNT:
-            logger.info("👤 Starting user account client for forwarding...")
-            
+            logger.info("👤 Starting user account client...")
             if not user_client.is_connected():
                 await user_client.connect()
             
             if not await user_client.is_user_authorized():
-                raise RuntimeError(
-                    "❌ User session not authorized. "
-                    "Login once locally with start(phone=...) and upload the session file to Render."
-                )
+                raise RuntimeError("❌ User session not authorized")
             
-            logger.info("✅ User account session loaded successfully")
+            logger.info("✅ User account session loaded")
 
-        # Resolve destination group entities
-        DEST_ENTITY = await user_client.get_entity(DESTINATION_GROUP)
-        logger.info(f"📨 Main destination group resolved: {DESTINATION_GROUP}")
+        # Resolve all destination entities
+        logger.info("📡 Resolving destination groups...")
         
-        # Resolve backup groups if configured
-        if DESTINATION_GROUP_2:
+        for idx, group in enumerate(DESTINATION_GROUPS):
             try:
-                DEST_ENTITY_2 = await user_client.get_entity(DESTINATION_GROUP_2)
-                logger.info(f"📨 Backup group 2 resolved: {DESTINATION_GROUP_2}")
+                group['entity'] = await user_client.get_entity(group['identifier'])
+                logger.info(f"✅ Group {idx} ({group['name']}): {group['identifier']}")
             except Exception as e:
-                logger.warning(f"Could not resolve backup group 2: {e}")
-        
-        if DESTINATION_GROUP_3:
-            try:
-                DEST_ENTITY_3 = await user_client.get_entity(DESTINATION_GROUP_3)
-                logger.info(f"📨 Backup group 3 resolved: {DESTINATION_GROUP_3}")
-            except Exception as e:
-                logger.warning(f"Could not resolve backup group 3: {e}")
+                logger.warning(f"❌ Could not resolve group {idx}: {e}")
         
         # Resolve vehicle group
         try:
-            VEHICLE_ENTITY = await user_client.get_entity(VEHICLE_GROUP)
-            logger.info(f"🚗 Vehicle group resolved: {VEHICLE_GROUP}")
+            VEHICLE_GROUP['entity'] = await user_client.get_entity(VEHICLE_GROUP['identifier'])
+            logger.info(f"✅ Vehicle Group: {VEHICLE_GROUP['identifier']}")
         except Exception as e:
-            logger.warning(f"Could not resolve vehicle group: {e}")
+            logger.warning(f"❌ Could not resolve vehicle group: {e}")
+        
+        # Resolve telegram bot
+        try:
+            TELEGRAM_BOT['entity'] = await user_client.get_entity(TELEGRAM_BOT['identifier'])
+            logger.info(f"✅ Telegram Bot: {TELEGRAM_BOT['identifier']}")
+        except Exception as e:
+            logger.warning(f"❌ Could not resolve telegram bot: {e}")
 
-        # Initialize MongoDB
         init_mongo()
-
-        # Start background tasks
+        
         asyncio.create_task(cleanup_old_searches())
         asyncio.create_task(start_web_server())
 
         logger.info("🚀 Bot is fully operational")
+        logger.info(f"⏱️ Group timeout: {GROUP_TIMEOUT}s per group")
         logger.info(f"💰 New users get {NEW_USER_CREDITS} free credits")
-        logger.info(f"🎁 Referral reward: {REFERRAL_REWARD} credits per successful referral")
 
-        # Keep running forever
         await asyncio.Event().wait()
 
     except Exception as e:
-        logger.exception("❌ Fatal error while starting bot: %s", e)
+        logger.exception("❌ Fatal error: %s", e)
         raise
 
 
