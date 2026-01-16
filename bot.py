@@ -106,7 +106,7 @@ DESTINATION_GROUPS = [
 # Special bot for Telegram username lookup
 TELEGRAM_BOT = {
     "name": "Telegram Lookup Bot",
-    "identifier": "@YourTelegramLookupBot",  # Replace with actual bot username
+    "identifier": "@Dirgeshrai8090_bot",  # Replace with actual bot username
     "timeout": GROUP_TIMEOUT,
     "entity": None
 }
