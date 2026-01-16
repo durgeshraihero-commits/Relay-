@@ -40,6 +40,7 @@ PAYMENT_QR_CODE = os.getenv("PAYMENT_QR_CODE", "https://example.com/payment-qr.p
 FETCH_WAIT_TIME = int(os.getenv("FETCH_WAIT_TIME", "3"))
 GROUP_TIMEOUT = int(os.getenv("GROUP_TIMEOUT", "5"))  # Timeout per group
 REPLY_TIMEOUT = int(os.getenv("REPLY_TIMEOUT", "45"))
+PROCESSING_WAIT_EXTRA = 7  # Extra seconds to wait if "processing" detected
 
 # API endpoints
 PHONE_API_URL = "https://daily-binny-ryuioggv-391a9381.koyeb.app/api/lookup"
@@ -619,6 +620,57 @@ async def update_payment_screenshot(payment_id: str, file_id: str):
         logger.exception("Error updating payment screenshot: %s", e)
         return False
 
+# ============ Response Detection Helpers ============
+
+def is_processing_message(text: str) -> bool:
+    """Check if message indicates processing/waiting"""
+    if not text:
+        return False
+    
+    text_lower = text.lower()
+    processing_keywords = [
+        'processing',
+        'please wait',
+        'fetching',
+        'loading',
+        'searching',
+        'retrieving',
+        'hold on',
+        'wait a moment',
+        'in progress',
+        'gathering data',
+        'working on it'
+    ]
+    
+    return any(keyword in text_lower for keyword in processing_keywords)
+
+def is_no_info_message(text: str) -> bool:
+    """Check if message indicates no information found"""
+    if not text:
+        return False
+    
+    text_lower = text.lower()
+    no_info_keywords = [
+        'no info',
+        'no information',
+        'not found',
+        'no data',
+        'no result',
+        'no record',
+        'invalid',
+        'doesn\'t exist',
+        'does not exist',
+        'not available',
+        'no details',
+        'unable to find',
+        'could not find',
+        'couldn\'t find',
+        'no match',
+        'not exist'
+    ]
+    
+    return any(keyword in text_lower for keyword in no_info_keywords)
+
 # ============ Text Cleaning ============
 
 def filter_links_and_usernames(text: str):
@@ -884,12 +936,13 @@ async def check_channel_membership(user_id: int):
         logger.exception("Error checking channel membership: %s", e)
         return False
 
-# ============ Core Search Function with Timeout-Based Fallback ============
+# ============ Core Search Function with Enhanced Detection ============
 
 async def perform_search(search_type: str, query: str, user_id: int = None):
     """
-    Core search function with timeout-based fallback to multiple groups
-    Tries each group with timeout, moves to next if timeout occurs
+    Enhanced search function with smart response detection:
+    1. Waits extra time if "processing" message detected
+    2. Tries next group if "no info" message detected
     """
     
     if search_type not in SEARCH_COMMANDS:
@@ -900,13 +953,10 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
     
     # Determine destination based on type
     if search_dest_type == 'telegram_bot':
-        # Special handling for telegram bot
         return await perform_telegram_bot_search(query, user_id)
     elif search_dest_type == 'vehicle_group':
-        # Use vehicle group
         destinations = [VEHICLE_GROUP]
     else:
-        # Use regular destination groups
         destinations = DESTINATION_GROUPS
     
     # Try each destination with timeout
@@ -942,7 +992,9 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                 "search_type": search_type,
                 "timestamp": time.time(),
                 "group_index": idx,
-                "group_name": dest_config['name']
+                "group_name": dest_config['name'],
+                "processing_detected": False,
+                "no_info_detected": False
             }
             
             logger.info(f"🔍 Registered search {search_id} in {dest_config['name']}")
@@ -950,6 +1002,20 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
             try:
                 # Wait for result with timeout
                 result = await asyncio.wait_for(future, timeout=timeout)
+                
+                # Check if "no info" was detected
+                if pending_searches.get(search_id, {}).get('no_info_detected'):
+                    logger.warning(f"⚠️ No info found in {dest_config['name']}, trying next group")
+                    pending_searches.pop(search_id, None)
+                    
+                    if idx < len(destinations) - 1:
+                        logger.info(f"➡️ Moving to next group: {destinations[idx + 1]['name']}")
+                        continue
+                    else:
+                        # Last group also returned no info, try API
+                        logger.info(f"🔄 All groups returned no info, trying API fallback")
+                        return await try_api_fallback(search_type, query, user_id)
+                
                 cleaned = filter_links_and_usernames(result)
                 
                 if not cleaned.strip():
@@ -975,34 +1041,7 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                 # If this is the last destination, try API fallback
                 if idx == len(destinations) - 1:
                     logger.info(f"🔄 All groups timed out, trying API fallback")
-                    
-                    # Try API fallback for phone numbers
-                    if search_type in ['phone', 'telegram']:
-                        api_result = await fetch_phone_api(query)
-                        if api_result:
-                            if user_id:
-                                await log_search(user_id, search_type, query, api_result)
-                            return {
-                                "success": True, 
-                                "result": api_result, 
-                                "search_type": search_type, 
-                                "source": "Phone API (Backup)"
-                            }
-                    
-                    # Try API fallback for vehicle numbers
-                    elif search_type in ['vehicle', 'vehicle_detail']:
-                        api_result = await fetch_vehicle_api(query)
-                        if api_result:
-                            if user_id:
-                                await log_search(user_id, search_type, query, api_result)
-                            return {
-                                "success": True, 
-                                "result": api_result, 
-                                "search_type": search_type, 
-                                "source": "Vehicle API (Backup)"
-                            }
-                    
-                    return {"success": False, "error": "All groups timed out and no API backup available"}
+                    return await try_api_fallback(search_type, query, user_id)
                 else:
                     # Continue to next group
                     logger.info(f"➡️ Moving to next group: {destinations[idx + 1]['name']}")
@@ -1016,8 +1055,37 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
     
     return {"success": False, "error": "All destinations failed"}
 
+async def try_api_fallback(search_type: str, query: str, user_id: int = None):
+    """Try API fallback for supported search types"""
+    
+    if search_type in ['phone', 'telegram']:
+        api_result = await fetch_phone_api(query)
+        if api_result:
+            if user_id:
+                await log_search(user_id, search_type, query, api_result)
+            return {
+                "success": True, 
+                "result": api_result, 
+                "search_type": search_type, 
+                "source": "Phone API (Backup)"
+            }
+    
+    elif search_type in ['vehicle', 'vehicle_detail']:
+        api_result = await fetch_vehicle_api(query)
+        if api_result:
+            if user_id:
+                await log_search(user_id, search_type, query, api_result)
+            return {
+                "success": True, 
+                "result": api_result, 
+                "search_type": search_type, 
+                "source": "Vehicle API (Backup)"
+            }
+    
+    return {"success": False, "error": "All groups failed and no API backup available"}
+
 async def perform_telegram_bot_search(query: str, user_id: int = None):
-    """Special handler for Telegram bot searches"""
+    """Special handler for Telegram bot searches with enhanced detection"""
     
     bot_entity = TELEGRAM_BOT.get('entity')
     
@@ -1025,16 +1093,13 @@ async def perform_telegram_bot_search(query: str, user_id: int = None):
         return {"success": False, "error": "Telegram bot not configured"}
     
     try:
-        # Get command for telegram bot (index 0)
         command_prefix = SEARCH_COMMANDS['telegram']['commands'].get(0, '/tg')
         command = f"{command_prefix} {query}"
         timeout = TELEGRAM_BOT.get('timeout', GROUP_TIMEOUT)
         
-        # Send command to bot
         forwarded = await user_client.send_message(bot_entity, command)
         logger.info(f"📤 Sent to Telegram Bot: {command}")
         
-        # Create future for this search
         future = asyncio.get_running_loop().create_future()
         search_id = f"tgbot_{forwarded.id}_{int(time.time() * 1000)}"
         
@@ -1044,14 +1109,22 @@ async def perform_telegram_bot_search(query: str, user_id: int = None):
             "query": query,
             "search_type": "telegram",
             "timestamp": time.time(),
-            "bot_search": True
+            "bot_search": True,
+            "processing_detected": False,
+            "no_info_detected": False
         }
         
         logger.info(f"🔍 Registered telegram bot search {search_id}")
         
         try:
-            # Wait for result with timeout
             result = await asyncio.wait_for(future, timeout=timeout)
+            
+            # Check if no info was detected
+            if pending_searches.get(search_id, {}).get('no_info_detected'):
+                logger.warning(f"⚠️ No info from Telegram Bot, trying API fallback")
+                pending_searches.pop(search_id, None)
+                return await try_api_fallback('telegram', query, user_id)
+            
             cleaned = filter_links_and_usernames(result)
             
             if not cleaned.strip():
@@ -1070,7 +1143,7 @@ async def perform_telegram_bot_search(query: str, user_id: int = None):
         except asyncio.TimeoutError:
             pending_searches.pop(search_id, None)
             logger.warning(f"⏱️ Timeout from Telegram Bot")
-            return {"success": False, "error": "Telegram bot request timed out"}
+            return await try_api_fallback('telegram', query, user_id)
             
     except Exception as e:
         logger.exception(f"Error with Telegram Bot: %s", e)
@@ -1667,11 +1740,11 @@ async def message_handler(event):
         
         user_states.pop(user_id, None)
 
-# ============ Message Handler for All Groups and Bots ============
+# ============ Enhanced Message Handler for All Groups and Bots ============
 
 @user_client.on(events.NewMessage())
 async def handle_all_replies(event):
-    """Universal handler for all group and bot messages"""
+    """Universal handler with smart processing and no-info detection"""
     message = event.message
     
     text = message.text or message.raw_text
@@ -1757,6 +1830,37 @@ async def handle_all_replies(event):
     if not matched_search:
         return
     
+    # Check for "processing" message
+    if is_processing_message(text):
+        logger.info(f"⏳ Processing message detected for {matched_key}, waiting {PROCESSING_WAIT_EXTRA}s more")
+        matched_search['processing_detected'] = True
+        
+        # Wait extra time for processing
+        await asyncio.sleep(PROCESSING_WAIT_EXTRA)
+        
+        # Try to get updated message
+        try:
+            chat = await event.get_chat()
+            latest = await user_client.get_messages(chat, ids=message.id)
+            if latest:
+                latest_text = latest.text or latest.raw_text
+                if latest_text and latest_text != text:
+                    text = latest_text
+                    logger.info(f"📝 Got updated message after processing wait")
+        except Exception as e:
+            logger.exception("Error getting updated message: %s", e)
+    
+    # Check for "no info found" message
+    if is_no_info_message(text):
+        logger.warning(f"⚠️ No info message detected for {matched_key}")
+        matched_search['no_info_detected'] = True
+        
+        if not matched_search['future'].done():
+            # Signal to try next group
+            matched_search['future'].set_result(text)
+        return
+    
+    # Normal wait before fetching final result
     await asyncio.sleep(FETCH_WAIT_TIME)
     
     try:
@@ -2008,7 +2112,9 @@ async def start_bot():
 
         logger.info("🚀 Bot is fully operational")
         logger.info(f"⏱️ Group timeout: {GROUP_TIMEOUT}s per group")
+        logger.info(f"⏳ Processing wait extra: {PROCESSING_WAIT_EXTRA}s")
         logger.info(f"💰 New users get {NEW_USER_CREDITS} free credits")
+        logger.info(f"🔍 Smart detection: Processing messages & No info messages")
 
         await asyncio.Event().wait()
 
