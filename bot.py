@@ -781,7 +781,7 @@ SEARCH_COMMANDS = {
     "family": {"cmd": "/family", "name": "👨‍👩‍👧‍👦 Family Info", "groups": ["main", "backup2", "backup3"]},
     "aadhar": {"cmd": "/aadhar", "name": "🆔 Aadhar Info", "groups": ["main", "backup2", "backup3"]},
     "vehicle": {"cmd": "/vnum", "name": "🚗 Vehicle to Phone", "groups": ["vehicle"]},
-    "vehicle_detail": {"cmd": "/vehicle", "name": "🚙 Vehicle Details", "groups": ["main", "backup2", "backup3"]},
+    "vehicle_detail": {"cmd": "/vehicle", "name": "🚙 Vehicle Details", "groups": ["main", "backup3"]},
     "upi": {"cmd": "/upiinfo", "name": "💳 UPI Info", "groups": ["main", "backup2", "backup3"]},
     "fampay": {"cmd": "/fam", "name": "💰 Fampay Info", "groups": ["main"]},
     "email": {"cmd": "/email", "name": "📧 Email Info", "groups": ["main", "backup2", "backup3"]},
