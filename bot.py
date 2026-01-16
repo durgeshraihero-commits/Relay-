@@ -31,8 +31,8 @@ USER_PHONE = os.getenv("USER_PHONE", "").strip()
 
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
 DESTINATION_GROUP = os.getenv("DESTINATION_GROUP", "darkboxesv3")
-DESTINATION_GROUP_2 = os.getenv("DESTINATION_GROUP_2", "")  # Second fallback
-DESTINATION_GROUP_3 = os.getenv("DESTINATION_GROUP_3", "")  # Third fallback
+DESTINATION_GROUP_2 = os.getenv("DESTINATION_GROUP_2", "nex_chats")  # Second fallback
+DESTINATION_GROUP_3 = os.getenv("DESTINATION_GROUP_3", "epicmoders")  # Third fallback
 VEHICLE_GROUP = "IntelXGroup"  # For vehicle to number lookups
 MANDATORY_CHANNEL = os.getenv("MANDATORY_CHANNEL", "darkboxesv1")
 
