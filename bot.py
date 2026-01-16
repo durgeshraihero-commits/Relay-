@@ -98,7 +98,7 @@ DESTINATION_GROUPS = [
     },
     {
         "name": "Backup Group 3",
-        "identifier": "epicmoders",
+        "identifier": "marco_osintgc",
         "timeout": GROUP_TIMEOUT,
         "entity": None
     }
