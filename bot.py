@@ -1380,7 +1380,7 @@ async def start_handler(event):
         buttons=get_main_menu()
     )
 
-@bot_client.on(events.CallbackQuery(pattern='^referral_menu))
+@bot_client.on(events.CallbackQuery(pattern='^referral_menu'))
 async def referral_menu_callback(event):
     await event.edit(
         "👥 Referral System\n\n"
@@ -1389,7 +1389,7 @@ async def referral_menu_callback(event):
         buttons=get_referral_menu()
     )
 
-@bot_client.on(events.CallbackQuery(pattern='^referral_link))
+@bot_client.on(events.CallbackQuery(pattern='^referral_link'))
 async def referral_link_callback(event):
     user_id = event.sender_id
     
@@ -1412,7 +1412,7 @@ async def referral_link_callback(event):
         buttons=[[Button.inline("🔙 Back", "referral_menu")]]
     )
 
-@bot_client.on(events.CallbackQuery(pattern='^referral_stats))
+@bot_client.on(events.CallbackQuery(pattern='^referral_stats'))
 async def referral_stats_callback(event):
     user_id = event.sender_id
     
@@ -1430,7 +1430,7 @@ async def referral_stats_callback(event):
     
     await event.edit(message, buttons=[[Button.inline("🔙 Back", "referral_menu")]])
 
-@bot_client.on(events.CallbackQuery(pattern='^api_menu))
+@bot_client.on(events.CallbackQuery(pattern='^api_menu'))
 async def api_menu_callback(event):
     await event.edit(
         "🔑 API Key Management\n\n"
@@ -1438,7 +1438,7 @@ async def api_menu_callback(event):
         buttons=get_api_menu()
     )
 
-@bot_client.on(events.CallbackQuery(pattern='^api_create))
+@bot_client.on(events.CallbackQuery(pattern='^api_create'))
 async def api_create_callback(event):
     user_id = event.sender_id
     user_states[user_id] = {"action": "awaiting_api_key_name"}
@@ -1448,7 +1448,7 @@ async def api_create_callback(event):
         "Please send a name for this API key (e.g., 'My App', 'Production Server'):"
     )
 
-@bot_client.on(events.CallbackQuery(pattern='^api_list))
+@bot_client.on(events.CallbackQuery(pattern='^api_list'))
 async def api_list_callback(event):
     user_id = event.sender_id
     api_keys = await list_user_api_keys(user_id)
@@ -1479,7 +1479,7 @@ async def api_list_callback(event):
     
     await event.edit(message, buttons=buttons)
 
-@bot_client.on(events.CallbackQuery(pattern=r'^api_delete_(.+)))
+@bot_client.on(events.CallbackQuery(pattern=r'^api_delete_(.+)'))
 async def api_delete_callback(event):
     user_id = event.sender_id
     api_key = event.data.decode().split('_', 2)[2]
@@ -1492,7 +1492,7 @@ async def api_delete_callback(event):
     else:
         await event.answer("❌ Failed to delete API key", alert=True)
 
-@bot_client.on(events.CallbackQuery(pattern='^back_main))
+@bot_client.on(events.CallbackQuery(pattern='^back_main'))
 async def back_main_callback(event):
     user = await event.get_sender()
     user_id = user.id
@@ -1515,7 +1515,7 @@ async def back_main_callback(event):
         buttons=get_main_menu()
     )
 
-@bot_client.on(events.CallbackQuery(pattern=r'^search_(.+)))
+@bot_client.on(events.CallbackQuery(pattern=r'^search_(.+)'))
 async def search_callback(event):
     user_id = event.sender_id
     search_type = event.data.decode().split('_')[1]
@@ -1585,8 +1585,7 @@ async def search_callback(event):
             f"Please send the {search_type} to search:"
         )
 
-@bot_client.on(events.CallbackQuery(pattern=r'^buy_(.+)
-        ))
+@bot_client.on(events.CallbackQuery(pattern=r'^buy_(.+)'))
 async def buy_plan_callback(event):
     user_id = event.sender_id
     plan_key = event.data.decode().split('_', 1)[1]
@@ -1634,8 +1633,7 @@ async def buy_plan_callback(event):
         logger.exception("Error sending QR code: %s", e)
         await event.respond("Please pay and send screenshot.")
 
-@bot_client.on(events.CallbackQuery(pattern=r'^approve_(.+)_(.+)
-        ))
+@bot_client.on(events.CallbackQuery(pattern=r'^approve_(.+)_(.+)'))
 async def approve_payment_callback(event):
     if event.sender_id != ADMIN_USER_ID:
         await event.answer("❌ Unauthorized", alert=True)
@@ -1688,8 +1686,7 @@ async def approve_payment_callback(event):
     except Exception as e:
         logger.exception("Error notifying user: %s", e)
 
-@bot_client.on(events.CallbackQuery(pattern=r'^reject_(.+)_(.+)
-        ))
+@bot_client.on(events.CallbackQuery(pattern=r'^reject_(.+)_(.+)'))
 async def reject_payment_callback(event):
     if event.sender_id != ADMIN_USER_ID:
         await event.answer("❌ Unauthorized", alert=True)
@@ -1717,8 +1714,7 @@ async def reject_payment_callback(event):
     except Exception as e:
         logger.exception("Error notifying user: %s", e)
 
-@bot_client.on(events.CallbackQuery(pattern='^cancel
-        ))
+@bot_client.on(events.CallbackQuery(pattern='^cancel'))
 async def cancel_callback(event):
     user_id = event.sender_id
     user_states.pop(user_id, None)
@@ -1727,8 +1723,7 @@ async def cancel_callback(event):
         buttons=None
     )
 
-@bot_client.on(events.CallbackQuery(pattern='^start
-        ))
+@bot_client.on(events.CallbackQuery(pattern='^start'))
 async def start_button_callback(event):
     await start_handler(event)
 
