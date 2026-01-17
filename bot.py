@@ -678,7 +678,19 @@ def is_no_info_message(text: str) -> bool:
         'not exist',
         'no information found',
         'no result found',
-        'no records found'
+        'no records found',
+        # Add spam/verification keywords
+        'to reduce spam',
+        'must have joined',
+        'must join',
+        'join all channels',
+        'join our channel',
+        'verify your account',
+        'admin to verify',
+        'need to join',
+        'required to join',
+        'subscription required',
+        'access denied'
     ]
     
     return any(keyword in text_lower for keyword in no_info_keywords)
@@ -693,18 +705,30 @@ def is_valid_result(text: str, search_type: str) -> bool:
     if is_no_info_message(text):
         return False
     
-    if len(text.strip()) < 50:
+    # More lenient length check - reduced from 50 to 30
+    if len(text.strip()) < 30:
         return False
     
+    # Check for common data indicators (works for both JSON and plain text)
     data_indicators = [
-        'name:', 'mobile:', 'address:', 'email:', 'father',
+        'name', 'mobile', 'address', 'email', 'father',
         'owner', 'vehicle', 'registration', 'chassis',
         'model', 'manufacturer', 'policy', 'insurance',
-        'aadhar', 'upi', 'telegram', 'instagram', 'gst'
+        'aadhar', 'upi', 'telegram', 'instagram', 'gst',
+        'status', 'found', 'count', 'records', 'data'
     ]
     
     text_lower = text.lower()
     has_data = any(indicator in text_lower for indicator in data_indicators)
+    
+    # Additional check: if it looks like JSON with status found, it's valid
+    if '"status"' in text and '"found"' in text_lower:
+        return True
+    
+    # If it contains multiple data indicators, it's likely valid
+    indicator_count = sum(1 for indicator in data_indicators if indicator in text_lower)
+    if indicator_count >= 2:
+        return True
     
     return has_data
 
@@ -1030,6 +1054,7 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                 
                 logger.info(f"📩 Received response from {dest_config['name']}: {result_text[:100]}...")
                 
+                # Handle processing messages
                 if is_processing_message(result_text):
                     logger.info(f"⏳ Processing message detected, waiting {PROCESSING_WAIT_EXTRA}s more...")
                     
@@ -1048,6 +1073,30 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                             
                     except Exception as e:
                         logger.error(f"Error getting updated message: {e}")
+                
+                # NEW: Handle spam/no-info messages - wait for valid data
+                if is_no_info_message(result_text):
+                    logger.info(f"🚫 Spam/no-info message detected, waiting {PROCESSING_WAIT_EXTRA}s for valid data...")
+                    
+                    await asyncio.sleep(PROCESSING_WAIT_EXTRA)
+                    
+                    try:
+                        messages = await user_client.get_messages(dest_entity, limit=20)
+                        
+                        for msg in messages:
+                            if msg.reply_to and msg.reply_to.reply_to_msg_id == forwarded.id:
+                                potential_text = msg.text or msg.raw_text
+                                # Look for valid data (not spam, not processing)
+                                if (potential_text and 
+                                    not is_no_info_message(potential_text) and 
+                                    not is_processing_message(potential_text) and
+                                    is_valid_result(potential_text, search_type)):
+                                    result_text = potential_text
+                                    logger.info(f"✅ Found valid data message after spam message!")
+                                    break
+                            
+                    except Exception as e:
+                        logger.error(f"Error getting updated message after spam: {e}")
                 
                 logger.info(f"🔍 Validating result from {dest_config['name']}")
                 
@@ -1933,6 +1982,11 @@ async def handle_all_replies(event):
         logger.info(f"⏳ Processing message detected for {matched_key}, ignoring for now")
         return
     
+    # NEW: Skip spam/no-info messages - don't deliver them, wait for valid data
+    if is_no_info_message(text):
+        logger.info(f"🚫 Spam/no-info message detected for {matched_key}, waiting for valid data")
+        return
+    
     await asyncio.sleep(FETCH_WAIT_TIME)
     
     try:
@@ -1944,6 +1998,11 @@ async def handle_all_replies(event):
                 text = final_text
     except Exception as e:
         logger.error(f"Error getting latest message: {e}")
+    
+    # Double-check: don't deliver if it's still a spam/no-info message after fetch
+    if is_no_info_message(text):
+        logger.info(f"🚫 Final check: Still spam/no-info for {matched_key}, skipping")
+        return
     
     if not matched_search['future'].done():
         matched_search['future'].set_result(text)
