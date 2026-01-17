@@ -51,7 +51,7 @@ VEHICLE_API_KEY = "URSLASH123"
 
 # Referral settings
 REFERRAL_REWARD = 2
-NEW_USER_CREDITS = 2
+NEW_USER_CREDITS = 5
 
 # ============ Logging ============
 
@@ -593,6 +593,21 @@ async def decrement_search(user_id: int):
         return True
     except Exception as e:
         logger.exception("Error decrementing search: %s", e)
+        return False
+
+async def increment_search(user_id: int):
+    """Return credit to user (used when search fails)"""
+    try:
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: users_col.update_one(
+                {"user_id": user_id},
+                {"$inc": {"searches_remaining": 1}}
+            )
+        )
+        logger.info(f"💰 Returned 1 credit to user {user_id}")
+        return True
+    except Exception as e:
+        logger.exception("Error incrementing search: %s", e)
         return False
 
 async def log_search(user_id: int, search_type: str, query: str, result: str):
@@ -2215,7 +2230,19 @@ async def message_handler(event):
                     await reward_referrer(user_id)
         else:
             error_msg = result.get('error', 'An error occurred')
-            await event.respond(f"❌ {error_msg}")
+            
+            # Check if user is not admin and has limited plan
+            if user_id != ADMIN_USER_ID:
+                user_doc = await get_user(user_id)
+                if user_doc.get('plan') != 'unlimited':
+                    # Add credit not deducted message
+                    error_msg = f"❌ {error_msg}\n\n💰 Don't worry - your credit was not deducted!"
+                else:
+                    error_msg = f"❌ {error_msg}"
+            else:
+                error_msg = f"❌ {error_msg}"
+            
+            await event.respond(error_msg)
 
         user_states.pop(user_id, None)
 
