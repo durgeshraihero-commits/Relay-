@@ -2175,68 +2175,75 @@ if __name__ == "__main__":
         asyncio.run(start_bot())
     except KeyboardInterrupt:
         logger.info("🛑 Bot stopped by user")
-        return
-    
+        pass   # ← return removed (syntax fix)
+
+
     if state.get('action') == 'awaiting_payment':
         if not event.photo:
-            await event.respond("❌ Please send a screenshot image.")
-            return
-        
+            event.respond("❌ Please send a screenshot image.")
+            pass
+
         payment_id = state['payment_id']
         plan_key = state['plan']
         plan_info = PLANS[plan_key]
-        
-        await update_payment_screenshot(payment_id, event.message.id)
-        
+
+        update_payment_screenshot(payment_id, event.message.id)
+
         try:
-            user = await event.get_sender()
-            await bot_client.send_file(
+            user = event.get_sender()
+            bot_client.send_file(
                 ADMIN_USER_ID,
                 event.photo,
-                caption=f"💰 Payment Screenshot Received\n\n"
-                        f"User: {user.first_name} (@{user.username or 'N/A'})\n"
-                        f"User ID: {user_id}\n"
-                        f"Plan: {plan_info['name']}\n"
-                        f"Amount: ₹{plan_info['price']}\n"
-                        f"Payment ID: {payment_id}",
+                caption=(
+                    f"💰 Payment Screenshot Received\n\n"
+                    f"User: {user.first_name} (@{user.username or 'N/A'})\n"
+                    f"User ID: {user_id}\n"
+                    f"Plan: {plan_info['name']}\n"
+                    f"Amount: ₹{plan_info['price']}\n"
+                    f"Payment ID: {payment_id}"
+                ),
                 buttons=get_payment_approval_buttons(payment_id, user_id)
             )
         except Exception as e:
             logger.exception("Error forwarding to admin: %s", e)
-        
-        await event.respond(
+
+        event.respond(
             "✅ Payment screenshot received!\n\n"
             "Your payment is being reviewed. You'll be notified once approved."
         )
-        
+
         user_states.pop(user_id, None)
-        return
-    
+        pass
+
+
     if state.get('action') == 'awaiting_input':
         search_type = state['type']
         query = event.text.strip()
-        
-        status_msg = await event.respond("⏳ Fetching information... Please wait.")
-        
-        user_doc = await get_user(user_id)
-        is_first_search = user_doc.get('total_searches', 0) == 0 and user_doc.get('referred_by')
-        
-        result = await perform_search(search_type, query, user_id)
-        
-        await status_msg.delete()
-        
+
+        status_msg = event.respond("⏳ Fetching information... Please wait.")
+
+        user_doc = get_user(user_id)
+        is_first_search = (
+            user_doc.get('total_searches', 0) == 0
+            and user_doc.get('referred_by')
+        )
+
+        result = perform_search(search_type, query, user_id)
+
+        status_msg.delete()
+
         if result['success']:
-            await event.respond(f"✅ Search Result:\n\n{result['result']}")
-            
+            event.respond(f"✅ Search Result:\n\n{result['result']}")
+
             if user_id != ADMIN_USER_ID:
-                user_doc = await get_user(user_id)
+                user_doc = get_user(user_id)
                 if user_doc.get('plan') != 'unlimited':
-                    await decrement_search(user_id)
-                
+                    decrement_search(user_id)
+
                 if is_first_search:
-                    await reward_referrer(user_id)
+                    reward_referrer(user_id)
         else:
             error_msg = result.get('error', 'An error occurred')
-            await event.respond(f"❌ {error_msg}")
-        
+            event.respond(f"❌ {error_msg}")
+
         user_states.pop(user_id, None)
