@@ -38,9 +38,9 @@ MONGODB_DBNAME = os.getenv("MONGODB_DBNAME", "tg_bot_db")
 PAYMENT_QR_CODE = os.getenv("PAYMENT_QR_CODE", "https://example.com/payment-qr.png")
 
 FETCH_WAIT_TIME = int(os.getenv("FETCH_WAIT_TIME", "2"))
-GROUP_TIMEOUT = int(os.getenv("GROUP_TIMEOUT", "15"))  # Timeout per group
+GROUP_TIMEOUT = int(os.getenv("GROUP_TIMEOUT", "15"))
 REPLY_TIMEOUT = int(os.getenv("REPLY_TIMEOUT", "45"))
-PROCESSING_WAIT_EXTRA = 8  # Extra seconds to wait if "processing" detected
+PROCESSING_WAIT_EXTRA = 8
 
 # API endpoints
 PHONE_API_URL = "https://daily-binny-ryuioggv-391a9381.koyeb.app/api/lookup"
@@ -88,7 +88,7 @@ DESTINATION_GROUPS = [
         "name": "Main Group",
         "identifier": "darkboxesv3",
         "timeout": GROUP_TIMEOUT,
-        "entity": None  # Will be resolved at runtime
+        "entity": None
     },
     {
         "name": "Backup Group 2",
@@ -104,15 +104,13 @@ DESTINATION_GROUPS = [
     }
 ]
 
-# Special bot for Telegram username lookup
 TELEGRAM_BOT = {
     "name": "Telegram Lookup Bot",
-    "identifier": "@Dirgeshrai8090_bot",  # Replace with actual bot username
+    "identifier": "@Dirgeshrai8090_bot",
     "timeout": GROUP_TIMEOUT,
     "entity": None
 }
 
-# Vehicle group
 VEHICLE_GROUP = {
     "name": "Vehicle Group",
     "identifier": "IntelXGroup",
@@ -120,16 +118,16 @@ VEHICLE_GROUP = {
     "entity": None
 }
 
-# ============ Command Mapping with Custom Prefixes ============
+# ============ Command Mapping ============
 
 SEARCH_COMMANDS = {
     "phone": {
         "name": "📱 Phone Number Info",
         "type": "group",
         "commands": {
-            0: "/num",      # Main group command
-            1: "/num",      # Backup group 2 command
-            2: "/num"       # Backup group 3 command
+            0: "/num",
+            1: "/num",
+            2: "/num"
         }
     },
     "family": {
@@ -145,16 +143,16 @@ SEARCH_COMMANDS = {
         "name": "🆔 Aadhar Info",
         "type": "group",
         "commands": {
-            0: "/adh",       # Main group uses /adh
-            1: "/aadhar",    # Backup 2 uses /aadhar
-            2: "/aadhar"     # Backup 3 uses /aadhar
+            0: "/adh",
+            1: "/aadhar",
+            2: "/aadhar"
         }
     },
     "vehicle": {
         "name": "🚗 Vehicle to Phone",
         "type": "vehicle_group",
         "commands": {
-            0: "/vnum"  # Vehicle group command
+            0: "/vnum"
         }
     },
     "vehicle_detail": {
@@ -195,9 +193,9 @@ SEARCH_COMMANDS = {
     },
     "telegram": {
         "name": "📲 Telegram to Phone",
-        "type": "telegram_bot",  # Special type for telegram bot
+        "type": "telegram_bot",
         "commands": {
-            0: "/tg"  # Command for telegram bot
+            0: "/tg"
         }
     },
     "imei": {
@@ -266,7 +264,6 @@ def init_mongo():
         api_keys_col = db["api_keys"]
         referrals_col = db["referrals"]
         
-        # Create indexes with error handling
         try:
             users_col.create_index([("user_id", 1)], unique=True)
         except Exception as e:
@@ -623,7 +620,6 @@ async def update_payment_screenshot(payment_id: str, file_id: str):
 # ============ Response Detection Helpers ============
 
 def is_processing_message(text: str) -> bool:
-    """Check if message indicates processing/waiting"""
     if not text:
         return False
     
@@ -646,23 +642,19 @@ def is_processing_message(text: str) -> bool:
         'processing your request'
     ]
     
-    # Check if message is too short (likely just a processing indicator)
     if len(text.strip()) < 30:
         return True
     
-    # Check for processing keywords
     for keyword in processing_keywords:
         if keyword in text_lower:
             return True
     
-    # Check if message is just echoing the command
     if text.strip().startswith('/'):
         return True
     
     return False
 
 def is_no_info_message(text: str) -> bool:
-    """Check if message indicates no information found"""
     if not text:
         return False
     
@@ -692,23 +684,18 @@ def is_no_info_message(text: str) -> bool:
     return any(keyword in text_lower for keyword in no_info_keywords)
 
 def is_valid_result(text: str, search_type: str) -> bool:
-    """Check if the message contains actual useful information"""
     if not text:
         return False
     
-    # Filter out processing messages
     if is_processing_message(text):
         return False
     
-    # Filter out no-info messages
     if is_no_info_message(text):
         return False
     
-    # Check minimum length (real results are usually longer)
     if len(text.strip()) < 50:
         return False
     
-    # Check for actual data indicators
     data_indicators = [
         'name:', 'mobile:', 'address:', 'email:', 'father',
         'owner', 'vehicle', 'registration', 'chassis',
@@ -801,7 +788,7 @@ def format_phone_api_response(data, phone_number: str):
                             result += f"👨 Father: {record['father_name']}\n"
                         if record.get('address'):
                             addr = record['address'].replace('!', ', ').strip(', ')
-                            result += f"📍 Address: {addr}\n"
+                            result += f"🏠 Address: {addr}\n"
                         if record.get('email'):
                             result += f"📧 Email: {record['email']}\n"
                         if record.get('id_number'):
@@ -827,9 +814,9 @@ def format_phone_api_response(data, phone_number: str):
 def format_vehicle_api_response(data, vehicle_no: str):
     try:
         result = (
-            "╔══════════════════════════════════╗\n"
+            "╔═══════════════════════════════════╗\n"
             f"║  🚗 VEHICLE DETAILS: {vehicle_no} ║\n"
-            "╚══════════════════════════════════╝\n\n"
+            "╚═══════════════════════════════════╝\n\n"
         )
 
         if not isinstance(data, dict):
@@ -850,7 +837,7 @@ def format_vehicle_api_response(data, vehicle_no: str):
                 result += f" Father's Name: {father}\n"
             if mobile:
                 result += f" Mobile Number: {mobile}\n"
-            result += "└───────────────────────┘\n\n"
+            result += "└─────────────────────────┘\n\n"
 
         address = data.get('address')
         state = data.get('state')
@@ -862,7 +849,7 @@ def format_vehicle_api_response(data, vehicle_no: str):
                 result += f" Address: {addr}\n"
             if state:
                 result += f" State: {state}\n"
-            result += "└───────────────────────┘\n\n"
+            result += "└─────────────────────────┘\n\n"
 
         manufacturer = data.get('manufacturer') or data.get('maker')
         model = data.get('model') or data.get('maker_model')
@@ -885,7 +872,7 @@ def format_vehicle_api_response(data, vehicle_no: str):
                 result += f" Color: {color}\n"
             if mfg:
                 result += f" Manufacturing Date: {mfg}\n"
-            result += "└───────────────────────┘\n\n"
+            result += "└─────────────────────────┘\n\n"
 
         chassis = data.get('chassis_number')
         engine = data.get('engine_number')
@@ -896,7 +883,7 @@ def format_vehicle_api_response(data, vehicle_no: str):
                 result += f" Chassis Number: {chassis}\n"
             if engine:
                 result += f" Engine Number: {engine}\n"
-            result += "└───────────────────────┘\n\n"
+            result += "└─────────────────────────┘\n\n"
 
         reg_date = data.get('registration_date')
         reg_valid = data.get('registration_valid_till')
@@ -916,7 +903,7 @@ def format_vehicle_api_response(data, vehicle_no: str):
                 result += f" Fitness Valid Till: {fitness}\n"
             if status:
                 result += f" Status: {status}\n"
-            result += "└───────────────────────┘\n\n"
+            result += "└─────────────────────────┘\n\n"
 
         insurer = data.get('insurance_company')
         ins_valid = data.get('insurance_valid_till')
@@ -936,7 +923,7 @@ def format_vehicle_api_response(data, vehicle_no: str):
                 result += f" PUC Certificate No: {puc_no}\n"
             if puc_valid:
                 result += f" PUC Valid Till: {puc_valid}\n"
-            result += "└───────────────────────┘\n\n"
+            result += "└─────────────────────────┘\n\n"
 
         value = data.get('resale_value')
         age = data.get('vehicle_age')
@@ -956,7 +943,7 @@ def format_vehicle_api_response(data, vehicle_no: str):
                 result += f" Vehicle Category: {category}\n"
             if rto_code:
                 result += f" RTO Code: {rto_code}\n"
-            result += "└───────────────────────┘\n"
+            result += "└─────────────────────────┘\n"
 
         return filter_links_and_usernames(result)
 
@@ -989,21 +976,12 @@ async def check_channel_membership(user_id: int):
 # ============ Core Search Function ============
 
 async def perform_search(search_type: str, query: str, user_id: int = None):
-    """
-    Enhanced search with proper cascading and result validation:
-    1. Send to group and wait for initial response
-    2. If processing detected, wait 8 more seconds
-    3. If no info found, cascade to next group
-    4. Only return valid results to user
-    """
-    
     if search_type not in SEARCH_COMMANDS:
         return {"success": False, "error": "Invalid search type"}
     
     command_info = SEARCH_COMMANDS[search_type]
     search_dest_type = command_info.get('type', 'group')
     
-    # Determine destination based on type
     if search_dest_type == 'telegram_bot':
         return await perform_telegram_bot_search(query, user_id)
     elif search_dest_type == 'vehicle_group':
@@ -1011,7 +989,6 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
     else:
         destinations = DESTINATION_GROUPS
     
-    # Try each destination with cascading fallback
     for idx, dest_config in enumerate(destinations):
         dest_entity = dest_config.get('entity')
         
@@ -1019,7 +996,6 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
             logger.warning(f"Destination {idx} ({dest_config['name']}) not resolved, skipping")
             continue
         
-        # Get the appropriate command for this group
         command_prefix = command_info['commands'].get(idx)
         if not command_prefix:
             logger.warning(f"No command configured for {search_type} in group {idx}")
@@ -1029,11 +1005,9 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
         base_timeout = dest_config.get('timeout', GROUP_TIMEOUT)
         
         try:
-            # Send command to destination
             forwarded = await user_client.send_message(dest_entity, command)
             logger.info(f"📤 Sent to {dest_config['name']} (Group {idx}): {command}")
             
-            # Create future for this search
             future = asyncio.get_running_loop().create_future()
             search_id = f"{forwarded.id}_{int(time.time() * 1000)}_{idx}"
             
@@ -1049,33 +1023,27 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                 "chat_entity": dest_entity
             }
             
-            logger.info(f"🔍 Registered search {search_id} in {dest_config['name']}")
+            logger.info(f"📝 Registered search {search_id} in {dest_config['name']}")
             
             try:
-                # Wait for initial response
                 result_text = await asyncio.wait_for(future, timeout=base_timeout)
                 
                 logger.info(f"📩 Received response from {dest_config['name']}: {result_text[:100]}...")
                 
-                # Check if it's a processing message
                 if is_processing_message(result_text):
                     logger.info(f"⏳ Processing message detected, waiting {PROCESSING_WAIT_EXTRA}s more...")
                     
-                    # Wait additional time for processing
                     await asyncio.sleep(PROCESSING_WAIT_EXTRA)
                     
-                    # Try to get the updated message
                     try:
-                        # Get all recent messages from the chat
                         messages = await user_client.get_messages(dest_entity, limit=20)
                         
-                        # Find messages that reply to our command
                         for msg in messages:
                             if msg.reply_to and msg.reply_to.reply_to_msg_id == forwarded.id:
                                 potential_text = msg.text or msg.raw_text
                                 if potential_text and not is_processing_message(potential_text):
                                     result_text = potential_text
-                                    logger.info(f"📝 Found updated non-processing message")
+                                    logger.info(f"🔄 Found updated non-processing message")
                                     break
                             
                     except Exception as e:
@@ -1083,17 +1051,14 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                 
                 logger.info(f"🔍 Validating result from {dest_config['name']}")
                 
-                # Validate the final result
                 if is_no_info_message(result_text):
                     logger.warning(f"⚠️ No info found in {dest_config['name']}")
                     pending_searches.pop(search_id, None)
                     
-                    # Try next group if available
                     if idx < len(destinations) - 1:
                         logger.info(f"➡️ Cascading to next group: {destinations[idx + 1]['name']}")
                         continue
                     else:
-                        # Last group also failed, try API
                         logger.info(f"🔄 All groups failed, trying API fallback")
                         api_result = await try_api_fallback(search_type, query, user_id)
                         if api_result['success']:
@@ -1104,12 +1069,10 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                                 "error": "No result found for this input. Please try another."
                             }
                 
-                # Check if result is valid (not just processing/command echo)
                 if not is_valid_result(result_text, search_type):
                     logger.warning(f"⚠️ Invalid result format from {dest_config['name']}")
                     pending_searches.pop(search_id, None)
                     
-                    # Try next group
                     if idx < len(destinations) - 1:
                         logger.info(f"➡️ Moving to next group: {destinations[idx + 1]['name']}")
                         continue
@@ -1123,7 +1086,6 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                                 "error": "No result found for this input. Please try another."
                             }
                 
-                # Clean and return valid result
                 cleaned = filter_links_and_usernames(result_text)
                 
                 if user_id:
@@ -1141,7 +1103,6 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                 }
                 
             except asyncio.TimeoutError:
-                # Timeout - try next group
                 pending_searches.pop(search_id, None)
                 logger.warning(f"⏱️ Timeout in {dest_config['name']} after {base_timeout}s")
                 
@@ -1159,7 +1120,6 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                     logger.info(f"➡️ Moving to next group: {destinations[idx + 1]['name']}")
                     continue
             except Exception as search_error:
-                # Handle any other errors
                 pending_searches.pop(search_id, None)
                 logger.exception(f"❌ Error waiting for result in {dest_config['name']}: {search_error}")
                 
@@ -1184,8 +1144,6 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
     }
 
 async def try_api_fallback(search_type: str, query: str, user_id: int = None):
-    """Try API fallback for supported search types"""
-    
     if search_type in ['phone', 'telegram']:
         api_result = await fetch_phone_api(query)
         if api_result:
@@ -1213,8 +1171,6 @@ async def try_api_fallback(search_type: str, query: str, user_id: int = None):
     return {"success": False, "error": "All groups failed and no API backup available"}
 
 async def perform_telegram_bot_search(query: str, user_id: int = None):
-    """Enhanced Telegram bot search with validation"""
-    
     bot_entity = TELEGRAM_BOT.get('entity')
     
     if not bot_entity:
@@ -1244,7 +1200,6 @@ async def perform_telegram_bot_search(query: str, user_id: int = None):
         try:
             result_text = await asyncio.wait_for(future, timeout=base_timeout)
             
-            # Check for processing
             if is_processing_message(result_text):
                 logger.info(f"⏳ Processing in Telegram Bot, waiting {PROCESSING_WAIT_EXTRA}s...")
                 await asyncio.sleep(PROCESSING_WAIT_EXTRA)
@@ -1260,7 +1215,6 @@ async def perform_telegram_bot_search(query: str, user_id: int = None):
                 except Exception as e:
                     logger.error(f"Error getting updated bot message: {e}")
             
-            # Validate result
             if is_no_info_message(result_text) or not is_valid_result(result_text, 'telegram'):
                 logger.warning(f"⚠️ No valid info from Telegram Bot")
                 pending_searches.pop(search_id, None)
@@ -1290,7 +1244,6 @@ async def perform_telegram_bot_search(query: str, user_id: int = None):
         return {"success": False, "error": str(e)}
 
 async def fetch_phone_api(phone_number: str):
-    """Fallback API for phone lookups"""
     try:
         async with ClientSession() as session:
             headers = {"X-API-Key": PHONE_API_KEY}
@@ -1305,7 +1258,6 @@ async def fetch_phone_api(phone_number: str):
     return None
 
 async def fetch_vehicle_api(vehicle_no: str):
-    """Fallback API for vehicle lookups"""
     try:
         async with ClientSession() as session:
             headers = {"X-API-Key": VEHICLE_API_KEY}
@@ -1428,7 +1380,7 @@ async def start_handler(event):
         buttons=get_main_menu()
     )
 
-@bot_client.on(events.CallbackQuery(pattern='^referral_menu$'))
+@bot_client.on(events.CallbackQuery(pattern='^referral_menu))
 async def referral_menu_callback(event):
     await event.edit(
         "👥 Referral System\n\n"
@@ -1437,7 +1389,7 @@ async def referral_menu_callback(event):
         buttons=get_referral_menu()
     )
 
-@bot_client.on(events.CallbackQuery(pattern='^referral_link$'))
+@bot_client.on(events.CallbackQuery(pattern='^referral_link))
 async def referral_link_callback(event):
     user_id = event.sender_id
     
@@ -1460,7 +1412,7 @@ async def referral_link_callback(event):
         buttons=[[Button.inline("🔙 Back", "referral_menu")]]
     )
 
-@bot_client.on(events.CallbackQuery(pattern='^referral_stats$'))
+@bot_client.on(events.CallbackQuery(pattern='^referral_stats))
 async def referral_stats_callback(event):
     user_id = event.sender_id
     
@@ -1478,7 +1430,7 @@ async def referral_stats_callback(event):
     
     await event.edit(message, buttons=[[Button.inline("🔙 Back", "referral_menu")]])
 
-@bot_client.on(events.CallbackQuery(pattern='^api_menu$'))
+@bot_client.on(events.CallbackQuery(pattern='^api_menu))
 async def api_menu_callback(event):
     await event.edit(
         "🔑 API Key Management\n\n"
@@ -1486,7 +1438,7 @@ async def api_menu_callback(event):
         buttons=get_api_menu()
     )
 
-@bot_client.on(events.CallbackQuery(pattern='^api_create$'))
+@bot_client.on(events.CallbackQuery(pattern='^api_create))
 async def api_create_callback(event):
     user_id = event.sender_id
     user_states[user_id] = {"action": "awaiting_api_key_name"}
@@ -1496,7 +1448,7 @@ async def api_create_callback(event):
         "Please send a name for this API key (e.g., 'My App', 'Production Server'):"
     )
 
-@bot_client.on(events.CallbackQuery(pattern='^api_list$'))
+@bot_client.on(events.CallbackQuery(pattern='^api_list))
 async def api_list_callback(event):
     user_id = event.sender_id
     api_keys = await list_user_api_keys(user_id)
@@ -1527,7 +1479,7 @@ async def api_list_callback(event):
     
     await event.edit(message, buttons=buttons)
 
-@bot_client.on(events.CallbackQuery(pattern=r'^api_delete_(.+)$'))
+@bot_client.on(events.CallbackQuery(pattern=r'^api_delete_(.+)))
 async def api_delete_callback(event):
     user_id = event.sender_id
     api_key = event.data.decode().split('_', 2)[2]
@@ -1540,11 +1492,30 @@ async def api_delete_callback(event):
     else:
         await event.answer("❌ Failed to delete API key", alert=True)
 
-@bot_client.on(events.CallbackQuery(pattern='^back_main$'))
+@bot_client.on(events.CallbackQuery(pattern='^back_main))
 async def back_main_callback(event):
-    await start_handler(event)
+    user = await event.get_sender()
+    user_id = user.id
+    user_doc = await get_user(user_id)
+    
+    if user_id == ADMIN_USER_ID:
+        await event.edit(
+            f"👋 Welcome Admin!\n\n"
+            f"You have full access to all features.\n"
+            f"Use the menu below:",
+            buttons=get_main_menu()
+        )
+        return
+    
+    await event.edit(
+        f"👋 Welcome {user.first_name}!\n\n"
+        f"📊 Your Plan: {user_doc.get('plan', 'free').upper()}\n"
+        f"🔍 Searches Remaining: {user_doc.get('searches_remaining', 0)}\n\n"
+        f"Select an option below:",
+        buttons=get_main_menu()
+    )
 
-@bot_client.on(events.CallbackQuery(pattern=r'^search_(.+)$'))
+@bot_client.on(events.CallbackQuery(pattern=r'^search_(.+)))
 async def search_callback(event):
     user_id = event.sender_id
     search_type = event.data.decode().split('_')[1]
@@ -1614,7 +1585,8 @@ async def search_callback(event):
             f"Please send the {search_type} to search:"
         )
 
-@bot_client.on(events.CallbackQuery(pattern=r'^buy_(.+)$'))
+@bot_client.on(events.CallbackQuery(pattern=r'^buy_(.+)
+        ))
 async def buy_plan_callback(event):
     user_id = event.sender_id
     plan_key = event.data.decode().split('_', 1)[1]
@@ -1662,7 +1634,8 @@ async def buy_plan_callback(event):
         logger.exception("Error sending QR code: %s", e)
         await event.respond("Please pay and send screenshot.")
 
-@bot_client.on(events.CallbackQuery(pattern=r'^approve_(.+)_(.+)$'))
+@bot_client.on(events.CallbackQuery(pattern=r'^approve_(.+)_(.+)
+        ))
 async def approve_payment_callback(event):
     if event.sender_id != ADMIN_USER_ID:
         await event.answer("❌ Unauthorized", alert=True)
@@ -1715,7 +1688,8 @@ async def approve_payment_callback(event):
     except Exception as e:
         logger.exception("Error notifying user: %s", e)
 
-@bot_client.on(events.CallbackQuery(pattern=r'^reject_(.+)_(.+)$'))
+@bot_client.on(events.CallbackQuery(pattern=r'^reject_(.+)_(.+)
+        ))
 async def reject_payment_callback(event):
     if event.sender_id != ADMIN_USER_ID:
         await event.answer("❌ Unauthorized", alert=True)
@@ -1743,7 +1717,8 @@ async def reject_payment_callback(event):
     except Exception as e:
         logger.exception("Error notifying user: %s", e)
 
-@bot_client.on(events.CallbackQuery(pattern='^cancel$'))
+@bot_client.on(events.CallbackQuery(pattern='^cancel
+        ))
 async def cancel_callback(event):
     user_id = event.sender_id
     user_states.pop(user_id, None)
@@ -1752,7 +1727,8 @@ async def cancel_callback(event):
         buttons=None
     )
 
-@bot_client.on(events.CallbackQuery(pattern='^start$'))
+@bot_client.on(events.CallbackQuery(pattern='^start
+        ))
 async def start_button_callback(event):
     await start_handler(event)
 
@@ -1810,15 +1786,86 @@ async def message_handler(event):
             )
         
         user_states.pop(user_id, None)
+        return
+    
+    if state.get('action') == 'awaiting_payment':
+        if not event.photo:
+            await event.respond("❌ Please send a screenshot image.")
+            return
+
+        payment_id = state['payment_id']
+        plan_key = state['plan']
+        plan_info = PLANS[plan_key]
+
+        await update_payment_screenshot(payment_id, event.message.id)
+
+        try:
+            user = await event.get_sender()
+            await bot_client.send_file(
+                ADMIN_USER_ID,
+                event.photo,
+                caption=(
+                    f"💰 Payment Screenshot Received\n\n"
+                    f"User: {user.first_name} (@{user.username or 'N/A'})\n"
+                    f"User ID: {user_id}\n"
+                    f"Plan: {plan_info['name']}\n"
+                    f"Amount: ₹{plan_info['price']}\n"
+                    f"Payment ID: {payment_id}"
+                ),
+                buttons=get_payment_approval_buttons(payment_id, user_id)
+            )
+        except Exception as e:
+            logger.exception("Error forwarding to admin: %s", e)
+
+        await event.respond(
+            "✅ Payment screenshot received!\n\n"
+            "Your payment is being reviewed. You'll be notified once approved."
+        )
+
+        user_states.pop(user_id, None)
+        return
+    
+    if state.get('action') == 'awaiting_input':
+        search_type = state['type']
+        query = event.text.strip()
+
+        status_msg = await event.respond("⏳ Fetching information... Please wait.")
+
+        user_doc = await get_user(user_id)
+        is_first_search = (
+            user_doc.get('total_searches', 0) == 0
+            and user_doc.get('referred_by')
+        )
+
+        result = await perform_search(search_type, query, user_id)
+
+        try:
+            await status_msg.delete()
+        except:
+            pass
+
+        if result['success']:
+            await event.respond(f"✅ Search Result:\n\n{result['result']}")
+
+            if user_id != ADMIN_USER_ID:
+                user_doc = await get_user(user_id)
+                if user_doc.get('plan') != 'unlimited':
+                    await decrement_search(user_id)
+
+                if is_first_search:
+                    await reward_referrer(user_id)
+        else:
+            error_msg = result.get('error', 'An error occurred')
+            await event.respond(f"❌ {error_msg}")
+
+        user_states.pop(user_id, None)
 
 # ============ Enhanced Message Handler for All Groups and Bots ============
 
 @user_client.on(events.NewMessage())
 async def handle_all_replies(event):
-    """Universal handler with smart processing and no-info detection"""
     message = event.message
     
-    # Skip if not a reply
     if not message.reply_to:
         return
     
@@ -1828,11 +1875,9 @@ async def handle_all_replies(event):
     
     now = time.time()
     
-    # Find matching search
     matched_search = None
     matched_key = None
     
-    # First try to match by reply_to_msg_id (most accurate)
     for search_id, search_info in list(pending_searches.items()):
         if search_info['future'].done():
             continue
@@ -1840,14 +1885,12 @@ async def handle_all_replies(event):
         if now - search_info.get("timestamp", now) > REPLY_TIMEOUT:
             continue
         
-        # Check if this is a reply to our command
         if message.reply_to.reply_to_msg_id == search_info.get('message_id'):
             matched_search = search_info
             matched_key = search_id
             logger.info(f"🎯 Reply matched for search_id: {search_id}")
             break
     
-    # If no match by reply_id, try content matching as fallback
     if not matched_search:
         for search_id, search_info in list(pending_searches.items()):
             if search_info['future'].done():
@@ -1891,15 +1934,12 @@ async def handle_all_replies(event):
     if not matched_search:
         return
     
-    # Check if this is a processing message - don't deliver yet
     if is_processing_message(text):
         logger.info(f"⏳ Processing message detected for {matched_key}, ignoring for now")
         return
     
-    # Wait brief moment for message to fully load
     await asyncio.sleep(FETCH_WAIT_TIME)
     
-    # Get latest version of message
     try:
         chat = await event.get_chat()
         latest = await user_client.get_messages(chat, ids=message.id)
@@ -1910,7 +1950,6 @@ async def handle_all_replies(event):
     except Exception as e:
         logger.error(f"Error getting latest message: {e}")
     
-    # Deliver result to future
     if not matched_search['future'].done():
         matched_search['future'].set_result(text)
         logger.info(f"📨 Delivered result for search {matched_key}")
@@ -1918,16 +1957,14 @@ async def handle_all_replies(event):
 # ============ Cleanup Task ============
 
 async def cleanup_old_searches():
-    """Clean up expired searches and prevent blocking"""
     while True:
-        await asyncio.sleep(30)  # Run every 30 seconds
+        await asyncio.sleep(30)
         now = time.time()
         to_remove = []
         
         for search_id, info in list(pending_searches.items()):
             age = now - info.get('timestamp', now)
             
-            # Remove searches older than REPLY_TIMEOUT
             if age > REPLY_TIMEOUT:
                 if not info['future'].done():
                     try:
@@ -1943,7 +1980,6 @@ async def cleanup_old_searches():
         if to_remove:
             logger.info(f"🧹 Cleanup: Removed {len(to_remove)} expired searches")
         
-        # Log current pending searches for debugging
         if pending_searches:
             logger.info(f"📊 Active searches: {len(pending_searches)}")
 
@@ -2127,7 +2163,6 @@ async def start_bot():
             
             logger.info("✅ User account session loaded")
 
-        # Resolve all destination entities
         logger.info("📡 Resolving destination groups...")
         
         for idx, group in enumerate(DESTINATION_GROUPS):
@@ -2137,14 +2172,12 @@ async def start_bot():
             except Exception as e:
                 logger.warning(f"❌ Could not resolve group {idx}: {e}")
         
-        # Resolve vehicle group
         try:
             VEHICLE_GROUP['entity'] = await user_client.get_entity(VEHICLE_GROUP['identifier'])
             logger.info(f"✅ Vehicle Group: {VEHICLE_GROUP['identifier']}")
         except Exception as e:
             logger.warning(f"❌ Could not resolve vehicle group: {e}")
         
-        # Resolve telegram bot
         try:
             TELEGRAM_BOT['entity'] = await user_client.get_entity(TELEGRAM_BOT['identifier'])
             logger.info(f"✅ Telegram Bot: {TELEGRAM_BOT['identifier']}")
@@ -2169,81 +2202,8 @@ async def start_bot():
         logger.exception("❌ Fatal error: %s", e)
         raise
 
-
 if __name__ == "__main__":
     try:
         asyncio.run(start_bot())
     except KeyboardInterrupt:
         logger.info("🛑 Bot stopped by user")
-        pass   # ← return removed (syntax fix)
-
-
-    if state.get('action') == 'awaiting_payment':
-        if not event.photo:
-            event.respond("❌ Please send a screenshot image.")
-            pass
-
-        payment_id = state['payment_id']
-        plan_key = state['plan']
-        plan_info = PLANS[plan_key]
-
-        update_payment_screenshot(payment_id, event.message.id)
-
-        try:
-            user = event.get_sender()
-            bot_client.send_file(
-                ADMIN_USER_ID,
-                event.photo,
-                caption=(
-                    f"💰 Payment Screenshot Received\n\n"
-                    f"User: {user.first_name} (@{user.username or 'N/A'})\n"
-                    f"User ID: {user_id}\n"
-                    f"Plan: {plan_info['name']}\n"
-                    f"Amount: ₹{plan_info['price']}\n"
-                    f"Payment ID: {payment_id}"
-                ),
-                buttons=get_payment_approval_buttons(payment_id, user_id)
-            )
-        except Exception as e:
-            logger.exception("Error forwarding to admin: %s", e)
-
-        event.respond(
-            "✅ Payment screenshot received!\n\n"
-            "Your payment is being reviewed. You'll be notified once approved."
-        )
-
-        user_states.pop(user_id, None)
-        pass
-
-
-    if state.get('action') == 'awaiting_input':
-        search_type = state['type']
-        query = event.text.strip()
-
-        status_msg = event.respond("⏳ Fetching information... Please wait.")
-
-        user_doc = get_user(user_id)
-        is_first_search = (
-            user_doc.get('total_searches', 0) == 0
-            and user_doc.get('referred_by')
-        )
-
-        result = perform_search(search_type, query, user_id)
-
-        status_msg.delete()
-
-        if result['success']:
-            event.respond(f"✅ Search Result:\n\n{result['result']}")
-
-            if user_id != ADMIN_USER_ID:
-                user_doc = get_user(user_id)
-                if user_doc.get('plan') != 'unlimited':
-                    decrement_search(user_id)
-
-                if is_first_search:
-                    reward_referrer(user_id)
-        else:
-            error_msg = result.get('error', 'An error occurred')
-            event.respond(f"❌ {error_msg}")
-
-        user_states.pop(user_id, None)
