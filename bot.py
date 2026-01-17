@@ -11,6 +11,7 @@ from datetime import datetime, timezone, timedelta
 from aiohttp import web, ClientSession
 from telethon import TelegramClient, events, Button
 from telethon.tl.types import User
+from telethon.tl.functions.channels import GetParticipantRequest
 from pymongo import MongoClient
 
 # ============ Config ============
@@ -1034,11 +1035,33 @@ else:
     user_client = bot_client
 
 async def check_channel_membership(user_id: int):
+    """Check if user is a member of the mandatory channel"""
     try:
-        participant = await bot_client.get_permissions(MANDATORY_CHANNEL, user_id)
-        return participant is not None
+        # Try to get the channel entity
+        channel = await bot_client.get_entity(MANDATORY_CHANNEL)
+        
+        # Get the participant info
+        try:
+            participant = await bot_client(
+                GetParticipantRequest(channel, user_id)
+            )
+            # If we get here, user is a participant
+            # Check if they are banned or left
+            from telethon.tl.types import ChannelParticipantBanned, ChannelParticipantLeft
+            
+            if isinstance(participant.participant, (ChannelParticipantBanned, ChannelParticipantLeft)):
+                return False
+            
+            return True
+            
+        except Exception as get_participant_error:
+            # User is not in the channel
+            logger.info(f"User {user_id} is not in channel: {get_participant_error}")
+            return False
+        
     except Exception as e:
-        logger.exception("Error checking channel membership: %s", e)
+        # If there's an error accessing the channel, log it
+        logger.error(f"Error checking channel membership for {user_id}: {e}")
         return False
 
 # ============ Core Search Function ============
@@ -1611,9 +1634,12 @@ async def start_handler(event):
         await event.respond(
             f"👋 Welcome to Premium Info Bot!\n\n"
             f"To use this bot, you must first join our channel:\n"
-            f"{MANDATORY_CHANNEL}\n\n"
-            f"After joining, click /start again.",
-            buttons=[[Button.url("Join Channel", f"https://t.me/{MANDATORY_CHANNEL.replace('@', '')}")]]
+            f"@{MANDATORY_CHANNEL.replace('@', '')}\n\n"
+            f"After joining, click the button below to verify.",
+            buttons=[
+                [Button.url("📢 Join Channel", f"https://t.me/{MANDATORY_CHANNEL.replace('@', '')}")],
+                [Button.inline("✅ I've Joined - Check Again", "check_membership")]
+            ]
         )
         return
     
@@ -1973,6 +1999,40 @@ async def cancel_callback(event):
     await event.edit(
         "❌ Cancelled\n\nUse /start to begin again.",
         buttons=None
+    )
+
+@bot_client.on(events.CallbackQuery(pattern='^check_membership'))
+async def check_membership_callback(event):
+    user_id = event.sender_id
+    
+    # Check if user joined the channel
+    is_member = await check_channel_membership(user_id)
+    
+    if not is_member:
+        await event.answer(
+            "❌ You haven't joined the channel yet. Please join and try again.",
+            alert=True
+        )
+        return
+    
+    # User has joined! Update database and show main menu
+    await asyncio.get_running_loop().run_in_executor(
+        None, lambda: users_col.update_one(
+            {"user_id": user_id},
+            {"$set": {"channel_joined": True}}
+        )
+    )
+    
+    user_doc = await get_user(user_id)
+    user = await event.get_sender()
+    
+    await event.edit(
+        f"✅ Great! You've joined the channel!\n\n"
+        f"👋 Welcome {user.first_name}!\n\n"
+        f"📊 Your Plan: {user_doc.get('plan', 'free').upper()}\n"
+        f"🔍 Searches Remaining: {user_doc.get('searches_remaining', 0)}\n\n"
+        f"Select an option below:",
+        buttons=get_main_menu()
     )
 
 @bot_client.on(events.CallbackQuery(pattern='^start'))
