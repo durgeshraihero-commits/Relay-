@@ -279,6 +279,7 @@ def init_mongo():
         api_keys_col = db["api_keys"]
         referrals_col = db["referrals"]
         
+        # Create user_id unique index
         try:
             users_col.create_index([("user_id", 1)], unique=True)
         except Exception as e:
@@ -286,34 +287,43 @@ def init_mongo():
                 raise
             logger.info("user_id index already exists")
         
-        # Replace this block:
-try:
-    try:
-        users_col.drop_index("referral_code_1")
-    except:
-        pass
-    users_col.create_index([("referral_code", 1)], unique=True, sparse=True)
-except Exception as e:
-    if "already exists" not in str(e).lower():
-        logger.warning(f"Could not create referral_code index: {e}")
-
-# With this:
-try:
-    users_col.drop_index("referral_code_1")
-    logger.info("Dropped old referral_code index")
-except Exception as e:
-    logger.info("No old referral_code index to drop")
-
-try:
-    users_col.create_index(
-        [("referral_code", 1)], 
-        unique=True, 
-        partialFilterExpression={"referral_code": {"$type": "string"}}
-    )
-    logger.info("Created partial unique index for referral_code")
-except Exception as e:
-    if "already exists" not in str(e).lower():
-        logger.warning(f"Could not create referral_code index: {e}")
+        # Drop old referral_code index if it exists
+        try:
+            users_col.drop_index("referral_code_1")
+            logger.info("Dropped old referral_code index")
+        except Exception as e:
+            logger.info("No old referral_code index to drop")
+        
+        # Create partial unique index for referral_code (only for non-null values)
+        try:
+            users_col.create_index(
+                [("referral_code", 1)], 
+                unique=True, 
+                partialFilterExpression={"referral_code": {"$type": "string"}}
+            )
+            logger.info("Created partial unique index for referral_code")
+        except Exception as e:
+            if "already exists" not in str(e).lower():
+                logger.warning(f"Could not create referral_code index: {e}")
+        
+        # Other indexes
+        for col, field in [(payments_col, "user_id"), (searches_col, "user_id"), 
+                           (api_keys_col, "user_id"), (referrals_col, "referrer_id"), 
+                           (referrals_col, "referred_id")]:
+            try:
+                col.create_index([(field, 1)])
+            except:
+                pass
+        
+        try:
+            api_keys_col.create_index([("api_key", 1)], unique=True)
+        except:
+            pass
+        
+        logger.info("MongoDB connected successfully")
+    except Exception as e:
+        logger.exception("MongoDB connection failed: %s", e)
+        raise
 
 # ============ Referral System ============
 
