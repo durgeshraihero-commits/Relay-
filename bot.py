@@ -286,33 +286,34 @@ def init_mongo():
                 raise
             logger.info("user_id index already exists")
         
-        try:
-            try:
-                users_col.drop_index("referral_code_1")
-            except:
-                pass
-            users_col.create_index([("referral_code", 1)], unique=True, sparse=True)
-        except Exception as e:
-            if "already exists" not in str(e).lower():
-                logger.warning(f"Could not create referral_code index: {e}")
-        
-        for col, field in [(payments_col, "user_id"), (searches_col, "user_id"), 
-                           (api_keys_col, "user_id"), (referrals_col, "referrer_id"), 
-                           (referrals_col, "referred_id")]:
-            try:
-                col.create_index([(field, 1)])
-            except:
-                pass
-        
-        try:
-            api_keys_col.create_index([("api_key", 1)], unique=True)
-        except:
-            pass
-        
-        logger.info("MongoDB connected successfully")
-    except Exception as e:
-        logger.exception("MongoDB connection failed: %s", e)
-        raise
+        # Replace this block:
+try:
+    try:
+        users_col.drop_index("referral_code_1")
+    except:
+        pass
+    users_col.create_index([("referral_code", 1)], unique=True, sparse=True)
+except Exception as e:
+    if "already exists" not in str(e).lower():
+        logger.warning(f"Could not create referral_code index: {e}")
+
+# With this:
+try:
+    users_col.drop_index("referral_code_1")
+    logger.info("Dropped old referral_code index")
+except Exception as e:
+    logger.info("No old referral_code index to drop")
+
+try:
+    users_col.create_index(
+        [("referral_code", 1)], 
+        unique=True, 
+        partialFilterExpression={"referral_code": {"$type": "string"}}
+    )
+    logger.info("Created partial unique index for referral_code")
+except Exception as e:
+    if "already exists" not in str(e).lower():
+        logger.warning(f"Could not create referral_code index: {e}")
 
 # ============ Referral System ============
 
@@ -1594,7 +1595,7 @@ def get_payment_approval_buttons(payment_id: str, user_id: int):
     ]
 
 # ============ Bot Event Handlers ============
-
+# Replace entire function with:
 @bot_client.on(events.NewMessage(pattern=r'/start( (.+))?'))
 async def start_handler(event):
     user = await event.get_sender()
@@ -1604,11 +1605,10 @@ async def start_handler(event):
     if event.pattern_match.group(2):
         referral_code = event.pattern_match.group(2).strip()
     
+    # CREATE USER FIRST
     user_doc = await get_user(user_id)
-    
     if not user_doc:
         await create_or_update_user(user_id, user.username, user.first_name)
-        
         if referral_code:
             success = await apply_referral(user_id, referral_code)
             if success:
@@ -1617,8 +1617,10 @@ async def start_handler(event):
                     f"You got {NEW_USER_CREDITS} free trial credits to start with."
                 )
     
+    # Refresh user_doc
     user_doc = await get_user(user_id)
     
+    # Admin bypass
     if user_id == ADMIN_USER_ID:
         await event.respond(
             f"👋 Welcome Admin!\n\n"
@@ -1628,6 +1630,7 @@ async def start_handler(event):
         )
         return
     
+    # Check membership
     is_member = await check_channel_membership(user_id)
     
     if not is_member:
@@ -1643,6 +1646,7 @@ async def start_handler(event):
         )
         return
     
+    # User is member
     await asyncio.get_running_loop().run_in_executor(
         None, lambda: users_col.update_one(
             {"user_id": user_id},
@@ -1657,6 +1661,7 @@ async def start_handler(event):
         f"Select an option below:",
         buttons=get_main_menu()
     )
+
 
 @bot_client.on(events.CallbackQuery(pattern='^referral_menu'))
 async def referral_menu_callback(event):
@@ -2035,9 +2040,46 @@ async def check_membership_callback(event):
         buttons=get_main_menu()
     )
 
-@bot_client.on(events.CallbackQuery(pattern='^start'))
-async def start_button_callback(event):
-    await start_handler(event)
+# Replace entire function with:
+@bot_client.on(events.CallbackQuery(pattern='^check_membership'))
+async def check_membership_callback(event):
+    user_id = event.sender_id
+    
+    # Ensure user exists
+    user_doc = await get_user(user_id)
+    if not user_doc:
+        user = await event.get_sender()
+        await create_or_update_user(user_id, user.username, user.first_name)
+        user_doc = await get_user(user_id)
+    
+    # Check membership
+    is_member = await check_channel_membership(user_id)
+    
+    if not is_member:
+        await event.answer(
+            "❌ You haven't joined the channel yet. Please join and try again.",
+            alert=True
+        )
+        return
+    
+    # Update DB
+    await asyncio.get_running_loop().run_in_executor(
+        None, lambda: users_col.update_one(
+            {"user_id": user_id},
+            {"$set": {"channel_joined": True}}
+        )
+    )
+    
+    user = await event.get_sender()
+    
+    await event.edit(
+        f"✅ Great! You've joined the channel!\n\n"
+        f"👋 Welcome {user.first_name}!\n\n"
+        f"📊 Your Plan: {user_doc.get('plan', 'free').upper()}\n"
+        f"🔍 Searches Remaining: {user_doc.get('searches_remaining', 0)}\n\n"
+        f"Select an option below:",
+        buttons=get_main_menu()
+    )
 
 @bot_client.on(events.NewMessage(func=lambda e: e.is_private and not e.text.startswith('/')))
 async def message_handler(event):
