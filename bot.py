@@ -111,6 +111,13 @@ TELEGRAM_BOT = {
     "entity": None
 }
 
+TELEGRAM_USERNAME_GROUP = {
+    "name": "Telegram Username Group",
+    "identifier": "darkboxesv3",  # Replace with your actual group for username searches
+    "timeout": GROUP_TIMEOUT,
+    "entity": None
+}
+
 VEHICLE_GROUP = {
     "name": "Vehicle Group",
     "identifier": "IntelXGroup",
@@ -196,6 +203,13 @@ SEARCH_COMMANDS = {
         "type": "telegram_bot",
         "commands": {
             0: "/tg"
+        }
+    },
+    "telegram_username": {
+        "name": "👤 Telegram Username Info",
+        "type": "telegram_username_group",
+        "commands": {
+            0: "/tguser"
         }
     },
     "imei": {
@@ -617,6 +631,36 @@ async def update_payment_screenshot(payment_id: str, file_id: str):
         logger.exception("Error updating payment screenshot: %s", e)
         return False
 
+async def check_telegram_daily_limit(user_id: int) -> bool:
+    """Check if user has exceeded daily telegram search limit (1 per day)"""
+    try:
+        today = datetime.now(timezone.utc).date()
+        today_start = datetime.combine(today, datetime.min.time()).replace(tzinfo=timezone.utc)
+        
+        count = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: searches_col.count_documents({
+                "user_id": user_id,
+                "search_type": {"$in": ["telegram", "telegram_username"]},
+                "timestamp": {"$gte": today_start.isoformat()}
+            })
+        )
+        return count >= 1
+    except Exception as e:
+        logger.exception("Error checking telegram daily limit: %s", e)
+        return False
+
+async def get_telegram_search_reset_time(user_id: int) -> str:
+    """Get when the user can search telegram again"""
+    try:
+        tomorrow = datetime.now(timezone.utc).date() + timedelta(days=1)
+        tomorrow_start = datetime.combine(tomorrow, datetime.min.time()).replace(tzinfo=timezone.utc)
+        time_diff = tomorrow_start - datetime.now(timezone.utc)
+        hours = int(time_diff.total_seconds() // 3600)
+        minutes = int((time_diff.total_seconds() % 3600) // 60)
+        return f"{hours}h {minutes}m"
+    except Exception:
+        return "24h"
+
 # ============ Response Detection Helpers ============
 
 def is_processing_message(text: str) -> bool:
@@ -1008,6 +1052,8 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
     
     if search_dest_type == 'telegram_bot':
         return await perform_telegram_bot_search(query, user_id)
+    elif search_dest_type == 'telegram_username_group':
+        return await perform_telegram_username_search(query, user_id)
     elif search_dest_type == 'vehicle_group':
         destinations = [VEHICLE_GROUP]
     else:
@@ -1220,6 +1266,16 @@ async def try_api_fallback(search_type: str, query: str, user_id: int = None):
     return {"success": False, "error": "All groups failed and no API backup available"}
 
 async def perform_telegram_bot_search(query: str, user_id: int = None):
+    """Perform telegram to phone search with auto button click and daily limit"""
+    
+    # Check daily limit
+    if user_id and await check_telegram_daily_limit(user_id):
+        reset_time = await get_telegram_search_reset_time(user_id)
+        return {
+            "success": False, 
+            "error": f"⏰ Daily telegram search limit reached (1 per day).\n\n🔄 Reset in: {reset_time}"
+        }
+    
     bot_entity = TELEGRAM_BOT.get('entity')
     
     if not bot_entity:
@@ -1243,12 +1299,55 @@ async def perform_telegram_bot_search(query: str, user_id: int = None):
             "search_type": "telegram",
             "timestamp": time.time(),
             "message_id": forwarded.id,
-            "chat_entity": bot_entity
+            "chat_entity": bot_entity,
+            "button_clicked": False
         }
         
         try:
             result_text = await asyncio.wait_for(future, timeout=base_timeout)
             
+            # Check if response contains inline keyboard asking for direction
+            if "выберите направление" in result_text.lower() or "select" in result_text.lower():
+                logger.info(f"🔘 Inline keyboard detected, looking for Telegram button...")
+                
+                # Wait a bit for keyboard to load
+                await asyncio.sleep(2)
+                
+                try:
+                    # Get the message with buttons
+                    messages = await user_client.get_messages(bot_entity, limit=10)
+                    for msg in messages:
+                        if msg.reply_to and msg.reply_to.reply_to_msg_id == forwarded.id:
+                            if msg.buttons:
+                                # Find and click the "Telegram" button
+                                for row in msg.buttons:
+                                    for button in row:
+                                        button_text = button.text.lower() if hasattr(button, 'text') else ''
+                                        if 'telegram' in button_text:
+                                            logger.info(f"✅ Found Telegram button, clicking...")
+                                            await msg.click(button)
+                                            pending_searches[search_id]['button_clicked'] = True
+                                            
+                                            # Wait for response after clicking
+                                            await asyncio.sleep(PROCESSING_WAIT_EXTRA)
+                                            
+                                            # Get the new response
+                                            new_messages = await user_client.get_messages(bot_entity, limit=20)
+                                            for new_msg in new_messages:
+                                                if new_msg.reply_to and new_msg.reply_to.reply_to_msg_id == msg.id:
+                                                    potential_text = new_msg.text or new_msg.raw_text
+                                                    if potential_text:
+                                                        result_text = potential_text
+                                                        logger.info(f"📨 Got response after button click")
+                                                        break
+                                            break
+                                    if pending_searches[search_id].get('button_clicked'):
+                                        break
+                                break
+                except Exception as e:
+                    logger.error(f"Error clicking button: {e}")
+            
+            # Handle processing messages
             if is_processing_message(result_text):
                 logger.info(f"⏳ Processing in Telegram Bot, waiting {PROCESSING_WAIT_EXTRA}s...")
                 await asyncio.sleep(PROCESSING_WAIT_EXTRA)
@@ -1290,6 +1389,110 @@ async def perform_telegram_bot_search(query: str, user_id: int = None):
             
     except Exception as e:
         logger.exception(f"Error with Telegram Bot: %s", e)
+        return {"success": False, "error": str(e)}
+
+async def perform_telegram_username_search(query: str, user_id: int = None):
+    """Perform telegram username search using dedicated group with daily limit"""
+    
+    # Check daily limit
+    if user_id and await check_telegram_daily_limit(user_id):
+        reset_time = await get_telegram_search_reset_time(user_id)
+        return {
+            "success": False, 
+            "error": f"⏰ Daily telegram search limit reached (1 per day).\n\n🔄 Reset in: {reset_time}"
+        }
+    
+    group_entity = TELEGRAM_USERNAME_GROUP.get('entity')
+    
+    if not group_entity:
+        return {"success": False, "error": "Telegram username group not configured"}
+    
+    try:
+        command_prefix = SEARCH_COMMANDS['telegram_username']['commands'].get(0, '/tguser')
+        command = f"{command_prefix} {query}"
+        base_timeout = TELEGRAM_USERNAME_GROUP.get('timeout', GROUP_TIMEOUT)
+        
+        forwarded = await user_client.send_message(group_entity, command)
+        logger.info(f"📤 Sent to Telegram Username Group: {command}")
+        
+        future = asyncio.get_running_loop().create_future()
+        search_id = f"tguser_{forwarded.id}_{int(time.time() * 1000)}"
+        
+        pending_searches[search_id] = {
+            "future": future,
+            "user_id": user_id,
+            "query": query,
+            "search_type": "telegram_username",
+            "timestamp": time.time(),
+            "message_id": forwarded.id,
+            "chat_entity": group_entity
+        }
+        
+        try:
+            result_text = await asyncio.wait_for(future, timeout=base_timeout)
+            
+            # Handle processing messages
+            if is_processing_message(result_text):
+                logger.info(f"⏳ Processing message, waiting {PROCESSING_WAIT_EXTRA}s...")
+                await asyncio.sleep(PROCESSING_WAIT_EXTRA)
+                
+                try:
+                    messages = await user_client.get_messages(group_entity, limit=20)
+                    for msg in messages:
+                        if msg.reply_to and msg.reply_to.reply_to_msg_id == forwarded.id:
+                            potential_text = msg.text or msg.raw_text
+                            if potential_text and not is_processing_message(potential_text):
+                                result_text = potential_text
+                                break
+                except Exception as e:
+                    logger.error(f"Error getting updated message: {e}")
+            
+            # Handle spam messages
+            if is_no_info_message(result_text):
+                logger.info(f"🚫 Spam/no-info message detected, waiting for valid data...")
+                await asyncio.sleep(PROCESSING_WAIT_EXTRA)
+                
+                try:
+                    messages = await user_client.get_messages(group_entity, limit=20)
+                    for msg in messages:
+                        if msg.reply_to and msg.reply_to.reply_to_msg_id == forwarded.id:
+                            potential_text = msg.text or msg.raw_text
+                            if (potential_text and 
+                                not is_no_info_message(potential_text) and 
+                                not is_processing_message(potential_text) and
+                                is_valid_result(potential_text, 'telegram_username')):
+                                result_text = potential_text
+                                logger.info(f"✅ Found valid data after spam!")
+                                break
+                except Exception as e:
+                    logger.error(f"Error getting updated message: {e}")
+            
+            if is_no_info_message(result_text) or not is_valid_result(result_text, 'telegram_username'):
+                logger.warning(f"⚠️ No valid info from Telegram Username Group")
+                pending_searches.pop(search_id, None)
+                return {"success": False, "error": "No information found for this username"}
+            
+            cleaned = filter_links_and_usernames(result_text)
+            
+            if user_id:
+                await log_search(user_id, "telegram_username", query, cleaned)
+            
+            pending_searches.pop(search_id, None)
+            
+            return {
+                "success": True, 
+                "result": cleaned, 
+                "search_type": "telegram_username", 
+                "source": "Telegram Username Group"
+            }
+            
+        except asyncio.TimeoutError:
+            pending_searches.pop(search_id, None)
+            logger.warning(f"⏱️ Timeout from Telegram Username Group")
+            return {"success": False, "error": "Search timed out. Please try again."}
+            
+    except Exception as e:
+        logger.exception(f"Error with Telegram Username search: %s", e)
         return {"success": False, "error": str(e)}
 
 async def fetch_phone_api(phone_number: str):
@@ -2237,6 +2440,12 @@ async def start_bot():
             logger.info(f"✅ Telegram Bot: {TELEGRAM_BOT['identifier']}")
         except Exception as e:
             logger.warning(f"❌ Could not resolve telegram bot: {e}")
+        
+        try:
+            TELEGRAM_USERNAME_GROUP['entity'] = await user_client.get_entity(TELEGRAM_USERNAME_GROUP['identifier'])
+            logger.info(f"✅ Telegram Username Group: {TELEGRAM_USERNAME_GROUP['identifier']}")
+        except Exception as e:
+            logger.warning(f"❌ Could not resolve telegram username group: {e}")
 
         init_mongo()
         
