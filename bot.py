@@ -1055,6 +1055,8 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                 # Wait for initial response
                 result_text = await asyncio.wait_for(future, timeout=base_timeout)
                 
+                logger.info(f"📩 Received response from {dest_config['name']}: {result_text[:100]}...")
+                
                 # Check if it's a processing message
                 if is_processing_message(result_text):
                     logger.info(f"⏳ Processing message detected, waiting {PROCESSING_WAIT_EXTRA}s more...")
@@ -1078,6 +1080,8 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                             
                     except Exception as e:
                         logger.error(f"Error getting updated message: {e}")
+                
+                logger.info(f"🔍 Validating result from {dest_config['name']}")
                 
                 # Validate the final result
                 if is_no_info_message(result_text):
@@ -1139,7 +1143,7 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
             except asyncio.TimeoutError:
                 # Timeout - try next group
                 pending_searches.pop(search_id, None)
-                logger.warning(f"⏱️ Timeout in {dest_config['name']}")
+                logger.warning(f"⏱️ Timeout in {dest_config['name']} after {base_timeout}s")
                 
                 if idx == len(destinations) - 1:
                     logger.info(f"🔄 All groups timed out, trying API fallback")
@@ -1153,6 +1157,19 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                         }
                 else:
                     logger.info(f"➡️ Moving to next group: {destinations[idx + 1]['name']}")
+                    continue
+            except Exception as search_error:
+                # Handle any other errors
+                pending_searches.pop(search_id, None)
+                logger.exception(f"❌ Error waiting for result in {dest_config['name']}: {search_error}")
+                
+                if idx == len(destinations) - 1:
+                    return {
+                        "success": False,
+                        "error": "An error occurred. Please try again."
+                    }
+                else:
+                    logger.info(f"➡️ Moving to next group due to error")
                     continue
                 
         except Exception as e:
@@ -1874,6 +1891,11 @@ async def handle_all_replies(event):
     if not matched_search:
         return
     
+    # Check if this is a processing message - don't deliver yet
+    if is_processing_message(text):
+        logger.info(f"⏳ Processing message detected for {matched_key}, ignoring for now")
+        return
+    
     # Wait brief moment for message to fully load
     await asyncio.sleep(FETCH_WAIT_TIME)
     
@@ -1896,19 +1918,23 @@ async def handle_all_replies(event):
 # ============ Cleanup Task ============
 
 async def cleanup_old_searches():
+    """Clean up expired searches and prevent blocking"""
     while True:
-        await asyncio.sleep(60)
+        await asyncio.sleep(30)  # Run every 30 seconds
         now = time.time()
         to_remove = []
         
         for search_id, info in list(pending_searches.items()):
             age = now - info.get('timestamp', now)
-            if age > REPLY_TIMEOUT + 10:
+            
+            # Remove searches older than REPLY_TIMEOUT
+            if age > REPLY_TIMEOUT:
                 if not info['future'].done():
                     try:
-                        info['future'].set_exception(TimeoutError("Search expired"))
-                    except Exception:
-                        pass
+                        info['future'].set_exception(TimeoutError("Search expired - cleaned up"))
+                        logger.warning(f"⚠️ Force-cleaned expired search {search_id} (age: {age:.1f}s)")
+                    except Exception as e:
+                        logger.error(f"Error setting exception for {search_id}: {e}")
                 to_remove.append(search_id)
         
         for search_id in to_remove:
@@ -1916,6 +1942,10 @@ async def cleanup_old_searches():
         
         if to_remove:
             logger.info(f"🧹 Cleanup: Removed {len(to_remove)} expired searches")
+        
+        # Log current pending searches for debugging
+        if pending_searches:
+            logger.info(f"📊 Active searches: {len(pending_searches)}")
 
 # ============ API Endpoints ============
 
@@ -2140,96 +2170,73 @@ async def start_bot():
         raise
 
 
-# ================== MAIN ENTRY ==================
-
 if __name__ == "__main__":
     try:
         asyncio.run(start_bot())
     except KeyboardInterrupt:
         logger.info("🛑 Bot stopped by user")
-
-
-# ================== STATE HANDLER ==================
-
-async def handle_user_state(event, state, user_id):
-    # ---------- PAYMENT SCREENSHOT ----------
+        return
+    
     if state.get('action') == 'awaiting_payment':
         if not event.photo:
             await event.respond("❌ Please send a screenshot image.")
             return
-
+        
         payment_id = state['payment_id']
         plan_key = state['plan']
         plan_info = PLANS[plan_key]
-
+        
         await update_payment_screenshot(payment_id, event.message.id)
-
+        
         try:
             user = await event.get_sender()
             await bot_client.send_file(
                 ADMIN_USER_ID,
                 event.photo,
-                caption=(
-                    "💰 Payment Screenshot Received\n\n"
-                    f"User: {user.first_name} (@{user.username or 'N/A'})\n"
-                    f"User ID: {user_id}\n"
-                    f"Plan: {plan_info['name']}\n"
-                    f"Amount: ₹{plan_info['price']}\n"
-                    f"Payment ID: {payment_id}"
-                ),
+                caption=f"💰 Payment Screenshot Received\n\n"
+                        f"User: {user.first_name} (@{user.username or 'N/A'})\n"
+                        f"User ID: {user_id}\n"
+                        f"Plan: {plan_info['name']}\n"
+                        f"Amount: ₹{plan_info['price']}\n"
+                        f"Payment ID: {payment_id}",
                 buttons=get_payment_approval_buttons(payment_id, user_id)
             )
         except Exception as e:
             logger.exception("Error forwarding to admin: %s", e)
-
+        
         await event.respond(
             "✅ Payment screenshot received!\n\n"
             "Your payment is being reviewed. You'll be notified once approved."
         )
-
+        
         user_states.pop(user_id, None)
         return
-
-    # ---------- SEARCH INPUT ----------
+    
     if state.get('action') == 'awaiting_input':
         search_type = state['type']
         query = event.text.strip()
-
+        
         status_msg = await event.respond("⏳ Fetching information... Please wait.")
-
+        
         user_doc = await get_user(user_id)
-        is_first_search = (
-            user_doc.get('total_searches', 0) == 0
-            and user_doc.get('referred_by')
-        )
-
+        is_first_search = user_doc.get('total_searches', 0) == 0 and user_doc.get('referred_by')
+        
         result = await perform_search(search_type, query, user_id)
-
+        
         await status_msg.delete()
-
-        if result.get('success'):
+        
+        if result['success']:
             await event.respond(f"✅ Search Result:\n\n{result['result']}")
-
+            
             if user_id != ADMIN_USER_ID:
+                user_doc = await get_user(user_id)
                 if user_doc.get('plan') != 'unlimited':
                     await decrement_search(user_id)
-
+                
                 if is_first_search:
                     await reward_referrer(user_id)
         else:
-            await event.respond(
-                f"❌ {result.get('error', 'An error occurred')}"
-            )
-
+            error_msg = result.get('error', 'An error occurred')
+            await event.respond(f"❌ {error_msg}")
+        
         user_states.pop(user_id, None)
-
-
-# ================== EVENT BINDING ==================
-
-@client.on(events.NewMessage)
-async def on_message(event):
-    user_id = event.sender_id
-    state = user_states.get(user_id)
-
-    if state:
-        await handle_user_state(event, state, user_id)
