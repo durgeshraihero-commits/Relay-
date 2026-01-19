@@ -121,7 +121,7 @@ TELEGRAM_USERNAME_GROUP = {
 
 MOVIE_BOT = {
     "name": "Movie/Series Bot",
-    "identifier": "@iPapkornD2bot",  # Replace with your actual movie bot username
+    "identifier": "@iPopkornbot",  # Replace with your actual movie bot username
     "timeout": 60,  # Movies might take longer to respond
     "entity": None
 }
@@ -1114,55 +1114,65 @@ async def perform_interactive_telegram_search(query: str, user_id: int):
         command = f"{command_prefix} {query}"
         
         # Send query to destination bot
+        send_timestamp = time.time()
         forwarded = await user_client.send_message(bot_entity, command)
         logger.info(f"📤 Sent to Telegram Bot: {command}")
         
         # Wait for response with buttons
-        await asyncio.sleep(3)
+        await asyncio.sleep(4)
         
-        # Get the response from destination bot
-        messages = await user_client.get_messages(bot_entity, limit=10)
+        # Get the response from destination bot (check by timestamp, not reply_to)
+        messages = await user_client.get_messages(bot_entity, limit=15)
         for msg in messages:
-            if msg.reply_to and msg.reply_to.reply_to_msg_id == forwarded.id:
-                if msg.buttons:
-                    # Found buttons! Send them to user
-                    logger.info(f"🔘 Found inline keyboard with {len(msg.buttons)} rows")
-                    
-                    # Store session info
-                    interactive_sessions[user_id] = {
-                        "dest_message": msg,
-                        "dest_entity": bot_entity,
-                        "type": "telegram",
-                        "query": query,
-                        "original_msg_id": forwarded.id
-                    }
-                    
-                    # Create same buttons for user
-                    user_buttons = []
-                    for row in msg.buttons:
-                        button_row = []
-                        for button in row:
-                            if hasattr(button, 'text'):
-                                # Create callback button with same text
-                                button_row.append(Button.inline(
-                                    button.text, 
-                                    f"relay_{button.text.lower().replace(' ', '_')}"
-                                ))
-                        if button_row:
-                            user_buttons.append(button_row)
-                    
-                    # Return special "needs_interaction" response
-                    return {
-                        "success": False,
-                        "needs_interaction": True,
-                        "message": msg.text or msg.raw_text or "🔍 Please select a platform:",
-                        "buttons": user_buttons
-                    }
+            # Skip our own sent message
+            if msg.id == forwarded.id:
+                continue
+            
+            # Check if message is newer than our send (within last 10 seconds)
+            msg_timestamp = msg.date.timestamp() if msg.date else 0
+            if msg_timestamp < send_timestamp - 2:  # 2 sec buffer
+                continue
+            
+            if msg.buttons:
+                # Found buttons! Send them to user
+                logger.info(f"🔘 Found inline keyboard with {len(msg.buttons)} rows")
                 
-                # If no buttons, return the text
+                # Store session info
+                interactive_sessions[user_id] = {
+                    "dest_message": msg,
+                    "dest_entity": bot_entity,
+                    "type": "telegram",
+                    "query": query,
+                    "original_msg_id": forwarded.id
+                }
+                
+                # Create same buttons for user
+                user_buttons = []
+                for row in msg.buttons:
+                    button_row = []
+                    for button in row:
+                        if hasattr(button, 'text'):
+                            # Create callback button with same text
+                            button_row.append(Button.inline(
+                                button.text, 
+                                f"relay_{button.text.lower().replace(' ', '_')}"
+                            ))
+                    if button_row:
+                        user_buttons.append(button_row)
+                
+                # Return special "needs_interaction" response
+                return {
+                    "success": False,
+                    "needs_interaction": True,
+                    "message": msg.text or msg.raw_text or "🔍 Please select a platform:",
+                    "buttons": user_buttons
+                }
+            
+            # If no buttons but has text, return it
+            if msg.text or msg.raw_text:
                 return {
                     "success": True,
-                    "result": msg.text or msg.raw_text or "No response received"
+                    "result": msg.text or msg.raw_text
                 }
         
         return {"success": False, "error": "No response from Telegram bot"}
@@ -1182,59 +1192,68 @@ async def perform_interactive_movie_search(query: str, user_id: int):
     
     try:
         # Send movie name to bot (no command prefix needed)
+        send_timestamp = time.time()
         forwarded = await user_client.send_message(bot_entity, query)
         logger.info(f"🎬 Sent to Movie Bot: {query}")
         
         # Wait for response
-        await asyncio.sleep(4)
+        await asyncio.sleep(5)
         
-        # Get the response from movie bot
-        messages = await user_client.get_messages(bot_entity, limit=15)
+        # Get the response from movie bot (check by timestamp, not reply_to)
+        messages = await user_client.get_messages(bot_entity, limit=20)
         
         for msg in messages:
-            if msg.reply_to and msg.reply_to.reply_to_msg_id == forwarded.id:
-                # Check if it has buttons
-                if msg.buttons:
-                    logger.info(f"🎬 Found movie options with {len(msg.buttons)} rows")
-                    
-                    # Store session info
-                    interactive_sessions[user_id] = {
-                        "dest_message": msg,
-                        "dest_entity": bot_entity,
-                        "type": "movie",
-                        "query": query,
-                        "original_msg_id": forwarded.id
-                    }
-                    
-                    # Create same buttons for user
-                    user_buttons = []
-                    for row in msg.buttons:
-                        button_row = []
-                        for button in row:
-                            if hasattr(button, 'text'):
-                                # Create callback button with same text
-                                button_row.append(Button.inline(
-                                    button.text,
-                                    f"relay_{len(user_buttons)}_{len(button_row)}"  # row_col format
-                                ))
-                        if button_row:
-                            user_buttons.append(button_row)
-                    
-                    # Return special "needs_interaction" response
-                    return {
-                        "success": False,
-                        "needs_interaction": True,
-                        "message": msg.text or msg.raw_text or "🎬 Select a file:",
-                        "buttons": user_buttons
-                    }
+            # Skip our own sent message
+            if msg.id == forwarded.id:
+                continue
+            
+            # Check if message is newer than our send (within last 10 seconds)
+            msg_timestamp = msg.date.timestamp() if msg.date else 0
+            if msg_timestamp < send_timestamp - 2:  # 2 sec buffer
+                continue
+            
+            # Check if it has buttons
+            if msg.buttons:
+                logger.info(f"🎬 Found movie options with {len(msg.buttons)} rows")
                 
-                # Return text/file response
-                if msg.text or msg.file:
-                    return {
-                        "success": True,
-                        "result": msg.text or msg.raw_text or "File received",
-                        "file": msg if msg.file else None
-                    }
+                # Store session info
+                interactive_sessions[user_id] = {
+                    "dest_message": msg,
+                    "dest_entity": bot_entity,
+                    "type": "movie",
+                    "query": query,
+                    "original_msg_id": forwarded.id
+                }
+                
+                # Create same buttons for user
+                user_buttons = []
+                for row in msg.buttons:
+                    button_row = []
+                    for button in row:
+                        if hasattr(button, 'text'):
+                            # Create callback button with same text
+                            button_row.append(Button.inline(
+                                button.text,
+                                f"relay_{len(user_buttons)}_{len(button_row)}"  # row_col format
+                            ))
+                    if button_row:
+                        user_buttons.append(button_row)
+                
+                # Return special "needs_interaction" response
+                return {
+                    "success": False,
+                    "needs_interaction": True,
+                    "message": msg.text or msg.raw_text or "🎬 Select a file:",
+                    "buttons": user_buttons
+                }
+            
+            # Return text/file response (if no buttons)
+            if msg.text or msg.file:
+                return {
+                    "success": True,
+                    "result": msg.text or msg.raw_text or "File received",
+                    "file": msg if msg.file else None
+                }
         
         return {"success": False, "error": "No response from Movie bot"}
         
@@ -1988,14 +2007,14 @@ async def relay_button_callback(event):
         if search_type == "telegram":
             button_text = callback_data.replace('relay_', '').replace('_', ' ')
             
-            for row in dest_message.buttons:
-                for button in row:
+            for row_idx, row in enumerate(dest_message.buttons):
+                for col_idx, button in enumerate(row):
                     if hasattr(button, 'text') and button.text.lower() == button_text.lower():
                         logger.info(f"🔘 Clicking button '{button.text}' in destination bot")
                         await event.answer(f"⏳ Fetching from {button.text}...")
                         
-                        # Click the button
-                        await dest_message.click(button)
+                        # Click the button by position
+                        await dest_message.click(row_idx, col_idx)
                         button_clicked = True
                         break
                 if button_clicked:
@@ -2010,12 +2029,11 @@ async def relay_button_callback(event):
                 col_idx = int(parts[2])
                 
                 if row_idx < len(dest_message.buttons) and col_idx < len(dest_message.buttons[row_idx]):
-                    button = dest_message.buttons[row_idx][col_idx]
                     logger.info(f"🎬 Clicking button at position [{row_idx}][{col_idx}]")
                     await event.answer("⏳ Fetching file...")
                     
-                    # Click the button
-                    await dest_message.click(button)
+                    # Click the button using row and column indices
+                    await dest_message.click(row_idx, col_idx)
                     button_clicked = True
         
         if not button_clicked:
@@ -2023,41 +2041,52 @@ async def relay_button_callback(event):
             return
         
         # Wait for response from destination bot
-        await asyncio.sleep(4)
+        click_timestamp = time.time()
+        await asyncio.sleep(5)  # Increased wait time for file processing
         
-        # Get the response
-        messages = await user_client.get_messages(dest_entity, limit=20)
+        # Get the response (check messages that came after our click)
+        messages = await user_client.get_messages(dest_entity, limit=25)
         
         result_found = False
         for msg in messages:
-            # Check if it's a reply to our button click
-            if msg.reply_to and msg.reply_to.reply_to_msg_id == dest_message.id:
-                result_found = True
+            # Check if message is newer than our click (within last 10 seconds)
+            msg_timestamp = msg.date.timestamp() if msg.date else 0
+            
+            # Skip messages older than our click
+            if msg_timestamp < click_timestamp - 2:  # 2 sec buffer for clock differences
+                continue
+            
+            # Skip our own sent message
+            if msg.id == dest_message.id:
+                continue
+            
+            # This is a response!
+            result_found = True
+            
+            # Check if it has more buttons (pagination, etc.)
+            if msg.buttons:
+                # Update session with new message
+                session['dest_message'] = msg
                 
-                # Check if it has more buttons (pagination, etc.)
-                if msg.buttons:
-                    # Update session with new message
-                    session['dest_message'] = msg
-                    
-                    # Create buttons for user
-                    user_buttons = []
-                    for row in msg.buttons:
-                        button_row = []
-                        for button in row:
-                            if hasattr(button, 'text'):
-                                button_row.append(Button.inline(
-                                    button.text,
-                                    f"relay_{len(user_buttons)}_{len(button_row)}"
-                                ))
-                        if button_row:
-                            user_buttons.append(button_row)
-                    
-                    # Send message with new buttons
-                    await event.edit(
-                        msg.text or msg.raw_text or "Select an option:",
-                        buttons=user_buttons
-                    )
-                    return
+                # Create buttons for user
+                user_buttons = []
+                for row in msg.buttons:
+                    button_row = []
+                    for button in row:
+                        if hasattr(button, 'text'):
+                            button_row.append(Button.inline(
+                                button.text,
+                                f"relay_{len(user_buttons)}_{len(button_row)}"
+                            ))
+                    if button_row:
+                        user_buttons.append(button_row)
+                
+                # Send message with new buttons
+                await event.edit(
+                    msg.text or msg.raw_text or "Select an option:",
+                    buttons=user_buttons
+                )
+                return
                 
                 # No more buttons - this is the final result
                 # Clear session
