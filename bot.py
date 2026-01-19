@@ -156,7 +156,7 @@ SEARCH_COMMANDS = {
         "name": "👨‍👩‍👧‍👦 Family Info",
         "type": "family_group",
         "commands": {
-            0: "/family"
+            0: "/familyinfo"
         }
     },
     "aadhar": {
