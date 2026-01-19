@@ -121,7 +121,7 @@ TELEGRAM_USERNAME_GROUP = {
 
 MOVIE_BOT = {
     "name": "Movie/Series Bot",
-    "identifier": "@iPapkornD2bot",  # Replace with your actual movie bot username
+    "identifier": "@iPopkornbot",  # Replace with your actual movie bot username
     "timeout": 60,  # Movies might take longer to respond
     "entity": None
 }
@@ -850,6 +850,74 @@ def filter_links_and_usernames(text: str):
     cleaned = re.sub(r' {2,}', ' ', cleaned).strip()
 
     return cleaned
+
+def extract_family_members(text: str) -> str:
+    """
+    Extract only family member lines from family info text.
+    Removes headers, footers, and other promotional content.
+    
+    Example input:
+        FAMILY REPORT
+        ====================
+        Head: NA
+        RC No: NA
+        
+        • Rammurti (F) - SELF
+        • MAHENDRA SINGH (M) - HUSBAND
+        • Saurav Vairagi (M) - SON
+        
+        ====================
+        ⚡ Designed & Powered by @DuXxZx_info
+    
+    Example output:
+        • Rammurti (F) - SELF
+        • MAHENDRA SINGH (M) - HUSBAND
+        • Saurav Vairagi (M) - SON
+    """
+    if not text:
+        return text
+    
+    lines = text.splitlines()
+    family_members = []
+    
+    for line in lines:
+        stripped = line.strip()
+        
+        # Skip empty lines
+        if not stripped:
+            continue
+        
+        # Skip separator lines
+        if stripped.startswith('='):
+            continue
+        
+        # Skip header keywords
+        header_keywords = [
+            'family report',
+            'head:',
+            'rc no:',
+            'designed',
+            'powered by',
+            'developed by',
+            '@',
+            'telegram',
+            '⚡',
+            '©',
+            'copyright'
+        ]
+        
+        if any(keyword in stripped.lower() for keyword in header_keywords):
+            continue
+        
+        # Keep lines that start with bullet points (family members)
+        if stripped.startswith('•') or stripped.startswith('-') or stripped.startswith('*'):
+            family_members.append(stripped)
+    
+    if family_members:
+        return '\n'.join(family_members)
+    
+    # If no bullet points found, return original (fallback)
+    return text
 
 def format_phone_api_response(data, phone_number: str):
     try:
@@ -2087,40 +2155,40 @@ async def relay_button_callback(event):
                     buttons=user_buttons
                 )
                 return
+            
+            # No more buttons - this is the final result
+            # Clear session
+            interactive_sessions.pop(user_id, None)
+            user_states.pop(user_id, None)
+            
+            # Send result to user
+            if msg.file:
+                # It's a file/video/document
+                await event.answer("✅ File received!")
                 
-                # No more buttons - this is the final result
-                # Clear session
-                interactive_sessions.pop(user_id, None)
-                user_states.pop(user_id, None)
+                if msg.text:
+                    await bot_client.send_message(user_id, f"✅ Result:\n\n{msg.text}")
                 
-                # Send result to user
-                if msg.file:
-                    # It's a file/video/document
-                    await event.answer("✅ File received!")
-                    
-                    if msg.text:
-                        await bot_client.send_message(user_id, f"✅ Result:\n\n{msg.text}")
-                    
-                    # Forward the file
-                    await bot_client.forward_messages(user_id, msg)
-                    
-                    # Deduct credit
-                    if user_id != ADMIN_USER_ID:
-                        user_doc = await get_user(user_id)
-                        if user_doc.get('plan') != 'unlimited':
-                            await decrement_search(user_id)
-                    
-                elif msg.text or msg.raw_text:
-                    # Text result
-                    await event.edit(f"✅ Result:\n\n{msg.text or msg.raw_text}")
-                    
-                    # Deduct credit
-                    if user_id != ADMIN_USER_ID:
-                        user_doc = await get_user(user_id)
-                        if user_doc.get('plan') != 'unlimited':
-                            await decrement_search(user_id)
+                # Forward the file
+                await bot_client.forward_messages(user_id, msg)
                 
-                break
+                # Deduct credit
+                if user_id != ADMIN_USER_ID:
+                    user_doc = await get_user(user_id)
+                    if user_doc.get('plan') != 'unlimited':
+                        await decrement_search(user_id)
+                
+            elif msg.text or msg.raw_text:
+                # Text result
+                await event.edit(f"✅ Result:\n\n{msg.text or msg.raw_text}")
+                
+                # Deduct credit
+                if user_id != ADMIN_USER_ID:
+                    user_doc = await get_user(user_id)
+                    if user_doc.get('plan') != 'unlimited':
+                        await decrement_search(user_id)
+            
+            break
         
         if not result_found:
             await event.answer("❌ No response received", alert=True)
@@ -2593,8 +2661,12 @@ async def handle_all_replies(event):
     if not message.reply_to:
         return
     
+    # Handle both text messages and files (TXT files for family info)
     text = message.text or message.raw_text
-    if not text:
+    has_file = message.file is not None
+    
+    # Skip if neither text nor file
+    if not text and not has_file:
         return
     
     now = time.time()
@@ -2625,68 +2697,120 @@ async def handle_all_replies(event):
             
             query = search_info['query'].strip()
             search_type = search_info['search_type']
-            message_text_lower = text.lower()
             
-            is_match = False
+            # For text messages, check content
+            if text:
+                message_text_lower = text.lower()
+                is_match = False
+                
+                if search_type in ['phone', 'telegram', 'family']:
+                    clean_query = re.sub(r'[^\d]', '', query)
+                    clean_msg = re.sub(r'[^\d]', '', text)
+                    if clean_query and len(clean_query) >= 10 and clean_query in clean_msg:
+                        is_match = True
+                        
+                elif search_type == 'aadhar':
+                    clean_query = re.sub(r'[^\d]', '', query)
+                    if len(clean_query) == 12 and clean_query in re.sub(r'[^\d]', '', text):
+                        is_match = True
+                        
+                elif search_type in ['vehicle', 'vehicle_detail']:
+                    clean_query = re.sub(r'[^a-z0-9]', '', query.lower())
+                    clean_msg = re.sub(r'[^a-z0-9]', '', message_text_lower)
+                    if clean_query and len(clean_query) >= 6 and clean_query in clean_msg:
+                        is_match = True
+                
+                elif query.lower() in message_text_lower:
+                    is_match = True
+                
+                if is_match:
+                    matched_search = search_info
+                    matched_key = search_id
+                    logger.info(f"🎯 Content match for search_id: {search_id}")
+                    break
             
-            if search_type in ['phone', 'telegram', 'family']:
+            # For file messages (family TXT files), match by search type and query
+            elif has_file and search_type == 'family':
+                # Check if query number is in the caption or message
+                caption = message.caption or ""
+                full_text = f"{text or ''} {caption}".lower()
                 clean_query = re.sub(r'[^\d]', '', query)
-                clean_msg = re.sub(r'[^\d]', '', text)
-                if clean_query and len(clean_query) >= 10 and clean_query in clean_msg:
-                    is_match = True
-                    
-            elif search_type == 'aadhar':
-                clean_query = re.sub(r'[^\d]', '', query)
-                if len(clean_query) == 12 and clean_query in re.sub(r'[^\d]', '', text):
-                    is_match = True
-                    
-            elif search_type in ['vehicle', 'vehicle_detail']:
-                clean_query = re.sub(r'[^a-z0-9]', '', query.lower())
-                clean_msg = re.sub(r'[^a-z0-9]', '', message_text_lower)
-                if clean_query and len(clean_query) >= 6 and clean_query in clean_msg:
-                    is_match = True
-            
-            elif query.lower() in message_text_lower:
-                is_match = True
-            
-            if is_match:
-                matched_search = search_info
-                matched_key = search_id
-                logger.info(f"🎯 Content match for search_id: {search_id}")
-                break
+                
+                if clean_query and len(clean_query) >= 10:
+                    if clean_query in re.sub(r'[^\d]', '', full_text):
+                        matched_search = search_info
+                        matched_key = search_id
+                        logger.info(f"🎯 Family file match for search_id: {search_id}")
+                        break
     
     if not matched_search:
         return
     
-    if is_processing_message(text):
-        logger.info(f"⏳ Processing message detected for {matched_key}, ignoring for now")
-        return
-    
-    # NEW: Skip spam/no-info messages - don't deliver them, wait for valid data
-    if is_no_info_message(text):
-        logger.info(f"🚫 Spam/no-info message detected for {matched_key}, waiting for valid data")
-        return
+    # For text messages, check for processing/spam
+    if text:
+        if is_processing_message(text):
+            logger.info(f"⏳ Processing message detected for {matched_key}, ignoring for now")
+            return
+        
+        # NEW: Skip spam/no-info messages - don't deliver them, wait for valid data
+        if is_no_info_message(text):
+            logger.info(f"🚫 Spam/no-info message detected for {matched_key}, waiting for valid data")
+            return
     
     await asyncio.sleep(FETCH_WAIT_TIME)
     
-    try:
-        chat = await event.get_chat()
-        latest = await user_client.get_messages(chat, ids=message.id)
-        if latest:
-            final_text = latest.text or latest.raw_text
-            if final_text:
-                text = final_text
-    except Exception as e:
-        logger.error(f"Error getting latest message: {e}")
+    # Handle file messages (TXT files for family info)
+    if has_file and matched_search['search_type'] == 'family':
+        try:
+            # Check if it's a TXT file
+            file_name = message.file.name or ""
+            if file_name.lower().endswith('.txt') or message.file.mime_type == 'text/plain':
+                logger.info(f"📄 Downloading family TXT file: {file_name}")
+                
+                # Download the file
+                file_bytes = await message.download_media(bytes)
+                
+                # Extract text from file
+                try:
+                    file_text = file_bytes.decode('utf-8')
+                except UnicodeDecodeError:
+                    # Try other encodings
+                    try:
+                        file_text = file_bytes.decode('latin-1')
+                    except:
+                        file_text = file_bytes.decode('utf-8', errors='ignore')
+                
+                # Extract only family members (remove headers/footers)
+                family_members = extract_family_members(file_text)
+                
+                if family_members and not matched_search['future'].done():
+                    matched_search['future'].set_result(family_members)
+                    logger.info(f"📨 Delivered extracted family info for search {matched_key}")
+                    return
+        except Exception as e:
+            logger.error(f"Error processing family TXT file: {e}")
+            # Fall back to text if file processing fails
     
-    # Double-check: don't deliver if it's still a spam/no-info message after fetch
-    if is_no_info_message(text):
-        logger.info(f"🚫 Final check: Still spam/no-info for {matched_key}, skipping")
-        return
-    
-    if not matched_search['future'].done():
-        matched_search['future'].set_result(text)
-        logger.info(f"📨 Delivered result for search {matched_key}")
+    # Handle text messages
+    if text:
+        try:
+            chat = await event.get_chat()
+            latest = await user_client.get_messages(chat, ids=message.id)
+            if latest:
+                final_text = latest.text or latest.raw_text
+                if final_text:
+                    text = final_text
+        except Exception as e:
+            logger.error(f"Error getting latest message: {e}")
+        
+        # Double-check: don't deliver if it's still a spam/no-info message after fetch
+        if is_no_info_message(text):
+            logger.info(f"🚫 Final check: Still spam/no-info for {matched_key}, skipping")
+            return
+        
+        if not matched_search['future'].done():
+            matched_search['future'].set_result(text)
+            logger.info(f"📨 Delivered result for search {matched_key}")
 
 # ============ Cleanup Task ============
 
