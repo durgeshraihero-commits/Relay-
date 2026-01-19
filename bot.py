@@ -105,6 +105,13 @@ DESTINATION_GROUPS = [
     }
 ]
 
+FAMILY_GROUP = {
+    "name": "Family Info Group",
+    "identifier": -1003596998816,  # Private group ID
+    "timeout": GROUP_TIMEOUT,
+    "entity": None
+}
+
 TELEGRAM_BOT = {
     "name": "Telegram Lookup Bot",
     "identifier": "@Dirgeshrai8090_bot",
@@ -147,11 +154,9 @@ SEARCH_COMMANDS = {
     },
     "family": {
         "name": "👨‍👩‍👧‍👦 Family Info",
-        "type": "group",
+        "type": "family_group",
         "commands": {
-            0: "/family",
-            1: "/family",
-            2: "/family"
+            0: "/family"
         }
     },
     "aadhar": {
@@ -1350,6 +1355,8 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
         return await perform_interactive_movie_search(query, user_id)
     elif search_dest_type == 'telegram_username_group':
         return await perform_telegram_username_search(query, user_id)
+    elif search_dest_type == 'family_group':
+        destinations = [FAMILY_GROUP]
     elif search_dest_type == 'vehicle_group':
         destinations = [VEHICLE_GROUP]
     else:
@@ -2109,90 +2116,127 @@ async def relay_button_callback(event):
             return
         
         # Wait for response from destination bot
-        click_timestamp = time.time()
-        await asyncio.sleep(5)  # Increased wait time for file processing
+        logger.info(f"⏳ Waiting for response after button click...")
+        await asyncio.sleep(6)  # Wait longer to ensure response arrives
         
-        # Get the response (check messages that came after our click)
-        messages = await user_client.get_messages(dest_entity, limit=25)
+        # Strategy 1: Check if the original message was edited
+        try:
+            updated_msg = await user_client.get_messages(dest_entity, ids=dest_message.id)
+            if updated_msg and updated_msg.edit_date:
+                logger.info(f"📝 Message was edited after button click")
+                
+                # Check if edited message has content
+                if updated_msg.buttons:
+                    # Still has buttons - pagination
+                    session['dest_message'] = updated_msg
+                    
+                    user_buttons = []
+                    for row in updated_msg.buttons:
+                        button_row = []
+                        for button in row:
+                            if hasattr(button, 'text'):
+                                button_row.append(Button.inline(
+                                    button.text,
+                                    f"relay_{len(user_buttons)}_{len(button_row)}"
+                                ))
+                        if button_row:
+                            user_buttons.append(button_row)
+                    
+                    await event.edit(
+                        updated_msg.text or updated_msg.raw_text or "Select an option:",
+                        buttons=user_buttons
+                    )
+                    return
+                
+                elif updated_msg.text or updated_msg.file:
+                    # Message was edited with final result
+                    logger.info(f"✅ Found result in edited message")
+                    interactive_sessions.pop(user_id, None)
+                    user_states.pop(user_id, None)
+                    
+                    if updated_msg.file:
+                        await event.answer("✅ File received!")
+                        if updated_msg.text:
+                            await bot_client.send_message(user_id, f"✅ Result:\n\n{updated_msg.text}")
+                        await bot_client.forward_messages(user_id, updated_msg)
+                    elif updated_msg.text:
+                        await event.edit(f"✅ Result:\n\n{updated_msg.text}")
+                    
+                    # Deduct credit
+                    if user_id != ADMIN_USER_ID:
+                        user_doc = await get_user(user_id)
+                        if user_doc.get('plan') != 'unlimited':
+                            await decrement_search(user_id)
+                    return
+        except Exception as e:
+            logger.warning(f"Could not check for message edit: {e}")
         
-        result_found = False
+        # Strategy 2: Look for new messages from the bot
+        logger.info(f"🔍 Looking for new messages from bot...")
+        messages = await user_client.get_messages(dest_entity, limit=30)
+        
+        # Look for messages newer than our click
         for msg in messages:
-            # Check if message is newer than our click (within last 10 seconds)
-            msg_timestamp = msg.date.timestamp() if msg.date else 0
-            
-            # Skip messages older than our click
-            if msg_timestamp < click_timestamp - 2:  # 2 sec buffer for clock differences
-                continue
-            
-            # Skip our own sent message
+            # Skip the original button message
             if msg.id == dest_message.id:
                 continue
             
-            # This is a response!
-            result_found = True
-            
-            # Check if it has more buttons (pagination, etc.)
-            if msg.buttons:
-                # Update session with new message
-                session['dest_message'] = msg
+            # Check if this message came after our button click (must be very recent)
+            if msg.date and msg.date.timestamp() > (time.time() - 10):
+                logger.info(f"📨 Found recent message (ID: {msg.id}, Date: {msg.date})")
                 
-                # Create buttons for user
-                user_buttons = []
-                for row in msg.buttons:
-                    button_row = []
-                    for button in row:
-                        if hasattr(button, 'text'):
-                            button_row.append(Button.inline(
-                                button.text,
-                                f"relay_{len(user_buttons)}_{len(button_row)}"
-                            ))
-                    if button_row:
-                        user_buttons.append(button_row)
+                # Check if it has buttons (pagination)
+                if msg.buttons:
+                    logger.info(f"🔘 Message has {len(msg.buttons)} button rows")
+                    session['dest_message'] = msg
+                    
+                    user_buttons = []
+                    for row in msg.buttons:
+                        button_row = []
+                        for button in row:
+                            if hasattr(button, 'text'):
+                                button_row.append(Button.inline(
+                                    button.text,
+                                    f"relay_{len(user_buttons)}_{len(button_row)}"
+                                ))
+                        if button_row:
+                            user_buttons.append(button_row)
+                    
+                    await event.edit(
+                        msg.text or msg.raw_text or "Select an option:",
+                        buttons=user_buttons
+                    )
+                    return
                 
-                # Send message with new buttons
-                await event.edit(
-                    msg.text or msg.raw_text or "Select an option:",
-                    buttons=user_buttons
-                )
-                return
-            
-            # No more buttons - this is the final result
-            # Clear session
-            interactive_sessions.pop(user_id, None)
-            user_states.pop(user_id, None)
-            
-            # Send result to user
-            if msg.file:
-                # It's a file/video/document
-                await event.answer("✅ File received!")
-                
-                if msg.text:
-                    await bot_client.send_message(user_id, f"✅ Result:\n\n{msg.text}")
-                
-                # Forward the file
-                await bot_client.forward_messages(user_id, msg)
-                
-                # Deduct credit
-                if user_id != ADMIN_USER_ID:
-                    user_doc = await get_user(user_id)
-                    if user_doc.get('plan') != 'unlimited':
-                        await decrement_search(user_id)
-                
-            elif msg.text or msg.raw_text:
-                # Text result
-                await event.edit(f"✅ Result:\n\n{msg.text or msg.raw_text}")
-                
-                # Deduct credit
-                if user_id != ADMIN_USER_ID:
-                    user_doc = await get_user(user_id)
-                    if user_doc.get('plan') != 'unlimited':
-                        await decrement_search(user_id)
-            
-            break
+                # Check if it's a final result (file or text)
+                if msg.file or (msg.text and len(msg.text) > 10):
+                    logger.info(f"✅ Found final result message")
+                    interactive_sessions.pop(user_id, None)
+                    user_states.pop(user_id, None)
+                    
+                    if msg.file:
+                        await event.answer("✅ File received!")
+                        logger.info(f"📁 Forwarding file to user")
+                        
+                        if msg.text:
+                            await bot_client.send_message(user_id, f"✅ Result:\n\n{msg.text}")
+                        
+                        await bot_client.forward_messages(user_id, msg)
+                    elif msg.text:
+                        logger.info(f"📝 Sending text result to user")
+                        await event.edit(f"✅ Result:\n\n{msg.text or msg.raw_text}")
+                    
+                    # Deduct credit
+                    if user_id != ADMIN_USER_ID:
+                        user_doc = await get_user(user_id)
+                        if user_doc.get('plan') != 'unlimited':
+                            await decrement_search(user_id)
+                    return
         
-        if not result_found:
-            await event.answer("❌ No response received", alert=True)
-            interactive_sessions.pop(user_id, None)
+        # No response found
+        logger.warning(f"❌ No response found after button click")
+        await event.answer("❌ No response received from bot. Please try again.", alert=True)
+        interactive_sessions.pop(user_id, None)
     
     except Exception as e:
         logger.exception(f"Error in relay button callback: {e}")
@@ -3035,6 +3079,12 @@ async def start_bot():
             logger.info(f"✅ Vehicle Group: {VEHICLE_GROUP['identifier']}")
         except Exception as e:
             logger.warning(f"❌ Could not resolve vehicle group: {e}")
+        
+        try:
+            FAMILY_GROUP['entity'] = await user_client.get_entity(FAMILY_GROUP['identifier'])
+            logger.info(f"✅ Family Group: {FAMILY_GROUP['identifier']}")
+        except Exception as e:
+            logger.warning(f"❌ Could not resolve family group: {e}")
         
         try:
             TELEGRAM_BOT['entity'] = await user_client.get_entity(TELEGRAM_BOT['identifier'])
