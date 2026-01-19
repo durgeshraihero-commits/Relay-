@@ -108,7 +108,7 @@ DESTINATION_GROUPS = [
 FAMILY_GROUP = {
     "name": "Family Info Group",
     "identifier": -1003596998816,  # Private group ID
-    "timeout": 60,
+    "timeout": 180,
     "entity": None
 }
 
