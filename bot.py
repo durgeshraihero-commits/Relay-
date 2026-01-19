@@ -51,7 +51,7 @@ VEHICLE_API_KEY = "URSLASH123"
 
 # Referral settings
 REFERRAL_REWARD = 2
-NEW_USER_CREDITS = 5
+NEW_USER_CREDITS = 2
 
 # ============ Logging ============
 
@@ -116,6 +116,13 @@ TELEGRAM_USERNAME_GROUP = {
     "name": "Telegram Username Group",
     "identifier": "darkboxesv3",  # Replace with your actual group for username searches
     "timeout": GROUP_TIMEOUT,
+    "entity": None
+}
+
+MOVIE_BOT = {
+    "name": "Movie/Series Bot",
+    "identifier": "@iPopkornbot",  # Replace with your actual movie bot username
+    "timeout": 60,  # Movies might take longer to respond
     "entity": None
 }
 
@@ -247,6 +254,13 @@ SEARCH_COMMANDS = {
             0: "/insta",
             1: "/insta",
             2: "/insta"
+        }
+    },
+    "movies": {
+        "name": "🎬 Movies/Web Series",
+        "type": "movie_bot",
+        "commands": {
+            0: ""  # Movie bot doesn't need a command prefix, just send the name
         }
     }
 }
@@ -593,21 +607,6 @@ async def decrement_search(user_id: int):
         return True
     except Exception as e:
         logger.exception("Error decrementing search: %s", e)
-        return False
-
-async def increment_search(user_id: int):
-    """Return credit to user (used when search fails)"""
-    try:
-        await asyncio.get_running_loop().run_in_executor(
-            None, lambda: users_col.update_one(
-                {"user_id": user_id},
-                {"$inc": {"searches_remaining": 1}}
-            )
-        )
-        logger.info(f"💰 Returned 1 credit to user {user_id}")
-        return True
-    except Exception as e:
-        logger.exception("Error incrementing search: %s", e)
         return False
 
 async def log_search(user_id: int, search_type: str, query: str, result: str):
@@ -1050,6 +1049,7 @@ def format_vehicle_api_response(data, vehicle_no: str):
 
 user_states = {}
 pending_searches = {}
+interactive_sessions = {}  # Tracks user sessions waiting for button clicks: {user_id: {dest_message, dest_entity, buttons_map}}
 
 # ============ Telethon Clients ============
 
@@ -1090,6 +1090,158 @@ async def check_channel_membership(user_id: int):
         logger.error(f"Error checking channel membership for {user_id}: {e}")
         return False
 
+# ============ Interactive Bot Search Functions ============
+
+async def perform_interactive_telegram_search(query: str, user_id: int):
+    """
+    Perform interactive telegram search where user chooses the platform.
+    Shows buttons from destination bot to user.
+    """
+    # Check daily limit
+    if await check_telegram_daily_limit(user_id):
+        reset_time = await get_telegram_search_reset_time(user_id)
+        return {
+            "success": False,
+            "error": f"⏰ Daily telegram search limit reached (1 per day).\n\n🔄 Reset in: {reset_time}"
+        }
+    
+    bot_entity = TELEGRAM_BOT.get('entity')
+    if not bot_entity:
+        return {"success": False, "error": "Telegram bot not configured"}
+    
+    try:
+        command_prefix = SEARCH_COMMANDS['telegram']['commands'].get(0, '/tg')
+        command = f"{command_prefix} {query}"
+        
+        # Send query to destination bot
+        forwarded = await user_client.send_message(bot_entity, command)
+        logger.info(f"📤 Sent to Telegram Bot: {command}")
+        
+        # Wait for response with buttons
+        await asyncio.sleep(3)
+        
+        # Get the response from destination bot
+        messages = await user_client.get_messages(bot_entity, limit=10)
+        for msg in messages:
+            if msg.reply_to and msg.reply_to.reply_to_msg_id == forwarded.id:
+                if msg.buttons:
+                    # Found buttons! Send them to user
+                    logger.info(f"🔘 Found inline keyboard with {len(msg.buttons)} rows")
+                    
+                    # Store session info
+                    interactive_sessions[user_id] = {
+                        "dest_message": msg,
+                        "dest_entity": bot_entity,
+                        "type": "telegram",
+                        "query": query,
+                        "original_msg_id": forwarded.id
+                    }
+                    
+                    # Create same buttons for user
+                    user_buttons = []
+                    for row in msg.buttons:
+                        button_row = []
+                        for button in row:
+                            if hasattr(button, 'text'):
+                                # Create callback button with same text
+                                button_row.append(Button.inline(
+                                    button.text, 
+                                    f"relay_{button.text.lower().replace(' ', '_')}"
+                                ))
+                        if button_row:
+                            user_buttons.append(button_row)
+                    
+                    # Return special "needs_interaction" response
+                    return {
+                        "success": False,
+                        "needs_interaction": True,
+                        "message": msg.text or msg.raw_text or "🔍 Please select a platform:",
+                        "buttons": user_buttons
+                    }
+                
+                # If no buttons, return the text
+                return {
+                    "success": True,
+                    "result": msg.text or msg.raw_text or "No response received"
+                }
+        
+        return {"success": False, "error": "No response from Telegram bot"}
+        
+    except Exception as e:
+        logger.exception(f"Error in interactive telegram search: {e}")
+        return {"success": False, "error": str(e)}
+
+async def perform_interactive_movie_search(query: str, user_id: int):
+    """
+    Perform interactive movie search where user chooses from file options.
+    Shows buttons/files from movie bot to user.
+    """
+    bot_entity = MOVIE_BOT.get('entity')
+    if not bot_entity:
+        return {"success": False, "error": "Movie bot not configured"}
+    
+    try:
+        # Send movie name to bot (no command prefix needed)
+        forwarded = await user_client.send_message(bot_entity, query)
+        logger.info(f"🎬 Sent to Movie Bot: {query}")
+        
+        # Wait for response
+        await asyncio.sleep(4)
+        
+        # Get the response from movie bot
+        messages = await user_client.get_messages(bot_entity, limit=15)
+        
+        for msg in messages:
+            if msg.reply_to and msg.reply_to.reply_to_msg_id == forwarded.id:
+                # Check if it has buttons
+                if msg.buttons:
+                    logger.info(f"🎬 Found movie options with {len(msg.buttons)} rows")
+                    
+                    # Store session info
+                    interactive_sessions[user_id] = {
+                        "dest_message": msg,
+                        "dest_entity": bot_entity,
+                        "type": "movie",
+                        "query": query,
+                        "original_msg_id": forwarded.id
+                    }
+                    
+                    # Create same buttons for user
+                    user_buttons = []
+                    for row in msg.buttons:
+                        button_row = []
+                        for button in row:
+                            if hasattr(button, 'text'):
+                                # Create callback button with same text
+                                button_row.append(Button.inline(
+                                    button.text,
+                                    f"relay_{len(user_buttons)}_{len(button_row)}"  # row_col format
+                                ))
+                        if button_row:
+                            user_buttons.append(button_row)
+                    
+                    # Return special "needs_interaction" response
+                    return {
+                        "success": False,
+                        "needs_interaction": True,
+                        "message": msg.text or msg.raw_text or "🎬 Select a file:",
+                        "buttons": user_buttons
+                    }
+                
+                # Return text/file response
+                if msg.text or msg.file:
+                    return {
+                        "success": True,
+                        "result": msg.text or msg.raw_text or "File received",
+                        "file": msg if msg.file else None
+                    }
+        
+        return {"success": False, "error": "No response from Movie bot"}
+        
+    except Exception as e:
+        logger.exception(f"Error in interactive movie search: {e}")
+        return {"success": False, "error": str(e)}
+
 # ============ Core Search Function ============
 
 async def perform_search(search_type: str, query: str, user_id: int = None):
@@ -1100,7 +1252,15 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
     search_dest_type = command_info.get('type', 'group')
     
     if search_dest_type == 'telegram_bot':
-        return await perform_telegram_bot_search(query, user_id)
+        # Use interactive search for telegram (shows buttons to user)
+        if user_id:
+            return await perform_interactive_telegram_search(query, user_id)
+        else:
+            # API calls use old method (auto-click)
+            return await perform_telegram_bot_search(query, user_id)
+    elif search_dest_type == 'movie_bot':
+        # Use interactive search for movies
+        return await perform_interactive_movie_search(query, user_id)
     elif search_dest_type == 'telegram_username_group':
         return await perform_telegram_username_search(query, user_id)
     elif search_dest_type == 'vehicle_group':
@@ -1800,6 +1960,148 @@ async def api_delete_callback(event):
     else:
         await event.answer("❌ Failed to delete API key", alert=True)
 
+@bot_client.on(events.CallbackQuery(pattern=r'^relay_'))
+async def relay_button_callback(event):
+    """
+    Handle user button clicks and relay them to the destination bot.
+    Then forward the response back to the user.
+    """
+    user_id = event.sender_id
+    
+    if user_id not in interactive_sessions:
+        await event.answer("❌ Session expired. Please start a new search.", alert=True)
+        return
+    
+    session = interactive_sessions[user_id]
+    dest_message = session['dest_message']
+    dest_entity = session['dest_entity']
+    search_type = session['type']
+    
+    try:
+        # Extract which button was clicked
+        callback_data = event.data.decode()
+        
+        # Find and click the corresponding button in destination bot
+        button_clicked = False
+        
+        # For telegram bot (text-based matching)
+        if search_type == "telegram":
+            button_text = callback_data.replace('relay_', '').replace('_', ' ')
+            
+            for row in dest_message.buttons:
+                for button in row:
+                    if hasattr(button, 'text') and button.text.lower() == button_text.lower():
+                        logger.info(f"🔘 Clicking button '{button.text}' in destination bot")
+                        await event.answer(f"⏳ Fetching from {button.text}...")
+                        
+                        # Click the button
+                        await dest_message.click(button)
+                        button_clicked = True
+                        break
+                if button_clicked:
+                    break
+        
+        # For movie bot (position-based matching)
+        elif search_type == "movie":
+            # Extract row and col from callback data (format: relay_row_col)
+            parts = callback_data.split('_')
+            if len(parts) >= 3:
+                row_idx = int(parts[1])
+                col_idx = int(parts[2])
+                
+                if row_idx < len(dest_message.buttons) and col_idx < len(dest_message.buttons[row_idx]):
+                    button = dest_message.buttons[row_idx][col_idx]
+                    logger.info(f"🎬 Clicking button at position [{row_idx}][{col_idx}]")
+                    await event.answer("⏳ Fetching file...")
+                    
+                    # Click the button
+                    await dest_message.click(button)
+                    button_clicked = True
+        
+        if not button_clicked:
+            await event.answer("❌ Button not found", alert=True)
+            return
+        
+        # Wait for response from destination bot
+        await asyncio.sleep(4)
+        
+        # Get the response
+        messages = await user_client.get_messages(dest_entity, limit=20)
+        
+        result_found = False
+        for msg in messages:
+            # Check if it's a reply to our button click
+            if msg.reply_to and msg.reply_to.reply_to_msg_id == dest_message.id:
+                result_found = True
+                
+                # Check if it has more buttons (pagination, etc.)
+                if msg.buttons:
+                    # Update session with new message
+                    session['dest_message'] = msg
+                    
+                    # Create buttons for user
+                    user_buttons = []
+                    for row in msg.buttons:
+                        button_row = []
+                        for button in row:
+                            if hasattr(button, 'text'):
+                                button_row.append(Button.inline(
+                                    button.text,
+                                    f"relay_{len(user_buttons)}_{len(button_row)}"
+                                ))
+                        if button_row:
+                            user_buttons.append(button_row)
+                    
+                    # Send message with new buttons
+                    await event.edit(
+                        msg.text or msg.raw_text or "Select an option:",
+                        buttons=user_buttons
+                    )
+                    return
+                
+                # No more buttons - this is the final result
+                # Clear session
+                interactive_sessions.pop(user_id, None)
+                user_states.pop(user_id, None)
+                
+                # Send result to user
+                if msg.file:
+                    # It's a file/video/document
+                    await event.answer("✅ File received!")
+                    
+                    if msg.text:
+                        await bot_client.send_message(user_id, f"✅ Result:\n\n{msg.text}")
+                    
+                    # Forward the file
+                    await bot_client.forward_messages(user_id, msg)
+                    
+                    # Deduct credit
+                    if user_id != ADMIN_USER_ID:
+                        user_doc = await get_user(user_id)
+                        if user_doc.get('plan') != 'unlimited':
+                            await decrement_search(user_id)
+                    
+                elif msg.text or msg.raw_text:
+                    # Text result
+                    await event.edit(f"✅ Result:\n\n{msg.text or msg.raw_text}")
+                    
+                    # Deduct credit
+                    if user_id != ADMIN_USER_ID:
+                        user_doc = await get_user(user_id)
+                        if user_doc.get('plan') != 'unlimited':
+                            await decrement_search(user_id)
+                
+                break
+        
+        if not result_found:
+            await event.answer("❌ No response received", alert=True)
+            interactive_sessions.pop(user_id, None)
+    
+    except Exception as e:
+        logger.exception(f"Error in relay button callback: {e}")
+        await event.answer("❌ An error occurred", alert=True)
+        interactive_sessions.pop(user_id, None)
+
 @bot_client.on(events.CallbackQuery(pattern='^back_main'))
 async def back_main_callback(event):
     user = await event.get_sender()
@@ -2219,7 +2521,18 @@ async def message_handler(event):
             pass
 
         if result['success']:
-            await event.respond(f"✅ Search Result:\n\n{result['result']}")
+            # Check if result has a file (for movie bot)
+            if result.get('file'):
+                file_msg = result['file']
+                await event.respond(f"✅ Search Result:\n\n{result['result']}")
+                
+                # Forward the file
+                try:
+                    await bot_client.forward_messages(user_id, file_msg)
+                except Exception as e:
+                    logger.error(f"Error forwarding file: {e}")
+            else:
+                await event.respond(f"✅ Search Result:\n\n{result['result']}")
 
             if user_id != ADMIN_USER_ID:
                 user_doc = await get_user(user_id)
@@ -2228,21 +2541,17 @@ async def message_handler(event):
 
                 if is_first_search:
                     await reward_referrer(user_id)
+        elif result.get('needs_interaction'):
+            # Interactive search - show buttons to user
+            await event.respond(
+                result['message'],
+                buttons=result['buttons']
+            )
+            # Don't pop user_states - user still needs to click button
+            return
         else:
             error_msg = result.get('error', 'An error occurred')
-            
-            # Check if user is not admin and has limited plan
-            if user_id != ADMIN_USER_ID:
-                user_doc = await get_user(user_id)
-                if user_doc.get('plan') != 'unlimited':
-                    # Add credit not deducted message
-                    error_msg = f"❌ {error_msg}\n\n💰 Don't worry - your credit was not deducted!"
-                else:
-                    error_msg = f"❌ {error_msg}"
-            else:
-                error_msg = f"❌ {error_msg}"
-            
-            await event.respond(error_msg)
+            await event.respond(f"❌ {error_msg}")
 
         user_states.pop(user_id, None)
 
@@ -2585,6 +2894,12 @@ async def start_bot():
             logger.info(f"✅ Telegram Username Group: {TELEGRAM_USERNAME_GROUP['identifier']}")
         except Exception as e:
             logger.warning(f"❌ Could not resolve telegram username group: {e}")
+        
+        try:
+            MOVIE_BOT['entity'] = await user_client.get_entity(MOVIE_BOT['identifier'])
+            logger.info(f"✅ Movie Bot: {MOVIE_BOT['identifier']}")
+        except Exception as e:
+            logger.warning(f"❌ Could not resolve movie bot: {e}")
 
         init_mongo()
         
