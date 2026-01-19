@@ -108,14 +108,14 @@ DESTINATION_GROUPS = [
 FAMILY_GROUP = {
     "name": "Family Info Group",
     "identifier": -1003596998816,  # Private group ID
-    "timeout": GROUP_TIMEOUT,
+    "timeout": 60,
     "entity": None
 }
 
 TELEGRAM_BOT = {
     "name": "Telegram Lookup Bot",
     "identifier": "@Dirgeshrai8090_bot",
-    "timeout": GROUP_TIMEOUT,
+    "timeout": 60,
     "entity": None
 }
 
