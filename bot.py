@@ -1502,36 +1502,38 @@ class PaymentManager:
         self.users_col = db.get_collection('users')
     
     async def create_payment_request(self, user_id: int, plan_key: str) -> Optional[str]:
-        """Create a new payment request"""
-        try:
-            if plan_key not in PLANS:
-                return None
-            
-            plan = PLANS[plan_key]
-                        payment_id = uuid.uuid4().hex
-            
-            doc = {
-                "payment_id": payment_id,
-                "user_id": user_id,
-                "plan": plan_key,
-                "amount": plan["price"],
-                "status": "pending",
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "screenshot_file_id": None,
-                "approved_at": None,
-                "rejected_at": None
-            }
-            
-            await asyncio.get_running_loop().run_in_executor(
-                None, self.payments_col.insert_one, doc
-            )
-            
-            logger.info(f"💳 Created payment request {payment_id} for user {user_id}")
-            return payment_id
-            
-        except Exception as e:
-            logger.error(f"Error creating payment request: {e}")
+    """Create a new payment request"""
+    try:
+        if plan_key not in PLANS:
             return None
+
+        plan = PLANS[plan_key]
+        payment_id = uuid.uuid4().hex
+
+        doc = {
+            "payment_id": payment_id,
+            "user_id": user_id,
+            "plan": plan_key,
+            "amount": plan["price"],
+            "status": "pending",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "screenshot_file_id": None,
+            "approved_at": None,
+            "rejected_at": None
+        }
+
+        await asyncio.get_running_loop().run_in_executor(
+            None,
+            self.payments_col.insert_one,
+            doc
+        )
+
+        logger.info(f"💳 Created payment request {payment_id} for user {user_id}")
+        return payment_id
+
+    except Exception as e:
+        logger.exception("Error creating payment request")
+        return None
     
     async def update_payment_screenshot(self, payment_id: str, file_id: str) -> bool:
         """Update payment with screenshot"""
