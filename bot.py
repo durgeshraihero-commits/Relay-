@@ -39,8 +39,8 @@ MONGODB_DBNAME = os.getenv("MONGODB_DBNAME", "tg_bot_db")
 PAYMENT_QR_CODE = os.getenv("PAYMENT_QR_CODE", "https://example.com/payment-qr.png")
 
 FETCH_WAIT_TIME = int(os.getenv("FETCH_WAIT_TIME", "2"))
-GROUP_TIMEOUT = int(os.getenv("GROUP_TIMEOUT", "15"))
-REPLY_TIMEOUT = int(os.getenv("REPLY_TIMEOUT", "45"))
+GROUP_TIMEOUT = int(os.getenv("GROUP_TIMEOUT", "180"))
+REPLY_TIMEOUT = int(os.getenv("REPLY_TIMEOUT", "240"))
 PROCESSING_WAIT_EXTRA = 8
 
 # API endpoints
@@ -128,7 +128,7 @@ TELEGRAM_USERNAME_GROUP = {
 
 MOVIE_BOT = {
     "name": "Movie/Series Bot",
-    "identifier": "@iPopkornbot",
+    "identifier": "@iPapkornD2bot",
     "timeout": 60,
     "entity": None
 }
