@@ -156,7 +156,7 @@ SEARCH_COMMANDS = {
         "name": "👨‍👩‍👧‍👦 Family Info",
         "type": "family_group",
         "commands": {
-            0: "/family"
+            0: "/familyinfo"
         }
     },
     "aadhar": {
@@ -318,7 +318,7 @@ def init_mongo():
             users_col.create_index(
                 [("referral_code", 1)], 
                 unique=True, 
-                partialFilterExpression={"referral_code": {"$type": "string"}}
+                partialFilterExpression={"referral_code": {"\$type": "string"}}
             )
             logger.info("Created partial unique index for referral_code")
         except Exception as e:
@@ -364,7 +364,7 @@ async def get_or_create_referral_code(user_id: int):
                 await asyncio.get_running_loop().run_in_executor(
                     None, lambda: users_col.update_one(
                         {"user_id": user_id},
-                        {"$set": {"referral_code": code}}
+                        {"\$set": {"referral_code": code}}
                     )
                 )
                 return code
@@ -404,7 +404,7 @@ async def apply_referral(referred_user_id: int, referral_code: str):
         await asyncio.get_running_loop().run_in_executor(
             None, lambda: users_col.update_one(
                 {"user_id": referred_user_id},
-                {"$set": {"referred_by": referrer_id}}
+                {"\$set": {"referred_by": referrer_id}}
             )
         )
         
@@ -427,14 +427,14 @@ async def reward_referrer(referred_user_id: int):
         await asyncio.get_running_loop().run_in_executor(
             None, lambda: users_col.update_one(
                 {"user_id": referrer_id},
-                {"$inc": {"searches_remaining": REFERRAL_REWARD}}
+                {"\$inc": {"searches_remaining": REFERRAL_REWARD}}
             )
         )
         
         await asyncio.get_running_loop().run_in_executor(
             None, lambda: referrals_col.update_one(
                 {"_id": referral['_id']},
-                {"$set": {"reward_given": True, "rewarded_at": datetime.now(timezone.utc).isoformat()}}
+                {"\$set": {"reward_given": True, "rewarded_at": datetime.now(timezone.utc).isoformat()}}
             )
         )
         
@@ -531,8 +531,8 @@ async def increment_api_key_usage(api_key: str):
             None, lambda: api_keys_col.update_one(
                 {"api_key": api_key},
                 {
-                    "$inc": {"searches_used": 1},
-                    "$set": {"last_used": datetime.now(timezone.utc).isoformat()}
+                    "\$inc": {"searches_used": 1},
+                    "\$set": {"last_used": datetime.now(timezone.utc).isoformat()}
                 }
             )
         )
@@ -570,7 +570,7 @@ async def create_or_update_user(user_id: int, username: str = None, first_name: 
         await asyncio.get_running_loop().run_in_executor(
             None, lambda: users_col.update_one(
                 {"user_id": user_id},
-                {"$setOnInsert": doc},
+                {"\$setOnInsert": doc},
                 upsert=True
             )
         )
@@ -593,7 +593,7 @@ async def update_user_plan(user_id: int, plan: str, searches: int, days: int = N
         await asyncio.get_running_loop().run_in_executor(
             None, lambda: users_col.update_one(
                 {"user_id": user_id},
-                {"$set": update_doc}
+                {"\$set": update_doc}
             )
         )
         return True
@@ -606,7 +606,7 @@ async def decrement_search(user_id: int):
         await asyncio.get_running_loop().run_in_executor(
             None, lambda: users_col.update_one(
                 {"user_id": user_id},
-                {"$inc": {"searches_remaining": -1, "total_searches": 1}}
+                {"\$inc": {"searches_remaining": -1, "total_searches": 1}}
             )
         )
         return True
@@ -654,7 +654,7 @@ async def update_payment_screenshot(payment_id: str, file_id: str):
         await asyncio.get_running_loop().run_in_executor(
             None, lambda: payments_col.update_one(
                 {"payment_id": payment_id},
-                {"$set": {"screenshot_file_id": file_id, "screenshot_at": datetime.now(timezone.utc).isoformat()}}
+                {"\$set": {"screenshot_file_id": file_id, "screenshot_at": datetime.now(timezone.utc).isoformat()}}
             )
         )
         return True
@@ -671,8 +671,8 @@ async def check_telegram_daily_limit(user_id: int) -> bool:
         count = await asyncio.get_running_loop().run_in_executor(
             None, lambda: searches_col.count_documents({
                 "user_id": user_id,
-                "search_type": {"$in": ["telegram", "telegram_username"]},
-                "timestamp": {"$gte": today_start.isoformat()}
+                "search_type": {"\$in": ["telegram", "telegram_username"]},
+                "timestamp": {"\$gte": today_start.isoformat()}
             })
         )
         return count >= 1
@@ -1423,7 +1423,7 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                     except Exception as e:
                         logger.error(f"Error getting updated message: {e}")
                 
-                # NEW: Handle spam/no-info messages - wait for valid data
+                # Handle spam/no-info messages - wait for valid data
                 if is_no_info_message(result_text):
                     logger.info(f"🚫 Spam/no-info message detected, waiting {PROCESSING_WAIT_EXTRA}s for valid data...")
                     
@@ -1874,7 +1874,7 @@ def get_payment_approval_buttons(payment_id: str, user_id: int):
     ]
 
 # ============ Bot Event Handlers ============
-# Replace entire function with:
+
 @bot_client.on(events.NewMessage(pattern=r'/start( (.+))?'))
 async def start_handler(event):
     user = await event.get_sender()
@@ -2067,10 +2067,8 @@ async def safe_edit_message(event, text, buttons=None):
     except Exception as e:
         error_name = type(e).__name__
         if 'MessageNotModified' in error_name or 'not modified' in str(e).lower():
-            # Message content is the same, no need to edit
             logger.info(f"ℹ️ Message not modified (content unchanged)")
         else:
-            # Some other error, log and continue
             logger.error(f"Error editing message: {e}")
 
 @bot_client.on(events.CallbackQuery(pattern=r'^relay_'))
@@ -2543,41 +2541,6 @@ async def cancel_callback(event):
 async def check_membership_callback(event):
     user_id = event.sender_id
     
-    # Check if user joined the channel
-    is_member = await check_channel_membership(user_id)
-    
-    if not is_member:
-        await event.answer(
-            "❌ You haven't joined the channel yet. Please join and try again.",
-            alert=True
-        )
-        return
-    
-    # User has joined! Update database and show main menu
-    await asyncio.get_running_loop().run_in_executor(
-        None, lambda: users_col.update_one(
-            {"user_id": user_id},
-            {"$set": {"channel_joined": True}}
-        )
-    )
-    
-    user_doc = await get_user(user_id)
-    user = await event.get_sender()
-    
-    await event.edit(
-        f"✅ Great! You've joined the channel!\n\n"
-        f"👋 Welcome {user.first_name}!\n\n"
-        f"📊 Your Plan: {user_doc.get('plan', 'free').upper()}\n"
-        f"🔍 Searches Remaining: {user_doc.get('searches_remaining', 0)}\n\n"
-        f"Select an option below:",
-        buttons=get_main_menu()
-    )
-
-# Replace entire function with:
-@bot_client.on(events.CallbackQuery(pattern='^check_membership'))
-async def check_membership_callback(event):
-    user_id = event.sender_id
-    
     # Ensure user exists
     user_doc = await get_user(user_id)
     if not user_doc:
@@ -2808,12 +2771,11 @@ async def handle_all_replies(event):
             search_type = search_info['search_type']
             
             # PRIORITY 1: Check for file messages first (family TXT files)
-            # This must be checked BEFORE text matching because messages can have both file + caption
+            # This must be checked BEFORE text matching because messages can have both file + text
             if has_file and search_type == 'family':
                 logger.info(f"📄 Checking file message for family search")
-                # Check if query number is in the caption or message text
-                caption = message.caption or ""
-                full_text = f"{text or ''} {caption}".lower()
+                # Check if query number is in the text or message text
+                full_text = (text or "").lower()
                 clean_query = re.sub(r'[^\d]', '', query)
                 
                 # Also check filename
@@ -2826,7 +2788,7 @@ async def handle_all_replies(event):
                         matched_key = search_id
                         logger.info(f"🎯 Family file match for search_id: {search_id} (file: {file_name})")
                         break
-                # Also match if it's just a recent family search file (no number in caption)
+                # Also match if it's just a recent family search file (no number in text)
                 elif message.file.mime_type == 'text/plain' or file_name.lower().endswith('.txt'):
                     # It's a TXT file for a pending family search
                     matched_search = search_info
@@ -2874,7 +2836,7 @@ async def handle_all_replies(event):
             logger.info(f"⏳ Processing message detected for {matched_key}, ignoring for now")
             return
         
-        # NEW: Skip spam/no-info messages - don't deliver them, wait for valid data
+        # Skip spam/no-info messages - don't deliver them, wait for valid data
         if is_no_info_message(text):
             logger.info(f"🚫 Spam/no-info message detected for {matched_key}, waiting for valid data")
             return
@@ -3046,8 +3008,7 @@ async def api_search_handler(request):
     
     user_id = key_info['user_id']
     result = await perform_search(search_type, query, user_id)
-    
-    if result['success']:
+        if result['success']:
         await increment_api_key_usage(key_info['api_key'])
         
         if user_doc.get('plan') != 'unlimited':
