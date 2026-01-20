@@ -1491,46 +1491,56 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                         "group_index": idx
                     }
                 
-            except asyncio.TimeoutError:
-                pending_searches.pop(search_id, None)
-                logger.warning(f"⏱️ Timeout in {dest_config['name']} after {base_timeout}s")
-                
-                if idx == len(destinations) - 1:
-                    logger.info(f"🔄 All groups timed out, trying API fallback")
-                    api_result = await try_api_fallback(search_type, query, user_id)
-                    if api_result['success']:
-                        return api_result
-                    else:
-                        return {
-                            "success": False, 
-                            "error": "Request timed out. Please try again."
-                        }
-                else:
-                    logger.info(f"➡️ Moving to next group: {destinations[idx + 1]['name']}")
-                    continue
-            except Exception as search_error:
-                pending_searches.pop(search_id, None)
-                logger.exception(f"❌ Error waiting for result in {dest_config['name']}: {search_error}")
-                
-                if idx == len(destinations) - 1:
-                    return {
-                        "success": False,
-                        "error": "An error occurred. Please try again."
-                    }
-                else:
-                    logger.info(f"➡️ Moving to next group due to error")
-                    continue
-                
-        except Exception as e:
-                        logger.exception(f"Error in {dest_config['name']}: %s", e)
+          except asyncio.TimeoutError:
+            pending_searches.pop(search_id, None)
+            logger.warning(f"⏱️ Timeout in {dest_config['name']} after {base_timeout}s")
+
             if idx == len(destinations) - 1:
-                return {"success": False, "error": "All groups failed. Please try again."}
+                logger.info("🔄 All groups timed out, trying API fallback")
+                api_result = await try_api_fallback(search_type, query, user_id)
+
+                if api_result.get("success"):
+                    return api_result
+
+                return {
+                    "success": False,
+                    "error": "Request timed out. Please try again."
+                }
+
+            logger.info(f"➡️ Moving to next group: {destinations[idx + 1]['name']}")
             continue
-    
-    return {
-        "success": False, 
-        "error": "No result found for this input. Please try another."
-    }
+
+        except Exception as search_error:
+            pending_searches.pop(search_id, None)
+            logger.exception(
+                f"❌ Error waiting for result in {dest_config['name']}: {search_error}"
+            )
+
+            if idx == len(destinations) - 1:
+                return {
+                    "success": False,
+                    "error": "An error occurred. Please try again."
+                }
+
+            logger.info("➡️ Moving to next group due to error")
+            continue
+
+    except Exception as e:
+        logger.exception(f"Error in {dest_config['name']}: %s", e)
+
+        if idx == len(destinations) - 1:
+            return {
+                "success": False,
+                "error": "All groups failed. Please try again."
+            }
+
+        continue
+
+# ✅ FINAL fallback (outside loop)
+return {
+    "success": False,
+    "error": "No result found for this input. Please try another."
+}  
 
 async def try_api_fallback(search_type: str, query: str, user_id: int = None):
     if search_type in ['phone', 'telegram']:
