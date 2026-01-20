@@ -2943,9 +2943,12 @@ async def main():
 
 if __name__ == "__main__":
     try:
-        # Set event loop policy for better performance on Windows
         if sys.platform == "win32":
-            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-        
-        # Run the bot
+            asyncio.set_event_loop_policy(
+                asyncio.WindowsProactorEventLoopPolicy()
+            )
+
         asyncio.run(main())
+
+    except KeyboardInterrupt:
+        print("Bot stopped by user")
