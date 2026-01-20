@@ -40,7 +40,7 @@ MONGODB_DBNAME = "tg_bot_db"
 WEBSITE = "https://relay-wzlz.onrender.com"
 BOT_FOOTER = "Powered by darkboxes_bot\nDeveloped by @darkboxesAdmin"
 
-SEARCH_TIMEOUT_PER_GROUP = 15
+SEARCH_TIMEOUT_PER_GROUP = 20
 MAX_GROUPS = 3
 FETCH_WAIT_TIME = 2
 
@@ -65,7 +65,7 @@ USE_USER_ACCOUNT = USER_API_ID != 0 and USER_API_HASH and USER_PHONE
 
 DESTINATION_GROUPS = [
     {"name": "Main Group", "identifier": -1003596998816, "entity": None, "order": 1},
-    {"name": "Backup Group 2", "identifier": "darkboxesv3", "entity": None, "order": 2},
+    {"name": "Backup Group 2", "identifier": "IntelXGroup", "entity": None, "order": 2},
     {"name": "Backup Group 3", "identifier": "nex_chats", "entity": None, "order": 3}
 ]
 
