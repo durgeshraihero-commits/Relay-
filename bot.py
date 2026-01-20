@@ -51,7 +51,7 @@ VEHICLE_API_KEY = "URSLASH123"
 
 # Referral settings
 REFERRAL_REWARD = 2
-NEW_USER_CREDITS = 2
+NEW_USER_CREDITS = 0
 
 # ============ Logging ============
 
@@ -2522,11 +2522,53 @@ async def message_handler(event):
         user_states.pop(user_id, None)
 
 # ============ Message Handler for All Groups and Bots ============
+# ============ Message Handler for All Groups and Bots ============
+
 @user_client.on(events.NewMessage())
 async def handle_all_replies(event):
     message = event.message
     
-    if not message.reply_to:
+    # Get the search info to determine what type of messages to accept
+    now = time.time()
+    matched_search = None
+    matched_key = None
+    search_type = None
+    
+    # First, find if there's a matching search
+    for search_id, search_info in list(pending_searches.items()):
+        if search_info['future'].done():
+            continue
+        if now - search_info.get("timestamp", now) > REPLY_TIMEOUT:
+            continue
+        search_type = search_info['search_type']
+        
+        # For telegram and movie searches, accept ANY new message (not just replies)
+        if search_type in ['telegram', 'movies']:
+            # Don't require reply_to for these types
+            matched_search = search_info
+            matched_key = search_id
+            logger.info(f"🎯 New message match for {search_type} search_id: {search_id}")
+            break
+    
+    # If no telegram/movie search found, check for direct replies
+    if not matched_search and message.reply_to:
+        for search_id, search_info in list(pending_searches.items()):
+            if search_info['future'].done():
+                continue
+            if now - search_info.get("timestamp", now) > REPLY_TIMEOUT:
+                continue
+            
+            # For all other searches, ONLY accept direct replies
+            if message.reply_to.reply_to_msg_id == search_info.get('message_id'):
+                matched_search = search_info
+                matched_key = search_id
+                search_type = search_info['search_type']
+                logger.info(f"🎯 Direct reply match for search_id: {search_id}")
+                break
+    
+    # If still no match found, exit
+    if not matched_search:
+        logger.debug(f"ℹ️ No matching search found for this message")
         return
     
     text = message.text or message.raw_text
@@ -2534,105 +2576,6 @@ async def handle_all_replies(event):
     file_name = (message.file.name if has_file else None) or ""
     
     if not text and not has_file:
-        return
-    
-    now = time.time()
-    matched_search = None
-    matched_key = None
-    
-    # FIRST: Check for direct reply match
-    for search_id, search_info in list(pending_searches.items()):
-        if search_info['future'].done():
-            continue
-        if now - search_info.get("timestamp", now) > REPLY_TIMEOUT:
-            continue
-        if message.reply_to.reply_to_msg_id == search_info.get('message_id'):
-            matched_search = search_info
-            matched_key = search_id
-            logger.info(f"🎯 Direct reply match for search_id: {search_id}")
-            break
-    
-    # SECOND: If no direct match, try content matching
-    if not matched_search:
-        for search_id, search_info in list(pending_searches.items()):
-            if search_info['future'].done():
-                continue
-            if now - search_info.get("timestamp", now) > REPLY_TIMEOUT:
-                continue
-            
-            query = search_info['query'].strip()
-            search_type = search_info['search_type']
-            
-            # PRIORITY 1: Check for file messages
-            if has_file:
-                logger.info(f"📄 File detected: {file_name} (mime: {message.file.mime_type})")
-                
-                # All search types can now receive .txt files
-                if file_name and (file_name.lower().endswith('.txt') or message.file.mime_type == 'text/plain'):
-                    logger.info(f"✅ TXT file match for search_id: {search_id}")
-                    matched_search = search_info
-                    matched_key = search_id
-                    break
-                
-                # Also check if query is in filename/text
-                clean_query = re.sub(r'[^\d]', '', query)
-                full_text = f"{(text or '').lower()} {file_name.lower() if file_name else ''}"
-                
-                if clean_query and len(clean_query) >= 6:
-                    if clean_query in re.sub(r'[^\d]', '', full_text):
-                        logger.info(f"🎯 File with matching number for search_id: {search_id}")
-                        matched_search = search_info
-                        matched_key = search_id
-                        break
-            
-            # PRIORITY 2: Text matching (but skip processing messages and files with text)
-            if text and not has_file and not matched_search:
-                # Skip processing messages - don't match them
-                if is_processing_message(text):
-                    logger.info(f"⏭️ Skipping processing message for content matching")
-                    continue
-                
-                message_text_lower = text.lower()
-                is_match = False
-                
-                if search_type in ['phone', 'telegram']:
-                    clean_query = re.sub(r'[^\d]', '', query)
-                    clean_msg = re.sub(r'[^\d]', '', text)
-                    if clean_query and len(clean_query) >= 10 and clean_query in clean_msg:
-                        is_match = True
-                        logger.info(f"🎯 Phone number text match")
-                        
-                elif search_type == 'aadhar':
-                    clean_query = re.sub(r'[^\d]', '', query)
-                    if len(clean_query) == 12 and clean_query in re.sub(r'[^\d]', '', text):
-                        is_match = True
-                        logger.info(f"🎯 Aadhar text match")
-                        
-                elif search_type in ['vehicle', 'vehicle_detail']:
-                    clean_query = re.sub(r'[^a-z0-9]', '', query.lower())
-                    clean_msg = re.sub(r'[^a-z0-9]', '', message_text_lower)
-                    if clean_query and len(clean_query) >= 6 and clean_query in clean_msg:
-                        is_match = True
-                        logger.info(f"🎯 Vehicle text match")
-                
-                elif search_type == 'family':
-                    clean_query = re.sub(r'[^\d]', '', query)
-                    clean_msg = re.sub(r'[^\d]', '', text)
-                    if clean_query and len(clean_query) >= 10 and clean_query in clean_msg:
-                        is_match = True
-                        logger.info(f"🎯 Family text match")
-                        
-                elif query.lower() in message_text_lower:
-                    is_match = True
-                    logger.info(f"🎯 Generic text match")
-                
-                if is_match:
-                    matched_search = search_info
-                    matched_key = search_id
-                    break
-    
-    if not matched_search:
-        logger.debug(f"ℹ️ No matching search found for this message")
         return
     
     await asyncio.sleep(FETCH_WAIT_TIME)
@@ -2687,7 +2630,6 @@ async def handle_all_replies(event):
                     
         except Exception as e:
             logger.error(f"❌ Error processing file: {e}", exc_info=True)
-            # Don't fall through - stop processing this message
             return
     
     # PRIORITY 2: Handle text messages ONLY (no files)
@@ -2695,11 +2637,11 @@ async def handle_all_replies(event):
         # Check for processing/spam messages - only for text-only messages
         if is_processing_message(text):
             logger.info(f"⏳ Processing text message detected, ignoring and waiting for real result...")
-            return  # Don't process, just return and wait
+            return
         
         if is_no_info_message(text):
             logger.info(f"🚫 No-info text message detected, ignoring and waiting for valid data...")
-            return  # Don't process, just return and wait
+            return
         
         try:
             chat = await event.get_chat()
@@ -2735,6 +2677,10 @@ async def handle_all_replies(event):
             except Exception as e:
                 logger.warning(f"Could not set result: {e}")
             pending_searches.pop(matched_key, None)
+                    
+                    
+                
+
 # ============ Cleanup Task ============
 
 async def cleanup_old_searches():
