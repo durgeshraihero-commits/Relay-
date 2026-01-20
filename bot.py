@@ -472,47 +472,48 @@ class UserManager:
             return None
     
     async def create_user(self, user_id: int, username: str = None, first_name: str = None, referral_code: str = None) -> bool:
-        """Create new user"""
-        try:
-            # Generate unique referral code
-            user_referral_code = await self._generate_referral_code()
-            
-            user_doc = {
-                "user_id": user_id,
-                "username": username,
-                "first_name": first_name,
-                "joined_at": datetime.now(timezone.utc).isoformat(),
-                "plan": "free",
-                "searches_remaining": config.NEW_USER_CREDITS,
-                "plan_expiry": None,
-                "total_searches": 0,
-                "channel_joined": False,
-                "referral_code": user_referral_code,
-                "referred_by": None,
-                "role": UserRole.USER.value,
-                "banned": False,
-                "last_seen": datetime.now(timezone.utc).isoformat(),
-                "telegram_limits": {}
-            }
-            
-            await asyncio.get_running_loop().run_in_executor(
-                None, lambda: self.users_col.update_one(
-                    {"user_id": user_id},
-                    {"\$setOnInsert": user_doc},
-                    upsert=True
-                )
+    """Create new user - FIXED VERSION"""
+    try:
+        # Generate unique referral code
+        user_referral_code = await self._generate_referral_code()
+        
+        user_doc = {
+            "user_id": user_id,
+            "username": username,
+            "first_name": first_name,
+            "joined_at": datetime.now(timezone.utc).isoformat(),
+            "plan": "free",
+            "searches_remaining": config.NEW_USER_CREDITS,
+            "plan_expiry": None,
+            "total_searches": 0,
+            "channel_joined": False,
+            "referral_code": user_referral_code,
+            "referred_by": None,
+            "role": UserRole.USER.value,
+            "banned": False,
+            "last_seen": datetime.now(timezone.utc).isoformat(),
+            "telegram_limits": {}
+        }
+        
+        # FIX: Use proper upsert syntax
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: self.users_col.update_one(
+                {"user_id": user_id},
+                {"$setOnInsert": user_doc},  # This is correct
+                upsert=True
             )
-            
-            # Apply referral if provided
-            if referral_code:
-                await self.apply_referral(user_id, referral_code)
-            
-            logger.info(f"✅ Created user {user_id}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error creating user {user_id}: {e}")
-            return False
+        )
+        
+        # Apply referral if provided
+        if referral_code:
+            await self.apply_referral(user_id, referral_code)
+        
+        logger.info(f"✅ Created user {user_id}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error creating user {user_id}: {e}")
+        return False
     
     async def _generate_referral_code(self) -> str:
         """Generate unique referral code"""
@@ -1912,93 +1913,117 @@ async def check_channel_membership(user_id: int) -> bool:
 
 @bot_client.on(events.NewMessage(pattern=r'/start( (.+))?'))
 async def start_handler(event):
-    """Handle /start command"""
-    user = await event.get_sender()
-    user_id = user.id
-    
-    # Extract referral code if present
-    referral_code = None
-    if event.pattern_match.group(2):
-        referral_code = event.pattern_match.group(2).strip()
-    
-    # Get or create user
-    user_doc = await user_manager.get_user(user_id)
-    if not user_doc:
-        await user_manager.create_user(user_id, user.username, user.first_name, referral_code)
-        user_doc = await user_manager.get_user(user_id)
+    """Handle /start command - FIXED VERSION"""
+    try:
+        user = await event.get_sender()
+        user_id = user.id
         
+        # Extract referral code if present
+        referral_code = None
+        if event.pattern_match.group(2):
+            referral_code = event.pattern_match.group(2).strip()
+        
+        # Get or create user
+        user_doc = await user_manager.get_user(user_id)
+        if not user_doc:
+            success = await user_manager.create_user(user_id, user.username, user.first_name, referral_code)
+            if success:
+                user_doc = await user_manager.get_user(user_id)
+            else:
+                # FIX: Handle failed user creation
+                await event.respond(
+                    "❌ **Error Creating Account**\n\n"
+                    "There was an issue setting up your account. Please try again in a few moments.\n\n"
+                    "If the problem persists, contact @darkboxesAdmin"
+                )
+                return
+        
+        # FIX: Ensure user_doc exists before accessing
+        if not user_doc:
+            await event.respond(
+                "❌ **Account Access Error**\n\n"
+                "Unable to access your account. Please contact @darkboxesAdmin for assistance."
+            )
+            return
+            
         # Welcome message for new users with referral
-        if referral_code:
+        if referral_code and user_doc.get('total_searches', 0) == 0:
             await event.respond(
                 f"🎉 Welcome {user.first_name}!\n\n"
                 f"Thanks for using a referral link!\n"
                 f"You got {config.NEW_USER_CREDITS} free credits to start with.\n\n"
                 "First, please join our channel to continue:"
             )
-    
-    # Check if user is banned
-    if user_doc.get("banned"):
+        
+        # Check if user is banned
+        if user_doc.get("banned"):
+            await event.respond(
+                "🚫 **Account Suspended**\n\n"
+                "Your account has been suspended.\n"
+                "Contact @darkboxesAdmin if you believe this is an error.",
+                parse_mode="md"
+            )
+            return
+        
+        # Admin welcome
+        if await admin_panel.is_admin(user_id):
+            stats = await admin_panel.get_bot_statistics()
+            await event.respond(
+                "👑 **Admin Dashboard**\n\n"
+                f"👥 Total Users: {stats.get('total_users', 0)}\n"
+                f"💎 Premium Users: {stats.get('premium_users', 0)}\n"
+                f"🔍 Total Searches: {stats.get('total_searches', 0)}\n"
+                f"💰 Total Revenue: ₹{stats.get('total_revenue', 0)}\n"
+                f"⏳ Pending Payments: {stats.get('pending_payments', 0)}\n\n"
+                "Welcome back, Admin!",
+                buttons=KeyboardBuilder.main_menu("admin"),
+                parse_mode="md"
+            )
+            return
+        
+        # Check channel membership
+        is_member = await check_channel_membership(user_id)
+        
+        if not is_member:
+            await event.respond(
+                f"👋 **Welcome to Premium Info Bot!**\n\n"
+                f"To use this bot, you must first join our channel:\n"
+                f"@{config.MANDATORY_CHANNEL}\n\n"
+                f"After joining, click the button below to verify.",
+                buttons=[
+                    [Button.url(f"📢 Join Channel", f"https://t.me/{config.MANDATORY_CHANNEL}")],
+                    [Button.inline("✅ I've Joined - Verify", "check_membership")]
+                ],
+                parse_mode="md"
+            )
+            return
+        # Main welcome message
+        plan_expiry = ""
+        if user_doc.get("plan_expiry"):
+            try:
+                expiry = datetime.fromisoformat(user_doc["plan_expiry"])
+                days_left = (expiry - datetime.now(timezone.utc)).days
+                if days_left > 0:
+                    plan_expiry = f" ({days_left} days left)"
+            except Exception:
+                pass
+        
         await event.respond(
-            "🚫 **Account Suspended**\n\n"
-            "Your account has been suspended.\n"
-            "Contact @darkboxesAdmin if you believe this is an error.",
+            f"👋 **Welcome {user.first_name}!**\n\n"
+            f"📊 Plan: {user_doc.get('plan', 'free').upper()}{plan_expiry}\n"
+            f"🔍 Credits: {user_doc.get('searches_remaining', 0)}\n"
+            f"📈 Total Searches: {user_doc.get('total_searches', 0)}\n\n"
+            f"Select a search type below:",
+            buttons=KeyboardBuilder.main_menu(),
             parse_mode="md"
         )
-        return
-    
-    # Admin welcome
-    if await admin_panel.is_admin(user_id):
-        stats = await admin_panel.get_bot_statistics()
+        
+    except Exception as e:
+        logger.error(f"Error in start_handler: {e}")
         await event.respond(
-            "👑 **Admin Dashboard**\n\n"
-            f"👥 Total Users: {stats.get('total_users', 0)}\n"
-            f"💎 Premium Users: {stats.get('premium_users', 0)}\n"
-            f"🔍 Total Searches: {stats.get('total_searches', 0)}\n"
-            f"💰 Total Revenue: ₹{stats.get('total_revenue', 0)}\n"
-            f"⏳ Pending Payments: {stats.get('pending_payments', 0)}\n\n"
-            "Welcome back, Admin!",
-            buttons=KeyboardBuilder.main_menu("admin"),
-            parse_mode="md"
+            "❌ **System Error**\n\n"
+            "An unexpected error occurred. Please try again later or contact @darkboxesAdmin"
         )
-        return
-    
-    # Check channel membership
-    is_member = await check_channel_membership(user_id)
-    
-    if not is_member:
-        await event.respond(
-            f"👋 **Welcome to Premium Info Bot!**\n\n"
-            f"To use this bot, you must first join our channel:\n"
-            f"@{config.MANDATORY_CHANNEL}\n\n"
-            f"After joining, click the button below to verify.",
-            buttons=[
-                [Button.url(f"📢 Join Channel", f"https://t.me/{config.MANDATORY_CHANNEL}")],
-                [Button.inline("✅ I've Joined - Verify", "check_membership")]
-            ],
-            parse_mode="md"
-        )
-        return
-    
-    # Main welcome message
-    plan_expiry = ""
-    if user_doc.get("plan_expiry"):
-        try:
-            expiry = datetime.fromisoformat(user_doc["plan_expiry"])
-            days_left = (expiry - datetime.now(timezone.utc)).days
-            if days_left > 0:
-                plan_expiry = f" ({days_left} days left)"
-        except Exception:
-            pass
-    
-    await event.respond(
-        f"👋 **Welcome {user.first_name}!**\n\n"
-        f"📊 Plan: {user_doc.get('plan', 'free').upper()}{plan_expiry}\n"
-        f"🔍 Credits: {user_doc.get('searches_remaining', 0)}\n"
-        f"📈 Total Searches: {user_doc.get('total_searches', 0)}\n\n"
-        f"Select a search type below:",
-        buttons=KeyboardBuilder.main_menu(),
-        parse_mode="md"
-    )
 
 @bot_client.on(events.CallbackQuery(pattern=r'^search_(.+)'))
 async def search_callback(event):
@@ -2779,11 +2804,19 @@ async def cleanup_user_states():
 # ================== WEB SERVER ==================
 
 async def start_web_server():
-    """Start web server for health checks"""
+    """Start web server for health checks - FIXED VERSION"""
     app = web.Application()
     
     async def health_check(request):
         return web.Response(text="OK", status=200)
+    
+    # FIX: Add root endpoint
+    async def root_handler(request):
+        return web.Response(
+            text="🤖 Premium Info Bot - Running\n\nEndpoints:\n• /health - Health check\n• /stats - Bot statistics",
+            status=200,
+            content_type="text/plain"
+        )
     
     async def bot_stats(request):
         if not admin_panel:
@@ -2797,6 +2830,8 @@ async def start_web_server():
             "uptime": int(time.time() - start_time)
         })
     
+    # FIX: Add all routes
+    app.router.add_get("/", root_handler)  # Root endpoint
     app.router.add_get("/health", health_check)
     app.router.add_get("/stats", bot_stats)
     
@@ -2809,6 +2844,38 @@ async def start_web_server():
         logger.info(f"🌐 Web server started on port {config.PORT}")
     except Exception as e:
         logger.error(f"❌ Failed to start web server: {e}")
+
+# ================== FIX 4: Database Indexes - Handle Duplicates ==================
+async def _create_indexes(self):
+    """Create database indexes for better performance - FIXED VERSION"""
+    try:
+        # User indexes - handle existing indexes
+        try:
+            self.collections['users'].create_index([("user_id", 1)], unique=True)
+        except Exception as e:
+            if "already exists" not in str(e).lower():
+                logger.warning(f"User ID index issue: {e}")
+        
+        try:
+            self.collections['users'].create_index([("referral_code", 1)], unique=True, sparse=True)
+        except Exception as e:
+            if "already exists" not in str(e).lower():
+                logger.warning(f"Referral code index issue: {e}")
+        
+        # Other indexes
+        try:
+            self.collections['searches'].create_index([("user_id", 1)])
+            self.collections['searches'].create_index([("timestamp", -1)])
+            self.collections['payments'].create_index([("user_id", 1)])
+            self.collections['payments'].create_index([("payment_id", 1)], unique=True)
+            self.collections['referrals'].create_index([("referrer_id", 1)])
+            self.collections['referrals'].create_index([("referred_id", 1)])
+        except Exception as e:
+            logger.warning(f"Index creation warning: {e}")
+        
+        logger.info("✅ Database indexes processed")
+    except Exception as e:
+        logger.warning(f"⚠️ Index setup warning: {e}")
 
 # ================== INITIALIZATION ==================
 
