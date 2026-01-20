@@ -108,14 +108,14 @@ DESTINATION_GROUPS = [
 FAMILY_GROUP = {
     "name": "Family Info Group",
     "identifier": -1003596998816,  # Private group ID
-    "timeout": 180,
+    "timeout": GROUP_TIMEOUT,
     "entity": None
 }
 
 TELEGRAM_BOT = {
     "name": "Telegram Lookup Bot",
     "identifier": "@Dirgeshrai8090_bot",
-    "timeout": 60,
+    "timeout": GROUP_TIMEOUT,
     "entity": None
 }
 
@@ -128,7 +128,7 @@ TELEGRAM_USERNAME_GROUP = {
 
 MOVIE_BOT = {
     "name": "Movie/Series Bot",
-    "identifier": "@iPapkornD2bot",  # Replace with your actual movie bot username
+    "identifier": "@iPopkornbot",  # Replace with your actual movie bot username
     "timeout": 60,  # Movies might take longer to respond
     "entity": None
 }
@@ -156,7 +156,7 @@ SEARCH_COMMANDS = {
         "name": "👨‍👩‍👧‍👦 Family Info",
         "type": "family_group",
         "commands": {
-            0: "/familyinfo"
+            0: "/family"
         }
     },
     "aadhar": {
@@ -2115,126 +2115,156 @@ async def relay_button_callback(event):
             await event.answer("❌ Button not found", alert=True)
             return
         
-        # Wait for response from destination bot
+        # Wait for response from destination bot - check multiple times
         logger.info(f"⏳ Waiting for response after button click...")
-        await asyncio.sleep(6)  # Wait longer to ensure response arrives
         
-        # Strategy 1: Check if the original message was edited
-        try:
-            updated_msg = await user_client.get_messages(dest_entity, ids=dest_message.id)
-            if updated_msg and updated_msg.edit_date:
-                logger.info(f"📝 Message was edited after button click")
-                
-                # Check if edited message has content
-                if updated_msg.buttons:
-                    # Still has buttons - pagination
-                    session['dest_message'] = updated_msg
-                    
-                    user_buttons = []
-                    for row in updated_msg.buttons:
-                        button_row = []
-                        for button in row:
-                            if hasattr(button, 'text'):
-                                button_row.append(Button.inline(
-                                    button.text,
-                                    f"relay_{len(user_buttons)}_{len(button_row)}"
-                                ))
-                        if button_row:
-                            user_buttons.append(button_row)
-                    
-                    await event.edit(
-                        updated_msg.text or updated_msg.raw_text or "Select an option:",
-                        buttons=user_buttons
-                    )
-                    return
-                
-                elif updated_msg.text or updated_msg.file:
-                    # Message was edited with final result
-                    logger.info(f"✅ Found result in edited message")
-                    interactive_sessions.pop(user_id, None)
-                    user_states.pop(user_id, None)
-                    
-                    if updated_msg.file:
-                        await event.answer("✅ File received!")
-                        if updated_msg.text:
-                            await bot_client.send_message(user_id, f"✅ Result:\n\n{updated_msg.text}")
-                        await bot_client.forward_messages(user_id, updated_msg)
-                    elif updated_msg.text:
-                        await event.edit(f"✅ Result:\n\n{updated_msg.text}")
-                    
-                    # Deduct credit
-                    if user_id != ADMIN_USER_ID:
-                        user_doc = await get_user(user_id)
-                        if user_doc.get('plan') != 'unlimited':
-                            await decrement_search(user_id)
-                    return
-        except Exception as e:
-            logger.warning(f"Could not check for message edit: {e}")
-        
-        # Strategy 2: Look for new messages from the bot
-        logger.info(f"🔍 Looking for new messages from bot...")
-        messages = await user_client.get_messages(dest_entity, limit=30)
-        
-        # Look for messages newer than our click
-        for msg in messages:
-            # Skip the original button message
-            if msg.id == dest_message.id:
-                continue
+        # Try multiple times to get response (some bots are slow)
+        for attempt in range(3):  # Try 3 times
+            await asyncio.sleep(3 if attempt == 0 else 2)  # Wait 3s first, then 2s each
             
-            # Check if this message came after our button click (must be very recent)
-            if msg.date and msg.date.timestamp() > (time.time() - 10):
-                logger.info(f"📨 Found recent message (ID: {msg.id}, Date: {msg.date})")
+            logger.info(f"🔍 Checking for response (attempt {attempt + 1}/3)...")
+            
+            # Strategy 1: Check if original message was edited
+            try:
+                updated_msg = await user_client.get_messages(dest_entity, ids=dest_message.id)
                 
-                # Check if it has buttons (pagination)
-                if msg.buttons:
-                    logger.info(f"🔘 Message has {len(msg.buttons)} button rows")
-                    session['dest_message'] = msg
+                # Check if message was edited AND has changed content
+                if updated_msg and updated_msg.edit_date:
+                    # Check if buttons changed or disappeared
+                    buttons_changed = False
+                    buttons_gone = False
                     
-                    user_buttons = []
-                    for row in msg.buttons:
-                        button_row = []
-                        for button in row:
-                            if hasattr(button, 'text'):
-                                button_row.append(Button.inline(
-                                    button.text,
-                                    f"relay_{len(user_buttons)}_{len(button_row)}"
-                                ))
-                        if button_row:
-                            user_buttons.append(button_row)
+                    if not updated_msg.buttons and dest_message.buttons:
+                        buttons_gone = True
+                        logger.info(f"🔘 Buttons removed from message - likely final result")
+                    elif updated_msg.buttons and dest_message.buttons:
+                        # Check if button count changed
+                        if len(updated_msg.buttons) != len(dest_message.buttons):
+                            buttons_changed = True
+                            logger.info(f"🔘 Button count changed - pagination detected")
                     
-                    await event.edit(
-                        msg.text or msg.raw_text or "Select an option:",
-                        buttons=user_buttons
-                    )
-                    return
+                    # If buttons gone, this is likely the final result
+                    if buttons_gone:
+                        logger.info(f"✅ Found final result in edited message (buttons removed)")
+                        interactive_sessions.pop(user_id, None)
+                        user_states.pop(user_id, None)
+                        
+                        if updated_msg.file:
+                            await event.answer("✅ File received!")
+                            logger.info(f"📁 Forwarding file to user")
+                            
+                            if updated_msg.text:
+                                await bot_client.send_message(user_id, f"✅ Result:\n\n{updated_msg.text}")
+                            
+                            await bot_client.forward_messages(user_id, updated_msg)
+                        elif updated_msg.text and len(updated_msg.text) > 20:
+                            logger.info(f"📝 Sending text result to user")
+                            await event.edit(f"✅ Result:\n\n{updated_msg.text}")
+                        
+                        # Deduct credit
+                        if user_id != ADMIN_USER_ID:
+                            user_doc = await get_user(user_id)
+                            if user_doc.get('plan') != 'unlimited':
+                                await decrement_search(user_id)
+                        return
+                    
+                    # If buttons changed (pagination), show new buttons
+                    elif buttons_changed or updated_msg.buttons:
+                        if updated_msg.buttons:
+                            logger.info(f"🔘 Found pagination buttons in edited message")
+                            session['dest_message'] = updated_msg
+                            
+                            user_buttons = []
+                            for row in updated_msg.buttons:
+                                button_row = []
+                                for button in row:
+                                    if hasattr(button, 'text'):
+                                        button_row.append(Button.inline(
+                                            button.text,
+                                            f"relay_{len(user_buttons)}_{len(button_row)}"
+                                        ))
+                                if button_row:
+                                    user_buttons.append(button_row)
+                            
+                            await event.edit(
+                                updated_msg.text or updated_msg.raw_text or "Select an option:",
+                                buttons=user_buttons
+                            )
+                            return
                 
-                # Check if it's a final result (file or text)
-                if msg.file or (msg.text and len(msg.text) > 10):
-                    logger.info(f"✅ Found final result message")
-                    interactive_sessions.pop(user_id, None)
-                    user_states.pop(user_id, None)
+            except Exception as e:
+                logger.warning(f"Could not check edited message: {e}")
+            
+            # Strategy 2: Look for new messages from bot
+            try:
+                messages = await user_client.get_messages(dest_entity, limit=30)
+                
+                for msg in messages:
+                    # Skip original message
+                    if msg.id == dest_message.id:
+                        continue
                     
-                    if msg.file:
-                        await event.answer("✅ File received!")
-                        logger.info(f"📁 Forwarding file to user")
+                    # Check if message is very recent (within last 15 seconds)
+                    if msg.date and msg.date.timestamp() > (time.time() - 15):
+                        logger.info(f"📨 Found recent message (ID: {msg.id})")
                         
-                        if msg.text:
-                            await bot_client.send_message(user_id, f"✅ Result:\n\n{msg.text}")
+                        # Check if it has pagination buttons
+                        if msg.buttons:
+                            logger.info(f"🔘 Message has {len(msg.buttons)} button rows - pagination")
+                            session['dest_message'] = msg
+                            
+                            user_buttons = []
+                            for row in msg.buttons:
+                                button_row = []
+                                for button in row:
+                                    if hasattr(button, 'text'):
+                                        button_row.append(Button.inline(
+                                            button.text,
+                                            f"relay_{len(user_buttons)}_{len(button_row)}"
+                                        ))
+                                if button_row:
+                                    user_buttons.append(button_row)
+                            
+                            await event.edit(
+                                msg.text or msg.raw_text or "Select an option:",
+                                buttons=user_buttons
+                            )
+                            return
                         
-                        await bot_client.forward_messages(user_id, msg)
-                    elif msg.text:
-                        logger.info(f"📝 Sending text result to user")
-                        await event.edit(f"✅ Result:\n\n{msg.text or msg.raw_text}")
-                    
-                    # Deduct credit
-                    if user_id != ADMIN_USER_ID:
-                        user_doc = await get_user(user_id)
-                        if user_doc.get('plan') != 'unlimited':
-                            await decrement_search(user_id)
-                    return
+                        # Check if it's a final result (file or substantial text)
+                        if msg.file or (msg.text and len(msg.text) > 20):
+                            logger.info(f"✅ Found final result message")
+                            interactive_sessions.pop(user_id, None)
+                            user_states.pop(user_id, None)
+                            
+                            if msg.file:
+                                await event.answer("✅ File received!")
+                                logger.info(f"📁 Forwarding file to user")
+                                
+                                if msg.text:
+                                    await bot_client.send_message(user_id, f"✅ Result:\n\n{msg.text}")
+                                
+                                await bot_client.forward_messages(user_id, msg)
+                            elif msg.text:
+                                logger.info(f"📝 Sending text result to user")
+                                await event.edit(f"✅ Result:\n\n{msg.text}")
+                            
+                            # Deduct credit
+                            if user_id != ADMIN_USER_ID:
+                                user_doc = await get_user(user_id)
+                                if user_doc.get('plan') != 'unlimited':
+                                    await decrement_search(user_id)
+                            return
+            
+            except Exception as e:
+                logger.warning(f"Could not check new messages: {e}")
+            
+            # If this isn't the last attempt, continue loop
+            if attempt < 2:
+                logger.info(f"⏳ No response yet, will try again...")
         
-        # No response found
-        logger.warning(f"❌ No response found after button click")
+        # After all attempts, no response found
+        logger.warning(f"❌ No response found after 3 attempts")
         await event.answer("❌ No response received from bot. Please try again.", alert=True)
         interactive_sessions.pop(user_id, None)
     
