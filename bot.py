@@ -2979,10 +2979,10 @@ async def api_search_handler(request):
     auth_error = await verify_api_key(request)
     if auth_error:
         return auth_error
-    
+
     key_info = request['api_key_info']
     user_doc = request['user_doc']
-    
+
     try:
         data = await request.json()
     except Exception:
@@ -2990,46 +2990,52 @@ async def api_search_handler(request):
             {"success": False, "error": "Invalid JSON"},
             status=400
         )
-    
+
     search_type = data.get('search_type')
     query = data.get('query')
-    
+
     if not search_type or not query:
         return web.json_response(
             {"success": False, "error": "Missing search_type or query"},
             status=400
         )
-    
+
     if search_type not in SEARCH_COMMANDS:
         return web.json_response(
-            {"success": False, "error": f"Invalid search_type. Valid types: {list(SEARCH_COMMANDS.keys())}"},
+            {
+                "success": False,
+                "error": f"Invalid search_type. Valid types: {list(SEARCH_COMMANDS.keys())}"
+            },
             status=400
         )
-    
-    user_id = key_info['user_id']
-    result = await perform_search(search_type, query, user_id)
-        result = await perform_search(search_type, query, user_id)
 
-if result.get('success'):
-    await increment_api_key_usage(key_info['api_key'])
-        
+    user_id = key_info['user_id']
+
+    # ✅ SINGLE call, correct indentation
+    result = await perform_search(search_type, query, user_id)
+
+    # ✅ Correct indentation + safe access
+    if result.get('success'):
+        await increment_api_key_usage(key_info['api_key'])
+
         if user_doc.get('plan') != 'unlimited':
             await decrement_search(user_id)
             updated_user = await get_user(user_id)
             remaining_credits = updated_user.get('searches_remaining', 0)
         else:
             remaining_credits = -1
-        
+
         return web.json_response({
             "success": True,
             "search_type": search_type,
             "query": query,
-            "result": result['result'],
+            "result": result.get('result'),
             "source": result.get('source', 'primary'),
             "creator_credits_remaining": remaining_credits
         })
-    else:
-        return web.json_response(result, status=500)
+
+    # ✅ Matching else
+    return web.json_response(result, status=500)
 
 async def api_info_handler(request):
     auth_error = await verify_api_key(request)
