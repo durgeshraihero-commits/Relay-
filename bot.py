@@ -108,7 +108,7 @@ DESTINATION_GROUPS = [
 FAMILY_GROUP = {
     "name": "Family Info Group",
     "identifier": -1003596998816,  # Private group ID
-    "timeout": GROUP_TIMEOUT,
+    "timeout": 180,
     "entity": None
 }
 
@@ -128,7 +128,7 @@ TELEGRAM_USERNAME_GROUP = {
 
 MOVIE_BOT = {
     "name": "Movie/Series Bot",
-    "identifier": "@iPopkornbot",  # Replace with your actual movie bot username
+    "identifier": "@iPapkornR1bot",  # Replace with your actual movie bot username
     "timeout": 60,  # Movies might take longer to respond
     "entity": None
 }
@@ -156,7 +156,7 @@ SEARCH_COMMANDS = {
         "name": "👨‍👩‍👧‍👦 Family Info",
         "type": "family_group",
         "commands": {
-            0: "/family"
+            0: "/familyinfo"
         }
     },
     "aadhar": {
