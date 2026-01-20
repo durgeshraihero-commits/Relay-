@@ -1,6 +1,6 @@
 """
 Premium Information Bot - Professional Edition
-Smart cascading search, txt/json support, premium UI
+Smart cascading search, txt/json support, premium UI, robust result handling
 """
 
 import os
@@ -43,11 +43,11 @@ WEBSITE = "https://relay-wzlz.onrender.com"
 
 BOT_FOOTER = "Powered by darkboxes_bot\nDev: @darkboxesAdmin"
 
-SEARCH_TIMEOUT_PER_GROUP = 25   # seconds per group
+SEARCH_TIMEOUT_PER_GROUP = 15   # seconds per group
 FETCH_WAIT_TIME = 2             # seconds before reading reply
 
 REFERRAL_REWARD = 2
-NEW_USER_CREDITS = 0
+NEW_USER_CREDITS = 2
 
 # ================== LOGGING ==================
 
@@ -407,35 +407,6 @@ def is_no_info_message(text: str) -> bool:
     ]
     return any(k in text.lower() for k in keywords)
 
-def has_useful_data(text: str) -> bool:
-    if not text or len(text.strip()) < 20:
-        return False
-    keywords = [
-        "name",
-        "mobile",
-        "phone",
-        "address",
-        "email",
-        "number",
-        "owner",
-        "father",
-        "mother",
-        "son",
-        "daughter",
-        "city",
-        "state",
-        "country",
-        "registered",
-        "status",
-        "device",
-        "imei",
-        "gst",
-        "aadhar",
-        "upi",
-        "family",
-    ]
-    return any(k in text.lower() for k in keywords)
-
 def filter_links(text: str) -> str:
     if not text:
         return text
@@ -554,30 +525,35 @@ async def perform_cascading_search(search_type: str, query: str, user_id: int = 
                 if not isinstance(result_text, str):
                     result_text = str(result_text)
 
-                if (
-                    result_text
-                    and len(result_text.strip()) > 20
-                    and not is_no_info_message(result_text)
-                ):
+                cleaned = result_text.strip()
+
+                # Accept result if it's not explicitly "no info" and has some length
+                if cleaned and len(cleaned) > 10 and not is_no_info_message(cleaned):
                     await log_search(user_id, search_type, query)
-                    formatted = format_result(result_text, search_type)
+                    formatted = format_result(cleaned, search_type)
                     pending_searches.pop(search_id, None)
                     return {
                         "success": True,
                         "result": formatted,
                         "source": group_config["name"],
                     }
-
-                pending_searches.pop(search_id, None)
-                logger.info(
-                    "⚠️ Result from %s not useful, trying next group",
-                    group_config["name"],
-                )
-                continue
+                else:
+                    # Discard result if it's "no info" or too short
+                    pending_searches.pop(search_id, None)
+                    logger.info(
+                        "⚠️ Result from %s considered not useful (len=%d), trying next group",
+                        group_config["name"],
+                        len(cleaned),
+                    )
+                    continue
 
             except asyncio.TimeoutError:
                 pending_searches.pop(search_id, None)
-                logger.info("⏱️ Timeout from %s (%ds)", group_config["name"], SEARCH_TIMEOUT_PER_GROUP)
+                logger.info(
+                    "⏱️ Timeout from %s (%ds)",
+                    group_config["name"],
+                    SEARCH_TIMEOUT_PER_GROUP,
+                )
                 continue
 
         except Exception as e:
@@ -1040,7 +1016,7 @@ async def handle_group_replies(event):
                 )
                 cleaned = cleaned.strip()
 
-                if cleaned and len(cleaned) > 15:
+                if cleaned and len(cleaned) > 10: # Only require 10 chars for file content
                     if not matched_search["future"].done():
                         logger.info("✅ Delivering text extracted from file")
                         matched_search["future"].set_result(cleaned)
