@@ -39,8 +39,8 @@ MONGODB_DBNAME = os.getenv("MONGODB_DBNAME", "tg_bot_db")
 PAYMENT_QR_CODE = os.getenv("PAYMENT_QR_CODE", "https://example.com/payment-qr.png")
 
 FETCH_WAIT_TIME = int(os.getenv("FETCH_WAIT_TIME", "2"))
-GROUP_TIMEOUT = int(os.getenv("GROUP_TIMEOUT", "180"))
-REPLY_TIMEOUT = int(os.getenv("REPLY_TIMEOUT", "240"))
+GROUP_TIMEOUT = int(os.getenv("GROUP_TIMEOUT", "300"))
+REPLY_TIMEOUT = int(os.getenv("REPLY_TIMEOUT", "360"))
 PROCESSING_WAIT_EXTRA = 8
 
 # API endpoints
@@ -99,7 +99,7 @@ DESTINATION_GROUPS = [
     },
     {
         "name": "Backup Group 3",
-        "identifier": "marco_osintgc",
+        "identifier": -1003596998816,
         "timeout": GROUP_TIMEOUT,
         "entity": None
     }
