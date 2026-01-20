@@ -2602,6 +2602,8 @@ async def relay_button_handler(event):
 
 # ============ Message Handler for Groups ============
 
+     # ============ Message Handler for Groups ============
+
 @user_client.on(events.NewMessage())
 async def handle_all_replies(event):
     """Handle all messages from groups/bots"""
@@ -2661,10 +2663,10 @@ async def handle_all_replies(event):
                 
                 try:
                     file_text = file_bytes.decode('utf-8')
-                except:
+                except Exception:
                     try:
                         file_text = file_bytes.decode('latin-1')
-                    except:
+                    except Exception:
                         file_text = file_bytes.decode('utf-8', errors='ignore')
                 
                 cleaned_file_text = clean_file_content(file_text)
@@ -2683,7 +2685,6 @@ async def handle_all_replies(event):
                         logger.info(f"📨 File delivered: {matched_key}")
                         pending_searches.pop(matched_key, None)
                         return
-        
         except Exception as e:
             logger.error(f"❌ File error: {e}")
             return
@@ -2721,7 +2722,7 @@ async def cleanup_old_searches():
                 if not info['future'].done():
                     try:
                         info['future'].set_exception(TimeoutError("Search expired"))
-                    except:
+                    except Exception:
                         pass
                 to_remove.append(search_id)
         
@@ -2738,6 +2739,7 @@ async def start_web_server():
     app = web.Application()
     
     async def health_check(request):
+        """Health check endpoint"""
         return web.Response(text="OK", status=200)
     
     async def api_search(request):
@@ -2885,4 +2887,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.info("🛑 Bot stopped by user")
     except Exception as e:
-        logger.exception("❌ Bot crashed: %s", e)
+        logger.exception("❌ Bot crashed: %s", e)   
+        
+    
