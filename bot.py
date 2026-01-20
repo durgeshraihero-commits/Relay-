@@ -156,15 +156,15 @@ SEARCH_COMMANDS = {
         "name": "👨‍👩‍👧‍👦 Family Info",
         "type": "family_group",
         "commands": {
-            0: "/num"
+            0: "/familyinfo"
         }
     },
     "aadhar": {
         "name": "🆔 Aadhar Info",
         "type": "group",
         "commands": {
-            0: "/adh",
-            1: "/aadhar",
+            0: "/aadhar",
+            1: "/adh",
             2: "/aadhar"
         }
     },
@@ -222,7 +222,7 @@ SEARCH_COMMANDS = {
         "name": "👤 Telegram Username Info",
         "type": "telegram_username_group",
         "commands": {
-            0: "/tguser"
+            0: "/tg"
         }
     },
     "imei": {
