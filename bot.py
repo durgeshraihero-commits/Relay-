@@ -527,8 +527,8 @@ async def perform_cascading_search(search_type: str, query: str, user_id: int = 
 
                 cleaned = result_text.strip()
 
-                # Accept result if it's not explicitly "no info" and has some length
-                if cleaned and len(cleaned) > 10 and not is_no_info_message(cleaned):
+                # Accept result if it's not explicitly "no info" and has some length (adjusted to > 15)
+                if cleaned and len(cleaned) > 15 and not is_no_info_message(cleaned):
                     await log_search(user_id, search_type, query)
                     formatted = format_result(cleaned, search_type)
                     pending_searches.pop(search_id, None)
@@ -1016,14 +1016,15 @@ async def handle_group_replies(event):
                 )
                 cleaned = cleaned.strip()
 
-                if cleaned and len(cleaned) > 10: # Only require 10 chars for file content
+                # Accept file content if it's not explicitly "no info" and has some length (e.g., > 15 chars)
+                if cleaned and len(cleaned) > 15 and not is_no_info_message(cleaned):
                     if not matched_search["future"].done():
                         logger.info("✅ Delivering text extracted from file")
                         matched_search["future"].set_result(cleaned)
                         pending_searches.pop(matched_key, None)
                         return
                 else:
-                    logger.info("⚠️ File content too short after cleaning")
+                    logger.info("⚠️ File content too short or empty after cleaning")
             except Exception as e:
                 logger.error("Error processing file result: %s", e)
 
