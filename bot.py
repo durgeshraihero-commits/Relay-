@@ -2254,8 +2254,8 @@ async def admin_callback(event):
         return
     
     action = event.data.decode().split('_', 1)[1]
-    
-        if action == "panel":
+
+    if action == "panel":
         stats = await admin_panel.get_bot_statistics()
         await event.edit(
             "⚙️ **Admin Panel**\n\n"
@@ -2270,14 +2270,15 @@ async def admin_callback(event):
             buttons=KeyboardBuilder.admin_menu(),
             parse_mode="md"
         )
-    
+
     elif action == "stats":
         stats = await admin_panel.get_bot_statistics()
         popular_searches = stats.get('popular_searches', [])
         
-        search_breakdown = "\n".join([
-            f"• {item['_id']}: {item['count']}" for item in popular_searches[:5]
-        ]) if popular_searches else "No data available"
+        search_breakdown = "\n".join(
+            f"• {item['_id']}: {item['count']}"
+            for item in popular_searches[:5]
+        ) if popular_searches else "No data available"
         
         await event.edit(
             f"📊 **Detailed Statistics**\n\n"
