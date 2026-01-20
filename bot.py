@@ -39,8 +39,8 @@ MONGODB_DBNAME = os.getenv("MONGODB_DBNAME", "tg_bot_db")
 PAYMENT_QR_CODE = os.getenv("PAYMENT_QR_CODE", "https://example.com/payment-qr.png")
 
 FETCH_WAIT_TIME = int(os.getenv("FETCH_WAIT_TIME", "2"))
-GROUP_TIMEOUT = int(os.getenv("GROUP_TIMEOUT", "300"))
-REPLY_TIMEOUT = int(os.getenv("REPLY_TIMEOUT", "360"))
+GROUP_TIMEOUT = int(os.getenv("GROUP_TIMEOUT", "500"))
+REPLY_TIMEOUT = int(os.getenv("REPLY_TIMEOUT", "660"))
 PROCESSING_WAIT_EXTRA = 8
 
 # API endpoints
@@ -87,19 +87,19 @@ logger.info("=" * 60)
 DESTINATION_GROUPS = [
     {
         "name": "Main Group",
-        "identifier": "darkboxesv3",
+        "identifier": -1003596998816,
         "timeout": GROUP_TIMEOUT,
         "entity": None
     },
     {
         "name": "Backup Group 2",
-        "identifier": "nex_chats",
+        "identifier": "darkboxesv3",
         "timeout": GROUP_TIMEOUT,
         "entity": None
     },
     {
         "name": "Backup Group 3",
-        "identifier": -1003596998816,
+        "identifier": "nex_chats",
         "timeout": GROUP_TIMEOUT,
         "entity": None
     }
