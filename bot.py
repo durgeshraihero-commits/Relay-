@@ -1372,53 +1372,9 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                 logger.info(f"📩 Received response from {dest_config['name']}: {result_text[:100] if isinstance(result_text, str) else 'FILE'}...")
                 
                 if isinstance(result_text, str):
-                    # Handle processing messages
+                    # Double check: don't accept processing messages
                     if is_processing_message(result_text):
-                        logger.info(f"⏳ Processing message detected, waiting {PROCESSING_WAIT_EXTRA}s more...")
-                        
-                        await asyncio.sleep(PROCESSING_WAIT_EXTRA)
-                        
-                        try:
-                            messages = await user_client.get_messages(dest_entity, limit=20)
-                            
-                            for msg in messages:
-                                if msg.reply_to and msg.reply_to.reply_to_msg_id == forwarded.id:
-                                    potential_text = msg.text or msg.raw_text
-                                    if potential_text and not is_processing_message(potential_text):
-                                        result_text = potential_text
-                                        logger.info(f"🔄 Found updated non-processing message")
-                                        break
-                                
-                        except Exception as e:
-                            logger.error(f"Error getting updated message: {e}")
-                    
-                    # Handle spam/no-info messages
-                    if is_no_info_message(result_text):
-                        logger.info(f"🚫 Spam/no-info message detected, waiting {PROCESSING_WAIT_EXTRA}s for valid data...")
-                        
-                        await asyncio.sleep(PROCESSING_WAIT_EXTRA)
-                        
-                        try:
-                            messages = await user_client.get_messages(dest_entity, limit=20)
-                            
-                            for msg in messages:
-                                if msg.reply_to and msg.reply_to.reply_to_msg_id == forwarded.id:
-                                    potential_text = msg.text or msg.raw_text
-                                    if (potential_text and 
-                                        not is_no_info_message(potential_text) and 
-                                        not is_processing_message(potential_text) and
-                                        is_valid_result(potential_text, search_type)):
-                                        result_text = potential_text
-                                        logger.info(f"✅ Found valid data message after spam message!")
-                                        break
-                                
-                        except Exception as e:
-                            logger.error(f"Error getting updated message after spam: {e}")
-                    
-                    logger.info(f"🔍 Validating result from {dest_config['name']}")
-                    
-                    if is_no_info_message(result_text):
-                        logger.warning(f"⚠️ No info found in {dest_config['name']}")
+                        logger.warning(f"⚠️ Got processing message from {dest_config['name']}, treating as no result")
                         pending_searches.pop(search_id, None)
                         
                         if idx < len(destinations) - 1:
@@ -1434,6 +1390,26 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                                     "success": False, 
                                     "error": "No result found for this input. Please try another."
                                 }
+                    
+                    # Check for no-info
+                    if is_no_info_message(result_text):
+                        logger.warning(f"⚠️ No info found in {dest_config['name']}")
+                        pending_searches.pop(search_id, None)
+                        
+                        if idx < len(destinations) - 1:
+                            logger.info(f"➡️ Cascading to next group: {destinations[idx + 1]['name']}")
+                            continue
+                        else:
+                            api_result = await try_api_fallback(search_type, query, user_id)
+                            if api_result['success']:
+                                return api_result
+                            else:
+                                return {
+                                    "success": False, 
+                                    "error": "No result found for this input. Please try another."
+                                }
+                    
+                    logger.info(f"🔍 Validating result from {dest_config['name']}")
                     
                     if not is_valid_result(result_text, search_type):
                         logger.warning(f"⚠️ Invalid result format from {dest_config['name']}")
@@ -1508,7 +1484,9 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
         "success": False, 
         "error": "No result found for this input. Please try another."
     }
-
+                        
+                        
+                    
 async def try_api_fallback(search_type: str, query: str, user_id: int = None):
     if search_type in ['phone', 'telegram']:
         api_result = await fetch_phone_api(query)
