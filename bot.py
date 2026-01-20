@@ -471,12 +471,18 @@ class UserManager:
             logger.error(f"Error getting user {user_id}: {e}")
             return None
     
-    async def create_user(self, user_id: int, username: str = None, first_name: str = None, referral_code: str = None) -> bool:
+    async def create_user(
+    self,
+    user_id: int,
+    username: str = None,
+    first_name: str = None,
+    referral_code: str = None
+) -> bool:
     """Create new user - FIXED VERSION"""
     try:
         # Generate unique referral code
         user_referral_code = await self._generate_referral_code()
-        
+
         user_doc = {
             "user_id": user_id,
             "username": username,
@@ -494,25 +500,29 @@ class UserManager:
             "last_seen": datetime.now(timezone.utc).isoformat(),
             "telegram_limits": {}
         }
-        
-        # FIX: Use proper upsert syntax
-        await asyncio.get_running_loop().run_in_executor(
-            None, lambda: self.users_col.update_one(
-                {"user_id": user_id},
-                {"$setOnInsert": user_doc},  # This is correct
-                upsert=True
-            )
+
+        result = await self.users_col.update_one(
+            {"user_id": user_id},
+            {
+                "$setOnInsert": user_doc,
+                "$set": {
+                    "username": username,
+                    "first_name": first_name,
+                    "last_seen": datetime.now(timezone.utc).isoformat()
+                }
+            },
+            upsert=True
         )
-        
-        # Apply referral if provided
-        if referral_code:
+
+        # Apply referral ONLY if new user
+        if referral_code and result.upserted_id is not None:
             await self.apply_referral(user_id, referral_code)
-        
+
         logger.info(f"✅ Created user {user_id}")
         return True
-        
+
     except Exception as e:
-        logger.error(f"Error creating user {user_id}: {e}")
+        logger.exception(f"Error creating user {user_id}")
         return False
     
     async def _generate_referral_code(self) -> str:
