@@ -2585,8 +2585,8 @@ async def handle_all_replies(event):
                         matched_key = search_id
                         break
             
-            # PRIORITY 2: Text matching (but skip processing messages)
-            if text and not matched_search:
+            # PRIORITY 2: Text matching (but skip processing messages and files with text)
+            if text and not has_file and not matched_search:
                 # Skip processing messages - don't match them
                 if is_processing_message(text):
                     logger.info(f"⏭️ Skipping processing message for content matching")
@@ -2635,19 +2635,9 @@ async def handle_all_replies(event):
         logger.debug(f"ℹ️ No matching search found for this message")
         return
     
-    # Check for processing/spam messages
-    if text:
-        if is_processing_message(text):
-            logger.info(f"⏳ Processing message detected, ignoring and waiting for real result...")
-            return  # Don't process, just return and wait
-        
-        if is_no_info_message(text):
-            logger.info(f"🚫 No-info message detected, ignoring and waiting for valid data...")
-            return  # Don't process, just return and wait
-    
     await asyncio.sleep(FETCH_WAIT_TIME)
     
-    # PRIORITY 1: Handle file messages first
+    # PRIORITY 1: Handle file messages FIRST (skip text checks for files)
     if has_file:
         try:
             if file_name and (file_name.lower().endswith('.txt') or message.file.mime_type == 'text/plain'):
@@ -2666,33 +2656,51 @@ async def handle_all_replies(event):
                 # Clean the file content - remove all links and usernames
                 cleaned_file_text = clean_file_content(file_text)
                 
+                logger.info(f"📋 File content length: {len(cleaned_file_text)} chars")
+                
                 # For family searches, also extract family members
                 if matched_search['search_type'] == 'family':
                     family_members = extract_family_members(cleaned_file_text)
                     if family_members:
+                        logger.info(f"👨‍👩‍👧 Extracted family members")
                         cleaned_file_text = family_members
                 
-                if cleaned_file_text and not matched_search['future'].done():
-                    logger.info(f"✅ Cleaned file content, delivering result")
-                    matched_search['future'].set_result(cleaned_file_text)
-                    logger.info(f"📨 File delivered for search {matched_key}")
-                    pending_searches.pop(matched_key, None)
-                    return
-                elif matched_search['future'].done():
-                    logger.warning(f"⚠️ Future already done when file arrived, still delivering")
-                    try:
+                if cleaned_file_text:
+                    if not matched_search['future'].done():
+                        logger.info(f"✅ Delivering cleaned file content")
                         matched_search['future'].set_result(cleaned_file_text)
-                    except:
-                        logger.warning(f"Could not set result again, but file content is: {cleaned_file_text[:100]}")
-                    pending_searches.pop(matched_key, None)
+                        logger.info(f"📨 File result delivered for search {matched_key}")
+                        pending_searches.pop(matched_key, None)
+                        return
+                    else:
+                        logger.warning(f"⚠️ Future already done, force delivering anyway")
+                        try:
+                            matched_search['future'].set_result(cleaned_file_text)
+                            logger.info(f"📨 File result force-delivered for search {matched_key}")
+                        except Exception as e:
+                            logger.warning(f"Could not set result: {e}")
+                        pending_searches.pop(matched_key, None)
+                        return
+                else:
+                    logger.warning(f"⚠️ File content is empty after cleaning")
                     return
                     
         except Exception as e:
             logger.error(f"❌ Error processing file: {e}", exc_info=True)
-            # Fall through to text handling
+            # Don't fall through - stop processing this message
+            return
     
-    # PRIORITY 2: Handle text messages (only if not processing/spam)
-    if text:
+    # PRIORITY 2: Handle text messages ONLY (no files)
+    if text and not has_file:
+        # Check for processing/spam messages - only for text-only messages
+        if is_processing_message(text):
+            logger.info(f"⏳ Processing text message detected, ignoring and waiting for real result...")
+            return  # Don't process, just return and wait
+        
+        if is_no_info_message(text):
+            logger.info(f"🚫 No-info text message detected, ignoring and waiting for valid data...")
+            return  # Don't process, just return and wait
+        
         try:
             chat = await event.get_chat()
             latest = await user_client.get_messages(chat, ids=message.id)
@@ -2715,17 +2723,18 @@ async def handle_all_replies(event):
         if not matched_search['future'].done():
             # Clean the text before delivering
             cleaned_text = filter_links_and_usernames(text)
-            logger.info(f"📨 Text delivered for search {matched_key}")
+            logger.info(f"✅ Delivering cleaned text result ({len(cleaned_text)} chars)")
             matched_search['future'].set_result(cleaned_text)
+            logger.info(f"📨 Text result delivered for search {matched_key}")
             pending_searches.pop(matched_key, None)
         else:
-            logger.warning(f"⚠️ Future already done, attempting to deliver anyway")
+            logger.warning(f"⚠️ Future already done, force delivering anyway")
             try:
                 matched_search['future'].set_result(text)
-            except:
-                logger.warning(f"Could not set result again")
+                logger.info(f"📨 Text result force-delivered for search {matched_key}")
+            except Exception as e:
+                logger.warning(f"Could not set result: {e}")
             pending_searches.pop(matched_key, None)
-
 # ============ Cleanup Task ============
 
 async def cleanup_old_searches():
