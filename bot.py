@@ -325,7 +325,7 @@ async def create_payment(user_id: int, plan: str, amount: int) -> Optional[str]:
 
 async def approve_payment_record(payment_id: str) -> bool:
     """
-    Approve payment and update user plan. (name chosen to not clash with handler)
+    Approve payment and update user plan.
     """
     try:
         loop = asyncio.get_running_loop()
@@ -746,8 +746,7 @@ async def my_profile_handler(event):
     user_doc = await get_user(event.sender_id)
     admin = await is_admin(event.sender_id)
 
-    message =
-    (
+    message = (
         "👤 My Profile\n\n"
         f"Name: {user_doc.get('first_name', 'N/A')}\n"
         f"User ID: {event.sender_id}\n"
