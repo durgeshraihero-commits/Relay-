@@ -2995,8 +2995,7 @@ async def start_bot():
         logger.info(f"🔍 Smart detection: Processing & No-info messages")
         logger.info(f"🔄 Cascading fallback: Groups → API")
         logger.info(f"📄 TXT file support: All search types")
-        logger.info(f"🎯 Interactive buttons
-                logger.info(f"🎯 Interactive buttons: Telegram & Movie bots")
+        logger.info(f"🎯 Interactive buttons: Telegram & Movie bots")
 
         await asyncio.Event().wait()
 
