@@ -868,16 +868,18 @@ async def message_handler(event):
         user_states.pop(user_id, None)
 
 # ============ GROUP HANDLER ============
-
-
 @user_client.on(events.NewMessage())
 async def handle_group_replies(event):
     """
     Handle all messages from destination groups.
+
+    Behaviour:
     - Only accept direct replies to our command message.
-    - If reply is 'processing', wait for next message (do not resolve).
-    - If reply is text with useful info, resolve with cleaned text.
-    - If reply is .txt/.json, download, parse & resolve with cleaned text.
+    - If reply is 'searching / processing / please wait' -> just wait, don't resolve.
+    - If reply is text with useful info -> resolve with cleaned text.
+    - If reply is .txt / .json -> download, parse & resolve with cleaned text.
+    - If reply is explicit 'no info / not found' -> mark this group as failed so
+      cascading search moves on to next group.
     """
     message = event.message
     now = time.time()
@@ -890,7 +892,7 @@ async def handle_group_replies(event):
         if info['future'].done():
             continue
         
-        # Hard timeout safety
+        # Safety: ignore very old entries
         if now - info.get('timestamp', now) > SEARCH_TIMEOUT_PER_GROUP * 5:
             continue
         
@@ -906,24 +908,22 @@ async def handle_group_replies(event):
     text = message.text or message.raw_text
     has_file = message.file is not None
 
-    # If nothing meaningful, ignore
     if not text and not has_file:
         return
 
-    # Small wait to let bot finish editing/sending
-    await asyncio.sleep(FETCH_WAIT_WAIT_TIME)
+    # small delay so if the other bot edits/sends multiple messages, we see the final one
+    await asyncio.sleep(FETCH_WAIT_TIME)
 
-    # ---------- 1. Handle "processing / please wait" messages ----------
+    # ---------- 1. "Processing / searching..." messages ----------
     if text and not has_file and is_processing_message(text):
-        logger.info(f"⏳ Processing message detected, waiting for next reply: {text[:60]!r}")
-        # Do NOT resolve future, just wait for another reply
+        logger.info(f"⏳ Processing message from group, waiting for real result: {text[:60]!r}")
+        # Don't resolve future – just note that we saw a processing message
         matched_search["got_processing"] = True
         return
 
-    # ---------- 2. Handle explicit "no info" / "not found" messages ----------
+    # ---------- 2. Explicit "no info" / "not found" messages ----------
     if text and not has_file and is_no_info_message(text):
-        logger.info("❌ No-info message received from group")
-        # Let perform_cascading_search try next group by timing out here
+        logger.info("❌ No-info message received from group (will try next group)")
         if not matched_search["future"].done():
             try:
                 matched_search["future"].set_exception(TimeoutError("No info from this group"))
@@ -932,7 +932,7 @@ async def handle_group_replies(event):
         pending_searches.pop(matched_key, None)
         return
 
-    # ---------- 3. Handle files: .txt / .json ----------
+    # ---------- 3. File replies: .txt / .json ----------
     if has_file:
         file_name = (message.file.name or "").lower()
         mime_type = (message.file.mime_type or "").lower()
@@ -941,11 +941,11 @@ async def handle_group_replies(event):
         is_json_file = file_name.endswith(".json") or "json" in mime_type
 
         if is_text_file or is_json_file:
-            logger.info(f"📥 Downloading result file: {file_name or mime_type}")
+            logger.info(f"📥 Downloading result file from group: {file_name or mime_type}")
             try:
                 file_bytes = await message.download_media(bytes)
 
-                # Try decoding text
+                # Decode file content
                 try:
                     file_text = file_bytes.decode("utf-8")
                 except UnicodeDecodeError:
@@ -954,27 +954,28 @@ async def handle_group_replies(event):
                     except Exception:
                         file_text = file_bytes.decode("utf-8", errors="ignore")
 
-                # If JSON, pretty-print it
+                # If JSON, pretty-print
                 if is_json_file:
                     try:
                         parsed = json.loads(file_text)
                         file_text = json.dumps(parsed, indent=2, ensure_ascii=False)
                     except Exception:
-                        # Keep raw text if JSON parsing fails
+                        # leave as-is if parsing fails
                         pass
 
-                # Clean file content
-                cleaned = clean_file(file_text)  # your helper to strip extra noise
-                cleaned = filter_links(cleaned)  # remove URLs/usernames
+                # Basic cleaning (remove blank lines, etc.)
+                cleaned = clean_file(file_text)
+                cleaned = filter_links(cleaned)
 
-                # Some bots put their own footer (like '@DuXxZx_info'); strip common promo lines
+                # Remove promo/footer lines you showed in screenshots
                 cleaned = re.sub(r"Designed\s*&\s*Powered.*", "", cleaned, flags=re.IGNORECASE)
+                cleaned = re.sub(r"Powered by .*", "", cleaned, flags=re.IGNORECASE)
                 cleaned = re.sub(r"@DuXxZx_info", "", cleaned, flags=re.IGNORECASE)
                 cleaned = cleaned.strip()
 
                 if cleaned and len(cleaned) > 15:
                     if not matched_search["future"].done():
-                        logger.info("✅ Delivering text extracted from file")
+                        logger.info("✅ Delivering text extracted from .txt/.json file")
                         matched_search["future"].set_result(cleaned)
                         pending_searches.pop(matched_key, None)
                         return
@@ -984,7 +985,7 @@ async def handle_group_replies(event):
             except Exception as e:
                 logger.error(f"❌ Error processing file result: {e}")
 
-            # If we reach here, we couldn’t extract useful text → let other groups try
+            # If we get here, we didn’t get a usable result from the file.
             if not matched_search["future"].done():
                 try:
                     matched_search["future"].set_exception(TimeoutError("Invalid file result"))
@@ -993,31 +994,35 @@ async def handle_group_replies(event):
             pending_searches.pop(matched_key, None)
             return
 
-        # Non-text files (images, etc.) → ignore as result
-        logger.info("📁 Non-text file received, ignoring")
+        # Non-text files (images, pdf, etc.) – ignore as results.
+        logger.info("📁 Non-text file received from group; ignoring as result")
         return
 
-    # ---------- 4. Handle plain text results ----------
+    # ---------- 4. Plain text results ----------
     if text and not has_file:
-        # Already filtered "processing" and "no-info" above
-
-        # Require some length & useful content
         if len(text.strip()) < 15:
-            logger.info("⚠️ Ignoring very short text reply")
+            logger.info("⚠️ Ignoring very short text reply from group")
             return
 
+        # Even if has_useful_data() returns False, we'll still send as a fallback
         if not has_useful_data(text):
-            logger.info("⚠️ Text reply does not look like useful data, but delivering as fallback")
-        
+            logger.info("ℹ️ Text reply may not contain obvious data, delivering as fallback")
+
         cleaned_text = filter_links(text)
         cleaned_text = re.sub(r"Designed\s*&\s*Powered.*", "", cleaned_text, flags=re.IGNORECASE)
+        cleaned_text = re.sub(r"Powered by .*", "", cleaned_text, flags=re.IGNORECASE)
         cleaned_text = re.sub(r"@DuXxZx_info", "", cleaned_text, flags=re.IGNORECASE)
         cleaned_text = cleaned_text.strip()
 
+        if not cleaned_text:
+            logger.info("⚠️ Cleaned text became empty; ignoring")
+            return
+
         if not matched_search["future"].done():
-            logger.info("✅ Delivering text result from group")
+            logger.info("✅ Delivering plain text result from group")
             matched_search["future"].set_result(cleaned_text)
             pending_searches.pop(matched_key, None)
+
 # ============ CLEANUP ============
 
 async def cleanup():
