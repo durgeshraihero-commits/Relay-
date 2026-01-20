@@ -3008,8 +3008,10 @@ async def api_search_handler(request):
     
     user_id = key_info['user_id']
     result = await perform_search(search_type, query, user_id)
-        if result['success']:
-        await increment_api_key_usage(key_info['api_key'])
+        result = await perform_search(search_type, query, user_id)
+
+if result.get('success'):
+    await increment_api_key_usage(key_info['api_key'])
         
         if user_doc.get('plan') != 'unlimited':
             await decrement_search(user_id)
