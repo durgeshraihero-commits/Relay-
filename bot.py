@@ -51,7 +51,10 @@ VEHICLE_API_KEY = "URSLASH123"
 
 # Referral settings
 REFERRAL_REWARD = 2
-NEW_USER_CREDITS = 0
+NEW_USER_CREDITS = 2
+
+# Bot branding
+BOT_FOOTER = "🔐 Powered by darkboxes_bot\n📱 Developed by darkboxesAdmin"
 
 # ============ Logging ============
 
@@ -129,7 +132,7 @@ TELEGRAM_USERNAME_GROUP = {
 MOVIE_BOT = {
     "name": "Movie/Series Bot",
     "identifier": "@iPapkornD2bot",
-    "timeout": 60,
+    "timeout": 120,
     "entity": None
 }
 
@@ -285,9 +288,11 @@ payments_col = None
 searches_col = None
 api_keys_col = None
 referrals_col = None
+admins_col = None
+broadcasts_col = None
 
 def init_mongo():
-    global mongo_client, db, users_col, payments_col, searches_col, api_keys_col, referrals_col
+    global mongo_client, db, users_col, payments_col, searches_col, api_keys_col, referrals_col, admins_col, broadcasts_col
     try:
         mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
         mongo_client.server_info()
@@ -297,19 +302,14 @@ def init_mongo():
         searches_col = db["searches"]
         api_keys_col = db["api_keys"]
         referrals_col = db["referrals"]
+        admins_col = db["admins"]
+        broadcasts_col = db["broadcasts"]
         
+        # Create indexes
         try:
             users_col.create_index([("user_id", 1)], unique=True)
-        except Exception as e:
-            if "already exists" not in str(e).lower():
-                raise
-            logger.info("user_id index already exists")
-        
-        try:
-            users_col.drop_index("referral_code_1")
-            logger.info("Dropped old referral_code index")
-        except Exception as e:
-            logger.info("No old referral_code index to drop")
+        except:
+            pass
         
         try:
             users_col.create_index(
@@ -317,14 +317,12 @@ def init_mongo():
                 unique=True, 
                 partialFilterExpression={"referral_code": {"\$type": "string"}}
             )
-            logger.info("Created partial unique index for referral_code")
-        except Exception as e:
-            if "already exists" not in str(e).lower():
-                logger.warning(f"Could not create referral_code index: {e}")
+        except:
+            pass
         
         for col, field in [(payments_col, "user_id"), (searches_col, "user_id"), 
                            (api_keys_col, "user_id"), (referrals_col, "referrer_id"), 
-                           (referrals_col, "referred_id")]:
+                           (referrals_col, "referred_id"), (admins_col, "user_id")]:
             try:
                 col.create_index([(field, 1)])
             except:
@@ -339,6 +337,93 @@ def init_mongo():
     except Exception as e:
         logger.exception("MongoDB connection failed: %s", e)
         raise
+
+# ============ Admin Management ============
+
+async def add_admin(user_id: int):
+    try:
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: admins_col.update_one(
+                {"user_id": user_id},
+                {"\$set": {"user_id": user_id, "added_at": datetime.now(timezone.utc).isoformat()}},
+                upsert=True
+            )
+        )
+        return True
+    except Exception as e:
+        logger.exception("Error adding admin: %s", e)
+        return False
+
+async def remove_admin(user_id: int):
+    try:
+        result = await asyncio.get_running_loop().run_in_executor(
+            None, admins_col.delete_one, {"user_id": user_id}
+        )
+        return result.deleted_count > 0
+    except Exception as e:
+        logger.exception("Error removing admin: %s", e)
+        return False
+
+async def is_admin(user_id: int):
+    try:
+        admin = await asyncio.get_running_loop().run_in_executor(
+            None, admins_col.find_one, {"user_id": user_id}
+        )
+        return admin is not None or user_id == ADMIN_USER_ID
+    except Exception as e:
+        logger.exception("Error checking admin: %s", e)
+        return user_id == ADMIN_USER_ID
+
+async def get_admin_stats():
+    try:
+        total_users = await asyncio.get_running_loop().run_in_executor(
+            None, users_col.count_documents, {}
+        )
+        
+        total_searches = await asyncio.get_running_loop().run_in_executor(
+            None, searches_col.count_documents, {}
+        )
+        
+        active_users = await asyncio.get_running_loop().run_in_executor(
+            None, users_col.count_documents, {"total_searches": {"\$gt": 0}}
+        )
+        
+        return {
+            "total_users": total_users,
+            "active_users": active_users,
+            "total_searches": total_searches
+        }
+    except Exception as e:
+        logger.exception("Error getting admin stats: %s", e)
+        return {"total_users": 0, "active_users": 0, "total_searches": 0}
+
+async def broadcast_message(message: str, exclude_user_id: int = None):
+    try:
+        users = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: list(users_col.find({}))
+        )
+        
+        sent = 0
+        failed = 0
+        
+        for user_doc in users:
+            user_id = user_doc.get('user_id')
+            
+            if exclude_user_id and user_id == exclude_user_id:
+                continue
+            
+            try:
+                await bot_client.send_message(user_id, message)
+                sent += 1
+                await asyncio.sleep(0.1)
+            except Exception as e:
+                failed += 1
+                logger.warning(f"Could not send broadcast to {user_id}: {e}")
+        
+        return {"sent": sent, "failed": failed}
+    except Exception as e:
+        logger.exception("Error broadcasting: %s", e)
+        return {"sent": 0, "failed": 0}
 
 # ============ Referral System ============
 
@@ -659,7 +744,6 @@ async def update_payment_screenshot(payment_id: str, file_id: str):
         return False
 
 async def check_telegram_daily_limit(user_id: int) -> bool:
-    """Check if user has exceeded daily telegram search limit (1 per day)"""
     try:
         today = datetime.now(timezone.utc).date()
         today_start = datetime.combine(today, datetime.min.time()).replace(tzinfo=timezone.utc)
@@ -677,7 +761,6 @@ async def check_telegram_daily_limit(user_id: int) -> bool:
         return False
 
 async def get_telegram_search_reset_time(user_id: int) -> str:
-    """Get when the user can search telegram again"""
     try:
         tomorrow = datetime.now(timezone.utc).date() + timedelta(days=1)
         tomorrow_start = datetime.combine(tomorrow, datetime.min.time()).replace(tzinfo=timezone.utc)
@@ -696,21 +779,9 @@ def is_processing_message(text: str) -> bool:
     
     text_lower = text.lower()
     processing_keywords = [
-        'processing',
-        'please wait',
-        'fetching',
-        'loading',
-        'searching',
-        'retrieving',
-        'hold on',
-        'wait a moment',
-        'in progress',
-        'gathering data',
-        'working on it',
-        '⏳',
-        '🔍',
-        'searching for',
-        'processing your request'
+        'processing', 'please wait', 'fetching', 'loading', 'searching',
+        'retrieving', 'hold on', 'wait a moment', 'in progress', 'gathering data',
+        'working on it', '⏳', '🔍', 'searching for', 'processing your request'
     ]
     
     if len(text.strip()) < 30:
@@ -731,36 +802,13 @@ def is_no_info_message(text: str) -> bool:
     
     text_lower = text.lower()
     no_info_keywords = [
-        'no info',
-        'no information',
-        'not found',
-        'no data',
-        'no result',
-        'no record',
-        'invalid',
-        'doesn\'t exist',
-        'does not exist',
-        'not available',
-        'no details',
-        'unable to find',
-        'could not find',
-        'couldn\'t find',
-        'no match',
-        'not exist',
-        'no information found',
-        'no result found',
-        'no records found',
-        'to reduce spam',
-        'must have joined',
-        'must join',
-        'join all channels',
-        'join our channel',
-        'verify your account',
-        'admin to verify',
-        'need to join',
-        'required to join',
-        'subscription required',
-        'access denied'
+        'no info', 'no information', 'not found', 'no data', 'no result', 'no record',
+        'invalid', 'doesn\'t exist', 'does not exist', 'not available', 'no details',
+        'unable to find', 'could not find', 'couldn\'t find', 'no match', 'not exist',
+        'no information found', 'no result found', 'no records found', 'to reduce spam',
+        'must have joined', 'must join', 'join all channels', 'join our channel',
+        'verify your account', 'admin to verify', 'need to join', 'required to join',
+        'subscription required', 'access denied'
     ]
     
     return any(keyword in text_lower for keyword in no_info_keywords)
@@ -778,12 +826,29 @@ def is_valid_result(text: str, search_type: str) -> bool:
     if len(text.strip()) < 30:
         return False
     
+    # Family search - check for family member patterns
+    if search_type == 'family':
+        lines = text.strip().split('\n')
+        family_patterns = ['father', 'mother', 'son', 'daughter', 'brother', 'sister', 'wife', 'husband', 'self', '(m)', '(f)', '(male)', '(female)']
+        
+        member_count = 0
+        for line in lines:
+            line_lower = line.lower()
+            if any(pattern in line_lower for pattern in family_patterns):
+                member_count += 1
+        
+        if member_count >= 2:
+            logger.info(f"✅ Family search: Found {member_count} family members")
+            return True
+        
+        if any(line.strip().startswith(('•', '-', '*')) for line in lines):
+            logger.info(f"✅ Family search: Found formatted family list")
+            return True
+    
     data_indicators = [
-        'name', 'mobile', 'address', 'email', 'father',
-        'owner', 'vehicle', 'registration', 'chassis',
-        'model', 'manufacturer', 'policy', 'insurance',
-        'aadhar', 'upi', 'telegram', 'instagram', 'gst',
-        'status', 'found', 'count', 'records', 'data'
+        'name', 'mobile', 'address', 'email', 'father', 'owner', 'vehicle', 'registration',
+        'chassis', 'model', 'manufacturer', 'policy', 'insurance', 'aadhar', 'upi',
+        'telegram', 'instagram', 'gst', 'status', 'found', 'count', 'records', 'data'
     ]
     
     text_lower = text.lower()
@@ -801,7 +866,6 @@ def is_valid_result(text: str, search_type: str) -> bool:
 # ============ Text Cleaning ============
 
 def filter_links_and_usernames(text: str):
-    """Remove links, usernames, and promotional content from text"""
     if not text:
         return text
 
@@ -821,22 +885,9 @@ def filter_links_and_usernames(text: str):
         cleaned = re.sub(p, '', cleaned, flags=re.IGNORECASE)
 
     promotional = [
-        'use these commands',
-        'join our',
-        'visit our',
-        'contact us',
-        'follow us',
-        'subscribe',
-        'click here',
-        'check out',
-        'telegram channel',
-        'telegram group',
-        'powered by',
-        'developed by',
-        'design',
-        'admin',
-        'creator',
-        '@'
+        'use these commands', 'join our', 'visit our', 'contact us', 'follow us',
+        'subscribe', 'click here', 'check out', 'telegram channel', 'telegram group',
+        'powered by', 'developed by', 'design', 'admin', 'creator'
     ]
 
     lines = cleaned.splitlines()
@@ -857,30 +908,21 @@ def filter_links_and_usernames(text: str):
     return cleaned
 
 def clean_file_content(text: str) -> str:
-    """Deep clean file content - remove all links, usernames, promotional content"""
     if not text:
         return text
     
-    # Remove all URLs and telegram links
     text = re.sub(r'https?://\S+', '', text)
     text = re.sub(r'www\.\S+', '', text)
     text = re.sub(r't\.me/\S+', '', text)
     text = re.sub(r'tg://\S+', '', text)
     text = re.sub(r'telegram\.me/\S+', '', text)
-    
-    # Remove all @ mentions and usernames
     text = re.sub(r'@\w+', '', text)
-    
-    # Remove common promotional patterns
     text = re.sub(r'(?i)(powered by|developed by|designed by|created by|made by).*', '', text)
     text = re.sub(r'(?i)(follow|subscribe|join|visit|contact).*', '', text)
     text = re.sub(r'(?i)(admin|creator|owner).*', '', text)
     text = re.sub(r'(?i)(for more info|click|tap|get).*', '', text)
-    
-    # Remove emoji and special characters that are typically promotional
     text = re.sub(r'[⚡©™®].*', '', text)
     
-    # Clean up whitespace
     lines = text.split('\n')
     cleaned_lines = []
     for line in lines:
@@ -895,7 +937,6 @@ def clean_file_content(text: str) -> str:
     return text.strip()
 
 def extract_family_members(text: str) -> str:
-    """Extract only family member lines from family info text"""
     if not text:
         return text
     
@@ -905,22 +946,29 @@ def extract_family_members(text: str) -> str:
     for line in lines:
         stripped = line.strip()
         
-        if not stripped or stripped.startswith('=') or stripped.startswith('--'):
+        if not stripped:
             continue
         
         header_keywords = [
             'family report', 'head:', 'rc no:', 'designed', 'powered by',
-            'developed by', 'telegram', '©', 'copyright'
+            'developed by', 'telegram', '©', 'copyright', 'report', 'generated',
+            'tar', 'mobile info'
         ]
         
         if any(keyword in stripped.lower() for keyword in header_keywords):
             continue
         
-        if stripped.startswith('•') or stripped.startswith('-') or stripped.startswith('*'):
+        family_indicators = ['father', 'mother', 'son', 'daughter', 'brother', 'sister', 'wife', 'husband', 'self', 'not available']
+        
+        if stripped.startswith(('•', '-', '*')):
+            family_members.append(stripped)
+        elif any(indicator in stripped.lower() for indicator in family_indicators):
             family_members.append(stripped)
     
     if family_members:
-        return '\n'.join(family_members)
+        result = '\n'.join(family_members)
+        logger.info(f"👨‍👩‍👧 Extracted {len(family_members)} family members")
+        return result
     
     return text
 
@@ -1118,6 +1166,10 @@ def format_vehicle_api_response(data, vehicle_no: str):
         logger.exception("Vehicle formatter error")
         return f"🚗 Vehicle Number: {vehicle_no}\n\nFormatting failed."
 
+def add_footer(result: str) -> str:
+    """Add bot footer to results"""
+    return f"{result}\n\n{'─' * 40}\n{BOT_FOOTER}"
+
 # ============ Bot State ============
 
 user_states = {}
@@ -1134,7 +1186,6 @@ else:
     user_client = bot_client
 
 async def check_channel_membership(user_id: int):
-    """Check if user is a member of the mandatory channel"""
     try:
         channel = await bot_client.get_entity(MANDATORY_CHANNEL)
         
@@ -1160,8 +1211,6 @@ async def check_channel_membership(user_id: int):
 # ============ Interactive Bot Search Functions ============
 
 async def perform_interactive_telegram_search(query: str, user_id: int):
-    """Perform interactive telegram search with button selection"""
-    # Check daily limit
     if await check_telegram_daily_limit(user_id):
         reset_time = await get_telegram_search_reset_time(user_id)
         return {
@@ -1236,7 +1285,6 @@ async def perform_interactive_telegram_search(query: str, user_id: int):
         return {"success": False, "error": str(e)}
 
 async def perform_interactive_movie_search(query: str, user_id: int):
-    """Perform interactive movie search with file selection"""
     bot_entity = MOVIE_BOT.get('entity')
     if not bot_entity:
         return {"success": False, "error": "Movie bot not configured"}
@@ -1372,7 +1420,6 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                 logger.info(f"📩 Received response from {dest_config['name']}: {result_text[:100] if isinstance(result_text, str) else 'FILE'}...")
                 
                 if isinstance(result_text, str):
-                    # Double check: don't accept processing messages
                     if is_processing_message(result_text):
                         logger.warning(f"⚠️ Got processing message from {dest_config['name']}, treating as no result")
                         pending_searches.pop(search_id, None)
@@ -1391,7 +1438,6 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                                     "error": "No result found for this input. Please try another."
                                 }
                     
-                    # Check for no-info
                     if is_no_info_message(result_text):
                         logger.warning(f"⚠️ No info found in {dest_config['name']}")
                         pending_searches.pop(search_id, None)
@@ -1412,7 +1458,7 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                     logger.info(f"🔍 Validating result from {dest_config['name']}")
                     
                     if not is_valid_result(result_text, search_type):
-                        logger.warning(f"⚠️ Invalid result format from {dest_config['name']}")
+                        logger.warning(f"⚠️ Invalid result format from {dest_config['name']}: {result_text[:100]}")
                         pending_searches.pop(search_id, None)
                         
                         if idx < len(destinations) - 1:
@@ -1429,6 +1475,7 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                                 }
                     
                     cleaned = filter_links_and_usernames(result_text)
+                    final_result = add_footer(cleaned)
                     
                     if user_id:
                         await log_search(user_id, search_type, query, cleaned)
@@ -1438,7 +1485,7 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                     
                     return {
                         "success": True, 
-                        "result": cleaned, 
+                        "result": final_result, 
                         "search_type": search_type, 
                         "source": dest_config['name'],
                         "group_index": idx
@@ -1475,7 +1522,7 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
                     continue
                 
         except Exception as e:
-            logger.exception(f"Error in {dest_config['name']}: %s", e)
+                        logger.exception(f"Error in {dest_config['name']}: %s", e)
             if idx == len(destinations) - 1:
                 return {"success": False, "error": "All groups failed. Please try again."}
             continue
@@ -1484,18 +1531,17 @@ async def perform_search(search_type: str, query: str, user_id: int = None):
         "success": False, 
         "error": "No result found for this input. Please try another."
     }
-                        
-                        
-                    
+
 async def try_api_fallback(search_type: str, query: str, user_id: int = None):
     if search_type in ['phone', 'telegram']:
         api_result = await fetch_phone_api(query)
         if api_result:
+            final_result = add_footer(api_result)
             if user_id:
                 await log_search(user_id, search_type, query, api_result)
             return {
                 "success": True, 
-                "result": api_result, 
+                "result": final_result, 
                 "search_type": search_type, 
                 "source": "Phone API (Backup)"
             }
@@ -1503,11 +1549,12 @@ async def try_api_fallback(search_type: str, query: str, user_id: int = None):
     elif search_type in ['vehicle', 'vehicle_detail']:
         api_result = await fetch_vehicle_api(query)
         if api_result:
+            final_result = add_footer(api_result)
             if user_id:
                 await log_search(user_id, search_type, query, api_result)
             return {
                 "success": True, 
-                "result": api_result, 
+                "result": final_result, 
                 "search_type": search_type, 
                 "source": "Vehicle API (Backup)"
             }
@@ -1515,8 +1562,6 @@ async def try_api_fallback(search_type: str, query: str, user_id: int = None):
     return {"success": False, "error": "All groups failed and no API backup available"}
 
 async def perform_telegram_bot_search(query: str, user_id: int = None):
-    """Perform telegram to phone search"""
-    
     if user_id and await check_telegram_daily_limit(user_id):
         reset_time = await get_telegram_search_reset_time(user_id)
         return {
@@ -1532,9 +1577,9 @@ async def perform_telegram_bot_search(query: str, user_id: int = None):
     try:
         command_prefix = SEARCH_COMMANDS['telegram']['commands'].get(0, '/tg')
         command = f"{command_prefix} {query}"
-        base_timeout = TELEGRAM_BOT.get('timeout', G_TIMEOUT)
+        base_timeout = TELEGRAM_BOT.get('timeout', GROUP_TIMEOUT)
         
-        forwrded = await user_client.send_message(bot_entity, command)
+        forwarded = await user_client.send_message(bot_entity, command)
         logger.info(f"📤 Sent to Telegram Bot: {command}")
         
         future = asyncio.get_running_loop().create_future()
@@ -1548,7 +1593,7 @@ async def perform_telegram_bot_search(query: str, user_id: int = None):
             "timestamp": time.time(),
             "message_id": forwarded.id,
             "chat_entity": bot_entity
-                        }
+        }
         
         try:
             result_text = await asyncio.wait_for(future, timeout=base_timeout)
@@ -1574,6 +1619,7 @@ async def perform_telegram_bot_search(query: str, user_id: int = None):
                 return await try_api_fallback('telegram', query, user_id)
             
             cleaned = filter_links_and_usernames(result_text)
+            final_result = add_footer(cleaned)
             
             if user_id:
                 await log_search(user_id, "telegram", query, cleaned)
@@ -1582,7 +1628,7 @@ async def perform_telegram_bot_search(query: str, user_id: int = None):
             
             return {
                 "success": True, 
-                "result": cleaned, 
+                "result": final_result, 
                 "search_type": "telegram", 
                 "source": "Telegram Bot"
             }
@@ -1597,8 +1643,6 @@ async def perform_telegram_bot_search(query: str, user_id: int = None):
         return {"success": False, "error": str(e)}
 
 async def perform_telegram_username_search(query: str, user_id: int = None):
-    """Perform telegram username search"""
-    
     if user_id and await check_telegram_daily_limit(user_id):
         reset_time = await get_telegram_search_reset_time(user_id)
         return {
@@ -1675,6 +1719,7 @@ async def perform_telegram_username_search(query: str, user_id: int = None):
                 return {"success": False, "error": "No information found for this username"}
             
             cleaned = filter_links_and_usernames(result_text)
+            final_result = add_footer(cleaned)
             
             if user_id:
                 await log_search(user_id, "telegram_username", query, cleaned)
@@ -1683,7 +1728,7 @@ async def perform_telegram_username_search(query: str, user_id: int = None):
             
             return {
                 "success": True, 
-                "result": cleaned, 
+                "result": final_result, 
                 "search_type": "telegram_username", 
                 "source": "Telegram Username Group"
             }
@@ -1772,6 +1817,15 @@ def get_payment_approval_buttons(payment_id: str, user_id: int):
         ]
     ]
 
+def get_admin_menu():
+    return [
+        [Button.inline("📢 Broadcast", "admin_broadcast")],
+        [Button.inline("📊 Statistics", "admin_stats")],
+        [Button.inline("👨‍💼 Make Admin", "admin_make_admin")],
+        [Button.inline("🔐 Manage Channel", "admin_channel")],
+        [Button.inline("🔙 Back to Main Menu", "back_main")]
+    ]
+
 # ============ Bot Event Handlers ============
 
 @bot_client.on(events.NewMessage(pattern=r'/start( (.+))?'))
@@ -1796,12 +1850,13 @@ async def start_handler(event):
     
     user_doc = await get_user(user_id)
     
-    if user_id == ADMIN_USER_ID:
+    admin_check = await is_admin(user_id)
+    if admin_check:
         await event.respond(
             f"👋 Welcome Admin!\n\n"
             f"You have full access to all features.\n"
             f"Use the menu below:",
-            buttons=get_main_menu()
+            buttons=get_admin_menu()
         )
         return
     
@@ -1835,6 +1890,49 @@ async def start_handler(event):
         buttons=get_main_menu()
     )
 
+@bot_client.on(events.CallbackQuery(pattern='^admin_'))
+async def admin_callback_handler(event):
+    user_id = event.sender_id
+    admin_check = await is_admin(user_id)
+    
+    if not admin_check:
+        await event.answer("❌ Unauthorized", alert=True)
+        return
+    
+    data = event.data.decode()
+    
+    if data == 'admin_stats':
+        stats = await get_admin_stats()
+        message = (
+            f"📊 Bot Statistics\n\n"
+            f"👥 Total Users: {stats['total_users']}\n"
+            f"🟢 Active Users: {stats['active_users']}\n"
+            f"🔍 Total Searches: {stats['total_searches']}\n\n"
+            f"📢 Mandatory Channel: @{MANDATORY_CHANNEL.replace('@', '')}"
+        )
+        await event.edit(message, buttons=[[Button.inline("🔙 Back", "admin_menu")]])
+    
+    elif data == 'admin_broadcast':
+        user_states[user_id] = {"action": "awaiting_broadcast"}
+        await event.edit(
+            "📢 Broadcast Message\n\n"
+            "Send the message you want to broadcast to all users:"
+        )
+    
+    elif data == 'admin_make_admin':
+        user_states[user_id] = {"action": "awaiting_admin_user_id"}
+        await event.edit(
+            "👨‍💼 Make Admin\n\n"
+            "Send the User ID to make them an admin:"
+        )
+    
+    elif data == 'admin_channel':
+        await event.edit(
+            f"🔐 Channel Management\n\n"
+            f"Current Mandatory Channel: @{MANDATORY_CHANNEL.replace('@', '')}\n\n"
+            f"To change the channel, update the MANDATORY_CHANNEL environment variable and restart the bot.",
+            buttons=[[Button.inline("🔙 Back", "admin_menu")]]
+        )
 
 @bot_client.on(events.CallbackQuery(pattern='^referral_menu'))
 async def referral_menu_callback(event):
@@ -1948,23 +2046,8 @@ async def api_delete_callback(event):
     else:
         await event.answer("❌ Failed to delete API key", alert=True)
 
-async def safe_edit_message(event, text, buttons=None):
-    """Safely edit a message"""
-    try:
-        if buttons:
-            await event.edit(text, buttons=buttons)
-        else:
-            await event.edit(text)
-    except Exception as e:
-        error_name = type(e).__name__
-        if 'MessageNotModified' in error_name or 'not modified' in str(e).lower():
-            logger.info(f"ℹ️ Message not modified (content unchanged)")
-        else:
-            logger.error(f"Error editing message: {e}")
-
 @bot_client.on(events.CallbackQuery(pattern=r'^relay_'))
 async def relay_button_callback(event):
-    """Handle relay button clicks for telegram and movie bots"""
     user_id = event.sender_id
     
     if user_id not in interactive_sessions:
@@ -1980,9 +2063,7 @@ async def relay_button_callback(event):
         callback_data = event.data.decode()
         button_clicked = False
         
-        # Parse relay data
         if callback_data.startswith('relay_tg_'):
-            # Telegram button
             parts = callback_data.split('_')
             if len(parts) >= 4:
                 row_idx = int(parts[2])
@@ -1996,7 +2077,6 @@ async def relay_button_callback(event):
                     button_clicked = True
         
         elif callback_data.startswith('relay_movie_'):
-            # Movie button
             parts = callback_data.split('_')
             if len(parts) >= 4:
                 row_idx = int(parts[2])
@@ -2013,58 +2093,64 @@ async def relay_button_callback(event):
             await event.answer("❌ Button not found", alert=True)
             return
         
-        # Wait for response
         logger.info(f"⏳ Waiting for response after button click...")
+        await asyncio.sleep(2)
         
-        for attempt in range(4):
+        for attempt in range(5):
             await asyncio.sleep(2 if attempt == 0 else 3)
             
-            logger.info(f"🔍 Checking for response (attempt {attempt + 1}/4)...")
+            logger.info(f"🔍 Checking for response (attempt {attempt + 1}/5)...")
             
             try:
-                # Check if original message was edited
-                updated_msg = await user_client.get_messages(dest_entity, ids=dest_message.id)
-                
-                if updated_msg and updated_msg.edit_date:
-                    # Check if buttons disappeared (final result)
-                    if not updated_msg.buttons and dest_message.buttons:
-                        logger.info(f"✅ Buttons removed - final result found")
-                        interactive_sessions.pop(user_id, None)
-                        user_states.pop(user_id, None)
-                        
-                        if updated_msg.file:
-                            await event.answer("✅ File received!")
-                            if updated_msg.text:
-                                await bot_client.send_message(user_id, f"✅ Result:\n\n{updated_msg.text}")
-                            await bot_client.forward_messages(user_id, updated_msg)
-                        elif updated_msg.text and len(updated_msg.text.strip()) >= 10:
-                            result = filter_links_and_usernames(updated_msg.text)
-                            await safe_edit_message(event, f"✅ Result:\n\n{result}")
-                        
-                        # Deduct credit
-                        if user_id != ADMIN_USER_ID:
-                            user_doc = await get_user(user_id)
-                            if user_doc and user_doc.get('plan') != 'unlimited':
-                                await decrement_search(user_id)
-                        return
-            
-            except Exception as e:
-                logger.warning(f"Could not check edited message: {e}")
-            
-            # Check for new messages
-            try:
-                messages = await user_client.get_messages(dest_entity, limit=30)
+                # Get fresh message list
+                messages = await user_client.get_messages(dest_entity, limit=50)
                 
                 for msg in messages:
-                    if msg.id == dest_message.id:
-                        continue
-                    
-                    if msg.date and msg.date.timestamp() > (time.time() - 20):
-                        logger.info(f"📨 Found recent message (ID: {msg.id})")
+                    if msg.date and msg.date.timestamp() > (time.time() - 30):
+                        # Skip original message
+                        if msg.id == dest_message.id:
+                            continue
                         
-                        # Has pagination buttons
-                        if msg.buttons:
-                            logger.info(f"🔘 Found pagination buttons")
+                        # Check for files - highest priority
+                        if msg.file:
+                            logger.info(f"📁 Found file message (ID: {msg.id})")
+                            interactive_sessions.pop(user_id, None)
+                            user_states.pop(user_id, None)
+                            
+                            await event.answer("✅ File received!")
+                            if msg.text:
+                                await bot_client.send_message(user_id, f"✅ Result:\n\n{msg.text}")
+                            
+                            await bot_client.forward_messages(user_id, msg)
+                            
+                            if user_id != ADMIN_USER_ID:
+                                user_doc = await get_user(user_id)
+                                if user_doc and user_doc.get('plan') != 'unlimited':
+                                    await decrement_search(user_id)
+                            return
+                        
+                        # Check for text results
+                        if msg.text and len(msg.text.strip()) >= 30:
+                            if not is_processing_message(msg.text) and not is_no_info_message(msg.text):
+                                logger.info(f"📨 Found result message (ID: {msg.id})")
+                                interactive_sessions.pop(user_id, None)
+                                user_states.pop(user_id, None)
+                                
+                                result = filter_links_and_usernames(msg.text)
+                                final_result = add_footer(result)
+                                
+                                await event.answer("✅ Result received!")
+                                await bot_client.send_message(user_id, f"✅ Result:\n\n{final_result}")
+                                
+                                if user_id != ADMIN_USER_ID:
+                                    user_doc = await get_user(user_id)
+                                    if user_doc and user_doc.get('plan') != 'unlimited':
+                                        await decrement_search(user_id)
+                                return
+                        
+                        # Check for pagination buttons
+                        if msg.buttons and msg.id != dest_message.id:
+                            logger.info(f"🔘 Found pagination buttons (ID: {msg.id})")
                             session['dest_message'] = msg
                             
                             user_buttons = []
@@ -2080,37 +2166,15 @@ async def relay_button_callback(event):
                                 if button_row:
                                     user_buttons.append(button_row)
                             
-                            await safe_edit_message(
-                                event,
-                                msg.text or msg.raw_text or "Select an option:",
-                                buttons=user_buttons
-                            )
-                            return
-                        
-                        # Has file or text - final result
-                        if msg.file or (msg.text and len(msg.text.strip()) >= 10):
-                            logger.info(f"✅ Found final result")
-                            interactive_sessions.pop(user_id, None)
-                            user_states.pop(user_id, None)
-                            
-                            if msg.file:
-                                await event.answer("✅ File received!")
-                                if msg.text:
-                                    await bot_client.send_message(user_id, f"✅ Result:\n\n{msg.text}")
-                                await bot_client.forward_messages(user_id, msg)
-                            elif msg.text:
-                                result = filter_links_and_usernames(msg.text)
-                                await safe_edit_message(event, f"✅ Result:\n\n{result}")
-                            
-                            # Deduct credit
-                            if user_id != ADMIN_USER_ID:
-                                user_doc = await get_user(user_id)
-                                if user_doc and user_doc.get('plan') != 'unlimited':
-                                    await decrement_search(user_id)
+                            message_text = msg.text or msg.raw_text or "Select an option:"
+                            try:
+                                await event.edit(message_text, buttons=user_buttons)
+                            except:
+                                await bot_client.send_message(user_id, message_text, buttons=user_buttons)
                             return
             
             except Exception as e:
-                logger.warning(f"Could not check new messages: {e}")
+                logger.warning(f"Error checking messages: {e}")
         
         logger.warning(f"❌ No response found after retries")
         await event.answer("❌ No response received. Please try again.", alert=True)
@@ -2127,12 +2191,13 @@ async def back_main_callback(event):
     user_id = user.id
     user_doc = await get_user(user_id)
     
-    if user_id == ADMIN_USER_ID:
+    admin_check = await is_admin(user_id)
+    if admin_check:
         await event.edit(
             f"👋 Welcome Admin!\n\n"
             f"You have full access to all features.\n"
             f"Use the menu below:",
-            buttons=get_main_menu()
+            buttons=get_admin_menu()
         )
         return
     
@@ -2149,7 +2214,8 @@ async def search_callback(event):
     user_id = event.sender_id
     search_type = event.data.decode().split('_')[1]
     
-    if user_id == ADMIN_USER_ID:
+    admin_check = await is_admin(user_id)
+    if admin_check:
         user_states[user_id] = {"action": "awaiting_input", "type": search_type}
         try:
             await event.edit(
@@ -2265,8 +2331,10 @@ async def buy_plan_callback(event):
 @bot_client.on(events.CallbackQuery(pattern=r'^approve_(.+)_(.+)'))
 async def approve_payment_callback(event):
     if event.sender_id != ADMIN_USER_ID:
-        await event.answer("❌ Unauthorized", alert=True)
-        return
+        admin_check = await is_admin(event.sender_id)
+        if not admin_check:
+            await event.answer("❌ Unauthorized", alert=True)
+            return
     
     data_parts = event.data.decode().split('_')
     payment_id = data_parts[1]
@@ -2318,8 +2386,10 @@ async def approve_payment_callback(event):
 @bot_client.on(events.CallbackQuery(pattern=r'^reject_(.+)_(.+)'))
 async def reject_payment_callback(event):
     if event.sender_id != ADMIN_USER_ID:
-        await event.answer("❌ Unauthorized", alert=True)
-        return
+        admin_check = await is_admin(event.sender_id)
+        if not admin_check:
+            await event.answer("❌ Unauthorized", alert=True)
+            return
     
     data_parts = event.data.decode().split('_')
     payment_id = data_parts[1]
@@ -2434,6 +2504,49 @@ async def message_handler(event):
         user_states.pop(user_id, None)
         return
     
+    if state.get('action') == 'awaiting_broadcast':
+        admin_check = await is_admin(user_id)
+        if not admin_check:
+            await event.respond("❌ Unauthorized")
+            return
+        
+        message = event.text
+        status_msg = await event.respond("📢 Broadcasting message to all users...")
+        
+        result = await broadcast_message(message, exclude_user_id=user_id)
+        
+        await status_msg.edit(
+            f"✅ Broadcast Complete\n\n"
+            f"✅ Sent to: {result['sent']} users\n"
+            f"❌ Failed: {result['failed']} users"
+        )
+        
+        user_states.pop(user_id, None)
+        return
+    
+    if state.get('action') == 'awaiting_admin_user_id':
+        admin_check = await is_admin(user_id)
+        if not admin_check:
+            await event.respond("❌ Unauthorized")
+            return
+        
+        try:
+            target_user_id = int(event.text.strip())
+            success = await add_admin(target_user_id)
+            
+            if success:
+                await event.respond(
+                    f"✅ User {target_user_id} is now an admin!",
+                    buttons=[[Button.inline("🔙 Back", "admin_menu")]]
+                )
+            else:
+                await event.respond("❌ Failed to add admin")
+        except ValueError:
+            await event.respond("❌ Please send a valid User ID (number only)")
+        
+        user_states.pop(user_id, None)
+        return
+    
     if state.get('action') == 'awaiting_payment':
         if not event.photo:
             await event.respond("❌ Please send a screenshot image.")
@@ -2500,15 +2613,17 @@ async def message_handler(event):
                 except Exception as e:
                     logger.error(f"Error forwarding file: {e}")
             else:
-                await event.respond(f"✅ Search Result:\n\n{result['result']}")
+                await event.respond(f"{result['result']}")
 
             if user_id != ADMIN_USER_ID:
-                user_doc = await get_user(user_id)
-                if user_doc.get('plan') != 'unlimited':
-                    await decrement_search(user_id)
+                admin_check = await is_admin(user_id)
+                if not admin_check:
+                    user_doc = await get_user(user_id)
+                    if user_doc.get('plan') != 'unlimited':
+                        await decrement_search(user_id)
 
-                if is_first_search:
-                    await reward_referrer(user_id)
+                    if is_first_search:
+                        await reward_referrer(user_id)
         elif result.get('needs_interaction'):
             await event.respond(
                 result['message'],
@@ -2522,13 +2637,11 @@ async def message_handler(event):
         user_states.pop(user_id, None)
 
 # ============ Message Handler for All Groups and Bots ============
-# ============ Message Handler for All Groups and Bots ============
 
 @user_client.on(events.NewMessage())
 async def handle_all_replies(event):
     message = event.message
     
-    # Get the search info to determine what type of messages to accept
     now = time.time()
     matched_search = None
     matched_key = None
@@ -2544,7 +2657,6 @@ async def handle_all_replies(event):
         
         # For telegram and movie searches, accept ANY new message (not just replies)
         if search_type in ['telegram', 'movies']:
-            # Don't require reply_to for these types
             matched_search = search_info
             matched_key = search_id
             logger.info(f"🎯 New message match for {search_type} search_id: {search_id}")
@@ -2558,7 +2670,6 @@ async def handle_all_replies(event):
             if now - search_info.get("timestamp", now) > REPLY_TIMEOUT:
                 continue
             
-            # For all other searches, ONLY accept direct replies
             if message.reply_to.reply_to_msg_id == search_info.get('message_id'):
                 matched_search = search_info
                 matched_key = search_id
@@ -2566,7 +2677,6 @@ async def handle_all_replies(event):
                 logger.info(f"🎯 Direct reply match for search_id: {search_id}")
                 break
     
-    # If still no match found, exit
     if not matched_search:
         logger.debug(f"ℹ️ No matching search found for this message")
         return
@@ -2580,7 +2690,7 @@ async def handle_all_replies(event):
     
     await asyncio.sleep(FETCH_WAIT_TIME)
     
-    # PRIORITY 1: Handle file messages FIRST (skip text checks for files)
+    # PRIORITY 1: Handle file messages FIRST
     if has_file:
         try:
             if file_name and (file_name.lower().endswith('.txt') or message.file.mime_type == 'text/plain'):
@@ -2596,12 +2706,10 @@ async def handle_all_replies(event):
                     except:
                         file_text = file_bytes.decode('utf-8', errors='ignore')
                 
-                # Clean the file content - remove all links and usernames
                 cleaned_file_text = clean_file_content(file_text)
                 
                 logger.info(f"📋 File content length: {len(cleaned_file_text)} chars")
                 
-                # For family searches, also extract family members
                 if matched_search['search_type'] == 'family':
                     family_members = extract_family_members(cleaned_file_text)
                     if family_members:
@@ -2632,9 +2740,8 @@ async def handle_all_replies(event):
             logger.error(f"❌ Error processing file: {e}", exc_info=True)
             return
     
-    # PRIORITY 2: Handle text messages ONLY (no files)
+    # PRIORITY 2: Handle text messages ONLY
     if text and not has_file:
-        # Check for processing/spam messages - only for text-only messages
         if is_processing_message(text):
             logger.info(f"⏳ Processing text message detected, ignoring and waiting for real result...")
             return
@@ -2653,7 +2760,6 @@ async def handle_all_replies(event):
         except Exception as e:
             logger.error(f"Error getting latest message: {e}")
         
-        # Final check: skip if still processing/no-info
         if is_processing_message(text):
             logger.info(f"🚫 Final check: Still processing message, skipping")
             return
@@ -2663,7 +2769,6 @@ async def handle_all_replies(event):
             return
         
         if not matched_search['future'].done():
-            # Clean the text before delivering
             cleaned_text = filter_links_and_usernames(text)
             logger.info(f"✅ Delivering cleaned text result ({len(cleaned_text)} chars)")
             matched_search['future'].set_result(cleaned_text)
@@ -2677,9 +2782,6 @@ async def handle_all_replies(event):
             except Exception as e:
                 logger.warning(f"Could not set result: {e}")
             pending_searches.pop(matched_key, None)
-                    
-                    
-                
 
 # ============ Cleanup Task ============
 
@@ -2931,6 +3033,10 @@ async def start_bot():
 
         init_mongo()
         
+        # Add main admin
+        await add_admin(ADMIN_USER_ID)
+        logger.info(f"✅ Admin {ADMIN_USER_ID} set")
+        
         asyncio.create_task(cleanup_old_searches())
         asyncio.create_task(start_web_server())
 
@@ -2942,6 +3048,7 @@ async def start_bot():
         logger.info(f"🔄 Cascading fallback: Groups → API")
         logger.info(f"📄 TXT file support: All search types")
         logger.info(f"🎯 Interactive buttons: Telegram & Movie bots")
+        logger.info(f"👨‍💼 Admin panel: Broadcast, Stats, Manage Admins")
 
         await asyncio.Event().wait()
 
