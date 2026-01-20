@@ -108,7 +108,7 @@ DESTINATION_GROUPS = [
 FAMILY_GROUP = {
     "name": "Family Info Group",
     "identifier": -1003596998816,  # Private group ID
-    "timeout": 180,
+    "timeout": GROUP_TIMEOUT,
     "entity": None
 }
 
@@ -128,7 +128,7 @@ TELEGRAM_USERNAME_GROUP = {
 
 MOVIE_BOT = {
     "name": "Movie/Series Bot",
-    "identifier": "@iPapkornR1bot",  # Replace with your actual movie bot username
+    "identifier": "@iPopkornbot",  # Replace with your actual movie bot username
     "timeout": 60,  # Movies might take longer to respond
     "entity": None
 }
@@ -156,7 +156,7 @@ SEARCH_COMMANDS = {
         "name": "👨‍👩‍👧‍👦 Family Info",
         "type": "family_group",
         "commands": {
-            0: "/familyinfo"
+            0: "/family"
         }
     },
     "aadhar": {
@@ -2054,6 +2054,25 @@ async def api_delete_callback(event):
     else:
         await event.answer("❌ Failed to delete API key", alert=True)
 
+async def safe_edit_message(event, text, buttons=None):
+    """
+    Safely edit a message, catching MessageNotModifiedError.
+    This error occurs when trying to edit a message with identical content.
+    """
+    try:
+        if buttons:
+            await event.edit(text, buttons=buttons)
+        else:
+            await event.edit(text)
+    except Exception as e:
+        error_name = type(e).__name__
+        if 'MessageNotModified' in error_name or 'not modified' in str(e).lower():
+            # Message content is the same, no need to edit
+            logger.info(f"ℹ️ Message not modified (content unchanged)")
+        else:
+            # Some other error, log and continue
+            logger.error(f"Error editing message: {e}")
+
 @bot_client.on(events.CallbackQuery(pattern=r'^relay_'))
 async def relay_button_callback(event):
     """
@@ -2159,7 +2178,7 @@ async def relay_button_callback(event):
                             await bot_client.forward_messages(user_id, updated_msg)
                         elif updated_msg.text and len(updated_msg.text) > 20:
                             logger.info(f"📝 Sending text result to user")
-                            await event.edit(f"✅ Result:\n\n{updated_msg.text}")
+                            await safe_edit_message(event, f"✅ Result:\n\n{updated_msg.text}")
                         
                         # Deduct credit
                         if user_id != ADMIN_USER_ID:
@@ -2186,7 +2205,8 @@ async def relay_button_callback(event):
                                 if button_row:
                                     user_buttons.append(button_row)
                             
-                            await event.edit(
+                            await safe_edit_message(
+                                event,
                                 updated_msg.text or updated_msg.raw_text or "Select an option:",
                                 buttons=user_buttons
                             )
@@ -2225,7 +2245,8 @@ async def relay_button_callback(event):
                                 if button_row:
                                     user_buttons.append(button_row)
                             
-                            await event.edit(
+                            await safe_edit_message(
+                                event,
                                 msg.text or msg.raw_text or "Select an option:",
                                 buttons=user_buttons
                             )
@@ -2247,7 +2268,7 @@ async def relay_button_callback(event):
                                 await bot_client.forward_messages(user_id, msg)
                             elif msg.text:
                                 logger.info(f"📝 Sending text result to user")
-                                await event.edit(f"✅ Result:\n\n{msg.text}")
+                                await safe_edit_message(event, f"✅ Result:\n\n{msg.text}")
                             
                             # Deduct credit
                             if user_id != ADMIN_USER_ID:
@@ -2772,8 +2793,35 @@ async def handle_all_replies(event):
             query = search_info['query'].strip()
             search_type = search_info['search_type']
             
-            # For text messages, check content
-            if text:
+            # PRIORITY 1: Check for file messages first (family TXT files)
+            # This must be checked BEFORE text matching because messages can have both file + caption
+            if has_file and search_type == 'family':
+                logger.info(f"📄 Checking file message for family search")
+                # Check if query number is in the caption or message text
+                caption = message.caption or ""
+                full_text = f"{text or ''} {caption}".lower()
+                clean_query = re.sub(r'[^\d]', '', query)
+                
+                # Also check filename
+                file_name = message.file.name or ""
+                full_text_with_filename = f"{full_text} {file_name}".lower()
+                
+                if clean_query and len(clean_query) >= 10:
+                    if clean_query in re.sub(r'[^\d]', '', full_text_with_filename):
+                        matched_search = search_info
+                        matched_key = search_id
+                        logger.info(f"🎯 Family file match for search_id: {search_id} (file: {file_name})")
+                        break
+                # Also match if it's just a recent family search file (no number in caption)
+                elif message.file.mime_type == 'text/plain' or file_name.lower().endswith('.txt'):
+                    # It's a TXT file for a pending family search
+                    matched_search = search_info
+                    matched_key = search_id
+                    logger.info(f"🎯 Family file match by type for search_id: {search_id}")
+                    break
+            
+            # PRIORITY 2: For text messages, check content
+            if text and not matched_search:
                 message_text_lower = text.lower()
                 is_match = False
                 
@@ -2802,20 +2850,6 @@ async def handle_all_replies(event):
                     matched_key = search_id
                     logger.info(f"🎯 Content match for search_id: {search_id}")
                     break
-            
-            # For file messages (family TXT files), match by search type and query
-            elif has_file and search_type == 'family':
-                # Check if query number is in the caption or message
-                caption = message.caption or ""
-                full_text = f"{text or ''} {caption}".lower()
-                clean_query = re.sub(r'[^\d]', '', query)
-                
-                if clean_query and len(clean_query) >= 10:
-                    if clean_query in re.sub(r'[^\d]', '', full_text):
-                        matched_search = search_info
-                        matched_key = search_id
-                        logger.info(f"🎯 Family file match for search_id: {search_id}")
-                        break
     
     if not matched_search:
         return
