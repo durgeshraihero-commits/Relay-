@@ -1,6 +1,6 @@
 """
 Premium Information Bot - Professional Edition
-Smart cascading search, txt/json support, premium UI, robust result handling
+Smart cascading search, txt/json support, premium UI, robust result handling, enhanced file processing
 """
 
 import os
@@ -39,15 +39,17 @@ ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
 MONGODB_URI = os.getenv("MONGODB_URI", "").strip()
 MONGODB_DBNAME = "tg_bot_db"
 
-WEBSITE = "https://relay-wzlz.onrender.com"
+WEBSITE = "https://relay-wzlz.onrender.com" # Ensure this is your actual website URL
 
 BOT_FOOTER = "Powered by darkboxes_bot\nDev: @darkboxesAdmin"
 
-SEARCH_TIMEOUT_PER_GROUP = 25   # seconds per group
-FETCH_WAIT_TIME = 6            # seconds before reading reply
+# Timeouts and delays
+SEARCH_TIMEOUT_PER_GROUP = 20  # seconds per group to wait for a reply
+FETCH_WAIT_TIME = 2            # short delay after receiving a message before processing
 
+# User credits
 REFERRAL_REWARD = 2
-NEW_USER_CREDITS = 2
+NEW_USER_CREDITS = 5
 
 # ================== LOGGING ==================
 
@@ -86,7 +88,7 @@ if not validate_config():
 USE_USER_ACCOUNT = USER_API_ID != 0 and USER_API_HASH and USER_PHONE
 
 # ================== GROUPS CONFIG ==================
-
+# Define groups in order of priority. The bot will try them in this sequence.
 DESTINATION_GROUPS = [
     {"name": "Main Group",      "identifier": -1003596998816, "entity": None, "order": 1},
     {"name": "Backup Group 2",  "identifier": "darkboxesv3",  "entity": None, "order": 2},
@@ -107,6 +109,8 @@ SEARCH_COMMANDS = {
     "insta":   {"name": "📷 Instagram",     "command": "/insta",     "desc": "Search Instagram user"},
     "family":  {"name": "👨‍👩‍👧‍👦 Family Info","command": "/familyinfo","desc": "Get family members info"},
 }
+
+# ================== PLANS CONFIG ==================
 
 PLANS = {
     "plan_5": {
@@ -527,8 +531,20 @@ async def perform_cascading_search(search_type: str, query: str, user_id: int = 
 
                 cleaned = result_text.strip()
 
-                # Accept result if it's not explicitly "no info" and has some length (adjusted to > 15)
-                if cleaned and len(cleaned) > 15 and not is_no_info_message(cleaned):
+                # A result is considered valid if it's not explicitly "no info" and has sufficient content.
+                # For .txt files, we accept even short results as long as they are not "no info".
+                # For direct text replies, we require a bit more length.
+                is_valid_result = False
+                if cleaned and not is_no_info_message(cleaned):
+                    # Heuristic: if it came from a file, it's likely useful if it's not empty/no_info.
+                    # If it's a direct text reply, require more content.
+                    # This assumes 'handle_group_replies' sets result_text correctly for files.
+                    if len(cleaned) > 15: # Require a minimum length for general acceptance
+                        is_valid_result = True
+                    elif len(cleaned) > 5: # Shorter texts might still be valid, especially from files.
+                        is_valid_result = True # Treat short texts from files as potentially valid
+
+                if is_valid_result:
                     await log_search(user_id, search_type, query)
                     formatted = format_result(cleaned, search_type)
                     pending_searches.pop(search_id, None)
@@ -538,12 +554,13 @@ async def perform_cascading_search(search_type: str, query: str, user_id: int = 
                         "source": group_config["name"],
                     }
                 else:
-                    # Discard result if it's "no info" or too short
+                    # Discard result if it's "no info" or too short/empty
                     pending_searches.pop(search_id, None)
                     logger.info(
-                        "⚠️ Result from %s considered not useful (len=%d), trying next group",
+                        "⚠️ Result from %s considered not useful (len=%d, is_no_info=%s), trying next group",
                         group_config["name"],
                         len(cleaned),
+                        is_no_info_message(cleaned),
                     )
                     continue
 
@@ -935,51 +952,50 @@ async def handle_group_replies(event):
     matched_search = None
     matched_key = None
 
-    # Match to pending search
+    # Match to pending search based on reply_to_msg_id
     for search_id, info in list(pending_searches.items()):
         if info["future"].done():
             continue
-        if now - info.get("timestamp", now) > SEARCH_TIMEOUT_PER_GROUP * 5:
-            continue
-
+        # Check if the message is a reply to our sent message
         if message.reply_to and message.reply_to.reply_to_msg_id == info.get("message_id"):
             matched_search = info
             matched_key = search_id
             break
 
     if not matched_search:
-        return
+        return # Not a reply to any of our pending searches
 
     text = message.text or message.raw_text
     has_file = message.file is not None
 
     if not text and not has_file:
-        return
+        return # Message has no content
 
-    await asyncio.sleep(FETCH_WAIT_TIME)
+    await asyncio.sleep(FETCH_WAIT_TIME) # Small delay to ensure message is fully available
 
-    # processing messages
+    # Handle "processing" or "searching" messages from groups
     if text and not has_file and is_processing_message(text):
         logger.info(
             "⏳ Processing message from group, waiting for real result: %r", text[:60]
         )
-        matched_search["got_processing"] = True
-        return
+        matched_search["got_processing"] = True # Mark that we saw a processing message
+        return # Continue waiting for the actual result
 
-    # no-info messages
+    # Handle "no info" messages
     if text and not has_file and is_no_info_message(text):
         logger.info("❌ No-info message from group")
         if not matched_search["future"].done():
             try:
+                # Set an exception to signal that this group returned no useful info
                 matched_search["future"].set_exception(
                     TimeoutError("No info from this group")
                 )
             except Exception:
-                pass
-        pending_searches.pop(matched_key, None)
+                pass # Future might already be done
+        pending_searches.pop(matched_key, None) # Remove from pending
         return
 
-    # files: txt/json
+    # Handle file results (.txt, .json)
     if has_file:
         file_name = (message.file.name or "").lower()
         mime_type = (message.file.mime_type or "").lower()
@@ -997,27 +1013,26 @@ async def handle_group_replies(event):
                     try:
                         file_text = file_bytes.decode("latin-1")
                     except Exception:
-                        file_text = file_bytes.decode("utf-8", errors="ignore")
+                        file_text = file_bytes.decode("utf-8", errors="ignore") # Fallback
 
                 if is_json_file:
                     try:
                         parsed = json.loads(file_text)
                         file_text = json.dumps(parsed, indent=2, ensure_ascii=False)
                     except Exception:
-                        pass
+                        logger.warning("Could not parse JSON file content, proceeding with raw text.")
+                        pass # Keep raw text if JSON parsing fails
 
                 cleaned = clean_file(file_text)
                 cleaned = filter_links(cleaned)
-                cleaned = re.sub(
-                    r"Designed\s*&\s*Powered.*", "", cleaned, flags=re.IGNORECASE
-                )
-                cleaned = re.sub(
-                    r"Powered by .*", "", cleaned, flags=re.IGNORECASE
-                )
+                # Remove common bot footers/branding from results
+                cleaned = re.sub(r"Designed\s*&\s*Powered.*", "", cleaned, flags=re.IGNORECASE)
+                cleaned = re.sub(r"Powered by .*", "", cleaned, flags=re.IGNORECASE)
                 cleaned = cleaned.strip()
 
-                # Accept file content if it's not explicitly "no info" and has some length (e.g., > 15 chars)
-                if cleaned and len(cleaned) > 15 and not is_no_info_message(cleaned):
+                # Accept file content if it's not explicitly "no info" and has some length.
+                # We are more lenient with file content, accepting shorter texts if they exist.
+                if cleaned and len(cleaned) > 10 and not is_no_info_message(cleaned): # Minimum 10 chars for file content
                     if not matched_search["future"].done():
                         logger.info("✅ Delivering text extracted from file")
                         matched_search["future"].set_result(cleaned)
@@ -1028,10 +1043,11 @@ async def handle_group_replies(event):
             except Exception as e:
                 logger.error("Error processing file result: %s", e)
 
+            # If we reached here, file processing failed or result was too short/empty
             if not matched_search["future"].done():
                 try:
                     matched_search["future"].set_exception(
-                        TimeoutError("Invalid file result")
+                        TimeoutError("Invalid file result or empty content")
                     )
                 except Exception:
                     pass
@@ -1041,22 +1057,21 @@ async def handle_group_replies(event):
         logger.info("📁 Non-text file received; ignoring")
         return
 
-    # plain text
+    # Handle plain text results
     if text and not has_file:
+        # Basic check for minimal length for plain text results
         if len(text.strip()) < 15:
-            logger.info("Ignoring too-short text reply")
+            logger.info("Ignoring too-short text reply from group.")
             return
 
         cleaned_text = filter_links(text)
-        cleaned_text = re.sub(
-            r"Designed\s*&\s*Powered.*", "", cleaned_text, flags=re.IGNORECASE
-        )
-        cleaned_text = re.sub(
-            r"Powered by .*", "", cleaned_text, flags=re.IGNORECASE
-        )
+        # Remove common bot footers/branding from results
+        cleaned_text = re.sub(r"Designed\s*&\s*Powered.*", "", cleaned_text, flags=re.IGNORECASE)
+        cleaned_text = re.sub(r"Powered by .*", "", cleaned_text, flags=re.IGNORECASE)
         cleaned_text = cleaned_text.strip()
+        
         if not cleaned_text:
-            return
+            return # Nothing left after cleaning
 
         if not matched_search["future"].done():
             logger.info("✅ Delivering plain text result from group")
@@ -1066,68 +1081,84 @@ async def handle_group_replies(event):
 # ================== CLEANUP TASK ==================
 
 async def cleanup_pending():
+    """Periodically removes stale pending searches."""
     while True:
-        await asyncio.sleep(30)
+        await asyncio.sleep(60) # Check every minute
         now = time.time()
+        stale_threshold = SEARCH_TIMEOUT_PER_GROUP * 5 # Allow ample time beyond timeout
+        
         for sid in list(pending_searches.keys()):
             info = pending_searches[sid]
-            if now - info.get("timestamp", now) > SEARCH_TIMEOUT_PER_GROUP * 5:
+            if now - info.get("timestamp", now) > stale_threshold:
+                logger.warning(f"Search {sid} timed out and is stale, cleaning up.")
                 if not info["future"].done():
                     try:
-                        info["future"].set_exception(TimeoutError())
+                        info["future"].set_exception(TimeoutError("Stale search"))
                     except Exception:
-                        pass
+                        pass # Future might already be done
                 pending_searches.pop(sid, None)
 
-# ================== WEB SERVER ==================
+# ================== WEB SERVER FOR HEALTH CHECK ==================
 
 async def start_web():
+    """Starts a simple web server for health checks."""
     app = web.Application()
 
     async def health(request):
-        return web.Response(text="OK")
+        # Basic health check endpoint
+        return web.Response(text="OK", content_type="text/plain")
 
     app.router.add_get("/health", health)
-    app.router.add_get("/", lambda r: web.Response(text="Premium Info Bot", content_type="text/plain"))
+    # Optional: root endpoint to indicate bot is running
+    app.router.add_get("/", lambda r: web.Response(text="Premium Info Bot is running.", content_type="text/plain"))
 
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-    logger.info("🌐 Web server on port %s", PORT)
+    try:
+        await site.start()
+        logger.info("🌐 Web server started on port %s", PORT)
+    except OSError as e:
+        logger.error(f"❌ Could not start web server on port {PORT}: {e}")
 
-# ================== MAIN ==================
+# ================== MAIN BOT EXECUTION ==================
 
 async def start_bot():
+    """Initializes and runs the Telegram bot."""
     try:
-        logger.info("🤖 Starting bot...")
+        logger.info("🤖 Starting bot client...")
         await bot_client.start(bot_token=BOT_TOKEN)
-        logger.info("✅ Bot connected")
+        logger.info("✅ Bot client connected")
 
         me = await bot_client.get_me()
-        logger.info("Bot: @%s", me.username)
+        logger.info(f"Bot initialized as: @{me.username}")
 
+        # Connect user account if configured
         if USE_USER_ACCOUNT:
             if not user_client.is_connected():
                 await user_client.connect()
             if not await user_client.is_user_authorized():
-                raise RuntimeError("User account not authorized")
-            logger.info("✅ User account ready")
+                raise RuntimeError("User account not authorized. Please re-authenticate or check session.")
+            logger.info("✅ User account client connected and authorized.")
 
-        logger.info("📡 Resolving groups...")
+        logger.info("📡 Resolving destination group entities...")
         for group in DESTINATION_GROUPS:
             try:
                 group["entity"] = await user_client.get_entity(group["identifier"])
-                logger.info("✅ %s (Order %d)", group["name"], group["order"])
+                logger.info(f"✅ Resolved '{group['name']}' ({group['identifier']})")
             except Exception as e:
-                logger.warning("Failed to resolve %s: %s", group["name"], e)
+                logger.warning(f"Failed to resolve group '{group['name']}' ({group['identifier']}): {e}")
+                group["entity"] = None # Ensure entity is None if resolution fails
 
+        # Initialize database connection
         if not init_mongo():
-            logger.error("MongoDB connection failed, exiting")
+            logger.error("MongoDB connection failed. Bot cannot start without database.")
             return
 
+        # Ensure admin user is registered
         await add_admin(ADMIN_USER_ID)
 
+        # Start background tasks
         asyncio.create_task(cleanup_pending())
         asyncio.create_task(start_web())
 
@@ -1135,14 +1166,25 @@ async def start_bot():
         logger.info("🚀 PREMIUM BOT FULLY OPERATIONAL!")
         logger.info("=" * 60)
 
+        # Keep the bot running indefinitely
         await asyncio.Event().wait()
+
     except Exception as e:
-        logger.exception("Fatal error: %s", e)
+        logger.exception(f"Fatal error during bot startup: {e}")
+        # Attempt to shut down clients gracefully if possible
+        try:
+            await bot_client.disconnect()
+            if USE_USER_ACCOUNT:
+                await user_client.disconnect()
+        except Exception:
+            pass # Ignore errors during shutdown
+        sys.exit(1)
 
 if __name__ == "__main__":
     try:
         asyncio.run(start_bot())
     except KeyboardInterrupt:
-        logger.info("Stopped by user")
+        logger.info("Bot stopped by user (KeyboardInterrupt).")
     except Exception as e:
-        logger.exception("Crash: %s", e)
+        logger.exception("Critical error in main execution block: %s", e)
+        sys.exit(1)
