@@ -108,7 +108,7 @@ DESTINATION_GROUPS = [
 FAMILY_GROUP = {
     "name": "Family Info Group",
     "identifier": -1003596998816,  # Private group ID
-    "timeout": 180,
+    "timeout": GROUP_TIMEOUT,
     "entity": None
 }
 
@@ -128,7 +128,7 @@ TELEGRAM_USERNAME_GROUP = {
 
 MOVIE_BOT = {
     "name": "Movie/Series Bot",
-    "identifier": "@iPapkornD2bot",  # Replace with your actual movie bot username
+    "identifier": "@iPopkornbot",  # Replace with your actual movie bot username
     "timeout": 60,  # Movies might take longer to respond
     "entity": None
 }
@@ -156,7 +156,7 @@ SEARCH_COMMANDS = {
         "name": "👨‍👩‍👧‍👦 Family Info",
         "type": "family_group",
         "commands": {
-            0: "/familyinfo"
+            0: "/family"
         }
     },
     "aadhar": {
@@ -2147,6 +2147,13 @@ async def relay_button_callback(event):
             try:
                 updated_msg = await user_client.get_messages(dest_entity, ids=dest_message.id)
                 
+                logger.info(f"🔄 Checking original message (ID: {dest_message.id})")
+                if updated_msg:
+                    logger.info(f"   - Has edit_date: {bool(updated_msg.edit_date)}")
+                    logger.info(f"   - Has buttons: {bool(updated_msg.buttons)} (was: {bool(dest_message.buttons)})")
+                    logger.info(f"   - Has file: {bool(updated_msg.file)}")
+                    logger.info(f"   - Text length: {len(updated_msg.text) if updated_msg.text else 0}")
+                
                 # Check if message was edited AND has changed content
                 if updated_msg and updated_msg.edit_date:
                     # Check if buttons changed or disappeared
@@ -2176,9 +2183,9 @@ async def relay_button_callback(event):
                                 await bot_client.send_message(user_id, f"✅ Result:\n\n{updated_msg.text}")
                             
                             await bot_client.forward_messages(user_id, updated_msg)
-                        elif updated_msg.text and len(updated_msg.text) > 20:
+                        elif updated_msg.text and len(updated_msg.text.strip()) >= 10:
                             logger.info(f"📝 Sending text result to user")
-                            await safe_edit_message(event, f"✅ Result:\n\n{updated_msg.text}")
+                            await safe_edit_message(event, f"✅ Result:\n\n{updated_msg.text.strip()}")
                         
                         # Deduct credit
                         if user_id != ADMIN_USER_ID:
@@ -2227,6 +2234,10 @@ async def relay_button_callback(event):
                     # Check if message is very recent (within last 15 seconds)
                     if msg.date and msg.date.timestamp() > (time.time() - 15):
                         logger.info(f"📨 Found recent message (ID: {msg.id})")
+                        logger.info(f"   - Has buttons: {bool(msg.buttons)}")
+                        logger.info(f"   - Has file: {bool(msg.file)}")
+                        logger.info(f"   - Text length: {len(msg.text) if msg.text else 0}")
+                        logger.info(f"   - Text preview: {(msg.text[:50] + '...') if msg.text and len(msg.text) > 50 else msg.text}")
                         
                         # Check if it has pagination buttons
                         if msg.buttons:
@@ -2252,9 +2263,10 @@ async def relay_button_callback(event):
                             )
                             return
                         
-                        # Check if it's a final result (file or substantial text)
-                        if msg.file or (msg.text and len(msg.text) > 20):
-                            logger.info(f"✅ Found final result message")
+                        # Check if it's a final result (file OR any text)
+                        # Lowered threshold from 20 to 10 chars to catch more results
+                        if msg.file or (msg.text and len(msg.text.strip()) >= 10):
+                            logger.info(f"✅ Found final result message (file={bool(msg.file)}, text_len={len(msg.text) if msg.text else 0})")
                             interactive_sessions.pop(user_id, None)
                             user_states.pop(user_id, None)
                             
@@ -2268,7 +2280,7 @@ async def relay_button_callback(event):
                                 await bot_client.forward_messages(user_id, msg)
                             elif msg.text:
                                 logger.info(f"📝 Sending text result to user")
-                                await safe_edit_message(event, f"✅ Result:\n\n{msg.text}")
+                                await safe_edit_message(event, f"✅ Result:\n\n{msg.text.strip()}")
                             
                             # Deduct credit
                             if user_id != ADMIN_USER_ID:
@@ -2276,6 +2288,8 @@ async def relay_button_callback(event):
                                 if user_doc.get('plan') != 'unlimited':
                                     await decrement_search(user_id)
                             return
+                        else:
+                            logger.info(f"⚠️ Message found but not recognized as result (no buttons, no file, text too short)")
             
             except Exception as e:
                 logger.warning(f"Could not check new messages: {e}")
