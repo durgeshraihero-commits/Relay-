@@ -2544,7 +2544,6 @@ async def message_handler(event):
         user_states.pop(user_id, None)
 
 # ============ Message Handler for All Groups and Bots ============
-
 @user_client.on(events.NewMessage())
 async def handle_all_replies(event):
     message = event.message
@@ -2554,7 +2553,7 @@ async def handle_all_replies(event):
     
     text = message.text or message.raw_text
     has_file = message.file is not None
-    file_name = message.file.name if has_file else ""
+    file_name = (message.file.name if has_file else None) or ""
     
     if not text and not has_file:
         return
@@ -2591,15 +2590,15 @@ async def handle_all_replies(event):
                 logger.info(f"📄 File detected: {file_name} (mime: {message.file.mime_type})")
                 
                 # All search types can now receive .txt files
-                if file_name.lower().endswith('.txt') or message.file.mime_type == 'text/plain':
-                    logger.info(f"🎯 TXT file match for search_id: {search_id}")
+                if file_name and (file_name.lower().endswith('.txt') or message.file.mime_type == 'text/plain'):
+                    logger.info(f"✅ TXT file match for search_id: {search_id}")
                     matched_search = search_info
                     matched_key = search_id
                     break
                 
                 # Also check if query is in filename/text
                 clean_query = re.sub(r'[^\d]', '', query)
-                full_text = f"{(text or '').lower()} {file_name.lower()}"
+                full_text = f"{(text or '').lower()} {file_name.lower() if file_name else ''}"
                 
                 if clean_query and len(clean_query) >= 6:
                     if clean_query in re.sub(r'[^\d]', '', full_text):
@@ -2608,8 +2607,13 @@ async def handle_all_replies(event):
                         matched_key = search_id
                         break
             
-            # PRIORITY 2: Text matching
+            # PRIORITY 2: Text matching (but skip processing messages)
             if text and not matched_search:
+                # Skip processing messages - don't match them
+                if is_processing_message(text):
+                    logger.info(f"⏭️ Skipping processing message for content matching")
+                    continue
+                
                 message_text_lower = text.lower()
                 is_match = False
                 
@@ -2656,31 +2660,19 @@ async def handle_all_replies(event):
     # Check for processing/spam messages
     if text:
         if is_processing_message(text):
-            logger.info(f"⏳ Processing message detected, will wait and retry...")
-            await asyncio.sleep(PROCESSING_WAIT_EXTRA)
+            logger.info(f"⏳ Processing message detected, ignoring and waiting for real result...")
+            return  # Don't process, just return and wait
         
         if is_no_info_message(text):
-            logger.info(f"🚫 No-info message detected, waiting for valid data...")
-            await asyncio.sleep(PROCESSING_WAIT_EXTRA)
-            try:
-                chat = await event.get_chat()
-                messages = await user_client.get_messages(chat, limit=10)
-                for msg in messages:
-                    if msg.reply_to and msg.reply_to.reply_to_msg_id == matched_search['message_id']:
-                        potential_text = msg.text or msg.raw_text
-                        if potential_text and not is_no_info_message(potential_text):
-                            text = potential_text
-                            logger.info(f"✅ Found valid data after no-info message")
-                            break
-            except Exception as e:
-                logger.warning(f"Error fetching updated messages: {e}")
+            logger.info(f"🚫 No-info message detected, ignoring and waiting for valid data...")
+            return  # Don't process, just return and wait
     
     await asyncio.sleep(FETCH_WAIT_TIME)
     
-    # Handle file messages
+    # PRIORITY 1: Handle file messages first
     if has_file:
         try:
-            if file_name.lower().endswith('.txt') or message.file.mime_type == 'text/plain':
+            if file_name and (file_name.lower().endswith('.txt') or message.file.mime_type == 'text/plain'):
                 logger.info(f"📥 Downloading TXT file: {file_name}")
                 
                 file_bytes = await message.download_media(bytes)
@@ -2705,12 +2697,23 @@ async def handle_all_replies(event):
                 if cleaned_file_text and not matched_search['future'].done():
                     logger.info(f"✅ Cleaned file content, delivering result")
                     matched_search['future'].set_result(cleaned_file_text)
-                    logger.info(f"📨 Delivered file content for search {matched_key}")
+                    logger.info(f"📨 File delivered for search {matched_key}")
+                    pending_searches.pop(matched_key, None)
                     return
+                elif matched_search['future'].done():
+                    logger.warning(f"⚠️ Future already done when file arrived, still delivering")
+                    try:
+                        matched_search['future'].set_result(cleaned_file_text)
+                    except:
+                        logger.warning(f"Could not set result again, but file content is: {cleaned_file_text[:100]}")
+                    pending_searches.pop(matched_key, None)
+                    return
+                    
         except Exception as e:
-            logger.error(f"❌ Error processing file: {e}")
+            logger.error(f"❌ Error processing file: {e}", exc_info=True)
+            # Fall through to text handling
     
-    # Handle text messages
+    # PRIORITY 2: Handle text messages (only if not processing/spam)
     if text:
         try:
             chat = await event.get_chat()
@@ -2722,7 +2725,11 @@ async def handle_all_replies(event):
         except Exception as e:
             logger.error(f"Error getting latest message: {e}")
         
-        # Final check: skip if still spam/no-info
+        # Final check: skip if still processing/no-info
+        if is_processing_message(text):
+            logger.info(f"🚫 Final check: Still processing message, skipping")
+            return
+        
         if is_no_info_message(text):
             logger.info(f"🚫 Final check: Still no-info message, skipping")
             return
@@ -2730,10 +2737,16 @@ async def handle_all_replies(event):
         if not matched_search['future'].done():
             # Clean the text before delivering
             cleaned_text = filter_links_and_usernames(text)
-            logger.info(f"📨 Delivering text result for search {matched_key}")
+            logger.info(f"📨 Text delivered for search {matched_key}")
             matched_search['future'].set_result(cleaned_text)
+            pending_searches.pop(matched_key, None)
         else:
-            logger.info(f"ℹ️ Future already done for {matched_key}")
+            logger.warning(f"⚠️ Future already done, attempting to deliver anyway")
+            try:
+                matched_search['future'].set_result(text)
+            except:
+                logger.warning(f"Could not set result again")
+            pending_searches.pop(matched_key, None)
 
 # ============ Cleanup Task ============
 
