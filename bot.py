@@ -43,11 +43,11 @@ WEBSITE = "https://relay-wzlz.onrender.com"
 
 BOT_FOOTER = "Powered by darkboxes_bot\nDev: @darkboxesAdmin"
 
-SEARCH_TIMEOUT_PER_GROUP = 15   # seconds per group
+SEARCH_TIMEOUT_PER_GROUP = 20   # seconds per group
 FETCH_WAIT_TIME = 2             # seconds before reading reply
 
 REFERRAL_REWARD = 2
-NEW_USER_CREDITS = 2
+NEW_USER_CREDITS = 0
 
 # ================== LOGGING ==================
 
