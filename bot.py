@@ -2076,28 +2076,34 @@ async def relay_button_callback(event):
         if callback_data.startswith('relay_tg_'):
             parts = callback_data.split('_')
             if len(parts) >= 4:
-                row_idx = int(parts[2])
-                col_idx = int(parts[3])
-                
-                if row_idx < len(dest_message.buttons) and col_idx < len(dest_message.buttons[row_idx]):
-                    logger.info(f"🔘 Clicking Telegram button at position [{row_idx}][{col_idx}]")
-                    await event.answer("⏳ Fetching result...")
+                try:
+                    row_idx = int(parts[2])
+                    col_idx = int(parts[3])
                     
-                    await dest_message.click(row_idx, col_idx)
-                    button_clicked = True
+                    if row_idx < len(dest_message.buttons) and col_idx < len(dest_message.buttons[row_idx]):
+                        logger.info(f"🔘 Clicking Telegram button at position [{row_idx}][{col_idx}]")
+                        await event.answer("⏳ Fetching result...")
+                        
+                        await dest_message.click(row_idx, col_idx)
+                        button_clicked = True
+                except (ValueError, IndexError):
+                    pass
         
         elif callback_data.startswith('relay_movie_'):
             parts = callback_data.split('_')
             if len(parts) >= 4:
-                row_idx = int(parts[2])
-                col_idx = int(parts[3])
-                
-                if row_idx < len(dest_message.buttons) and col_idx < len(dest_message.buttons[row_idx]):
-                    logger.info(f"🎬 Clicking Movie button at position [{row_idx}][{col_idx}]")
-                    await event.answer("⏳ Fetching file...")
+                try:
+                    row_idx = int(parts[2])
+                    col_idx = int(parts[3])
                     
-                    await dest_message.click(row_idx, col_idx)
-                    button_clicked = True
+                    if row_idx < len(dest_message.buttons) and col_idx < len(dest_message.buttons[row_idx]):
+                        logger.info(f"🎬 Clicking Movie button at position [{row_idx}][{col_idx}]")
+                        await event.answer("⏳ Fetching file...")
+                        
+                        await dest_message.click(row_idx, col_idx)
+                        button_clicked = True
+                except (ValueError, IndexError):
+                    pass
         
         if not button_clicked:
             await event.answer("❌ Button not found", alert=True)
@@ -2106,94 +2112,112 @@ async def relay_button_callback(event):
         logger.info(f"⏳ Waiting for response after button click...")
         await asyncio.sleep(2)
         
+        response_found = False
+        
         for attempt in range(5):
             await asyncio.sleep(2 if attempt == 0 else 3)
             
             logger.info(f"🔍 Checking for response (attempt {attempt + 1}/5)...")
             
             try:
-                # Get fresh message list
                 messages = await user_client.get_messages(dest_entity, limit=50)
                 
                 for msg in messages:
-                    if msg.date and msg.date.timestamp() > (time.time() - 30):
-                        # Skip original message
-                        if msg.id == dest_message.id:
-                            continue
-                        
-                        # Check for files - highest priority
-                        if msg.file:
-                            logger.info(f"📁 Found file message (ID: {msg.id})")
-                            interactive_sessions.pop(user_id, None)
-                            user_states.pop(user_id, None)
+                    try:
+                        if msg.date and msg.date.timestamp() > (time.time() - 30):
+                            if msg.id == dest_message.id:
+                                continue
                             
-                            await event.answer("✅ File received!")
-                            if msg.text:
-                                await bot_client.send_message(user_id, f"✅ Result:\n\n{msg.text}")
-                            
-                            await bot_client.forward_messages(user_id, msg)
-                            
-                            if user_id != ADMIN_USER_ID:
-                                user_doc = await get_user(user_id)
-                                if user_doc and user_doc.get('plan') != 'unlimited':
-                                    await decrement_search(user_id)
-                            return
-                        
-                        # Check for text results
-                        if msg.text and len(msg.text.strip()) >= 30:
-                            if not is_processing_message(msg.text) and not is_no_info_message(msg.text):
-                                logger.info(f"📨 Found result message (ID: {msg.id})")
+                            # Check for files first
+                            if msg.file:
+                                logger.info(f"📁 Found file message (ID: {msg.id})")
                                 interactive_sessions.pop(user_id, None)
                                 user_states.pop(user_id, None)
                                 
-                                result = filter_links_and_usernames(msg.text)
-                                final_result = add_footer(result)
+                                await event.answer("✅ File received!")
+                                if msg.text:
+                                    result_text = filter_links_and_usernames(msg.text)
+                                    final_result = add_footer(result_text)
+                                    await bot_client.send_message(user_id, f"✅ Result:\n\n{final_result}")
                                 
-                                await event.answer("✅ Result received!")
-                                await bot_client.send_message(user_id, f"✅ Result:\n\n{final_result}")
+                                await bot_client.forward_messages(user_id, msg)
                                 
                                 if user_id != ADMIN_USER_ID:
                                     user_doc = await get_user(user_id)
                                     if user_doc and user_doc.get('plan') != 'unlimited':
                                         await decrement_search(user_id)
-                                return
-                        
-                        # Check for pagination buttons
-                        if msg.buttons and msg.id != dest_message.id:
-                            logger.info(f"🔘 Found pagination buttons (ID: {msg.id})")
-                            session['dest_message'] = msg
+                                
+                                response_found = True
+                                break
                             
-                            user_buttons = []
-                            for r_idx, row in enumerate(msg.buttons):
-                                button_row = []
-                                for c_idx, button in enumerate(row):
-                                    if hasattr(button, 'text'):
-                                        prefix = "relay_tg_" if search_type == "telegram" else "relay_movie_"
-                                        button_row.append(Button.inline(
-                                            button.text,
-                                            f"{prefix}{r_idx}_{c_idx}"
-                                        ))
-                                if button_row:
-                                    user_buttons.append(button_row)
+                            # Check for text results
+                            if msg.text and len(msg.text.strip()) >= 30:
+                                if not is_processing_message(msg.text) and not is_no_info_message(msg.text):
+                                    logger.info(f"📨 Found result message (ID: {msg.id})")
+                                    interactive_sessions.pop(user_id, None)
+                                    user_states.pop(user_id, None)
+                                    
+                                    result = filter_links_and_usernames(msg.text)
+                                    final_result = add_footer(result)
+                                    
+                                    await event.answer("✅ Result received!")
+                                    await bot_client.send_message(user_id, f"{final_result}")
+                                    
+                                    if user_id != ADMIN_USER_ID:
+                                        user_doc = await get_user(user_id)
+                                        if user_doc and user_doc.get('plan') != 'unlimited':
+                                            await decrement_search(user_id)
+                                    
+                                    response_found = True
+                                    break
                             
-                            message_text = msg.text or msg.raw_text or "Select an option:"
-                            try:
-                                await event.edit(message_text, buttons=user_buttons)
-                            except:
-                                await bot_client.send_message(user_id, message_text, buttons=user_buttons)
-                            return
+                            # Check for pagination buttons
+                            if msg.buttons and msg.id != dest_message.id:
+                                logger.info(f"🔘 Found pagination buttons (ID: {msg.id})")
+                                session['dest_message'] = msg
+                                
+                                user_buttons = []
+                                for r_idx, row in enumerate(msg.buttons):
+                                    button_row = []
+                                    for c_idx, button in enumerate(row):
+                                        if hasattr(button, 'text'):
+                                            prefix = "relay_tg_" if search_type == "telegram" else "relay_movie_"
+                                            button_row.append(Button.inline(
+                                                button.text,
+                                                f"{prefix}{r_idx}_{c_idx}"
+                                            ))
+                                    if button_row:
+                                        user_buttons.append(button_row)
+                                
+                                message_text = msg.text or msg.raw_text or "Select an option:"
+                                try:
+                                    await event.edit(message_text, buttons=user_buttons)
+                                except:
+                                    await bot_client.send_message(user_id, message_text, buttons=user_buttons)
+                                
+                                response_found = True
+                                break
+                    except Exception as inner_e:
+                        logger.warning(f"Error processing message: {inner_e}")
+                        continue
+                
+                if response_found:
+                    break
             
             except Exception as e:
-                logger.warning(f"Error checking messages: {e}")
+                logger.warning(f"Error checking messages on attempt {attempt + 1}: {e}")
+                continue
         
-        logger.warning(f"❌ No response found after retries")
-        await event.answer("❌ No response received. Please try again.", alert=True)
-        interactive_sessions.pop(user_id, None)
+        if not response_found:
+            logger.warning(f"❌ No response found after retries")
+            await event.answer("❌ No response received. Please try again.", alert=True)
+            interactive_sessions.pop(user_id, None)
     
     except Exception as e:
         logger.exception(f"Error in relay button callback: {e}")
         await event.answer("❌ An error occurred", alert=True)
         interactive_sessions.pop(user_id, None)
+                                
 
 @bot_client.on(events.CallbackQuery(pattern='^back_main'))
 async def back_main_callback(event):
