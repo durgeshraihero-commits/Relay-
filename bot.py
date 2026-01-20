@@ -128,7 +128,7 @@ TELEGRAM_USERNAME_GROUP = {
 
 MOVIE_BOT = {
     "name": "Movie/Series Bot",
-    "identifier": "@iPopkornbot",  # Replace with your actual movie bot username
+    "identifier": "@iPapkornD2bot",  # Replace with your actual movie bot username
     "timeout": 60,  # Movies might take longer to respond
     "entity": None
 }
