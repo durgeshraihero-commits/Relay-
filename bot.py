@@ -43,7 +43,7 @@ class BotConfig:
     
     # User account (for relaying)
     USER_API_ID: int = int(os.getenv("USER_API_ID", "0"))
-    USER_API_HASH: str = os.getenv("USER_API_HASH", "").strip()
+    USER_API_HASH: str = os.getenv("API_HASH", "").strip()
     USER_PHONE: str = os.getenv("USER_PHONE", "").strip()
     USER_SESSION_FILE: str = "relay_session.session"
     
@@ -126,7 +126,7 @@ GROUP_PRIORITIES = {
         "entity": None
     },
     "secondary": {
-        "name": "🌐 Standard Database",
+        "name": "🌐 IntelX Network",
         "identifier": "IntelXGroup",
         "timeout": 35,
         "weight": 7,
@@ -208,7 +208,7 @@ SEARCH_COMMANDS = {
     "family": {
         "name": "👨‍👩‍👧‍👦 Family Network",
         "description": "🏠 **Complete Family Analysis**\n\n🔸 **Input:** 12-digit Aadhar number\n🔸 **Returns:** All family members • Names • Relations • Ages • Addresses\n🔸 **Sources:** UIDAI database • Family registration • Government records\n🔸 **Depth:** 3-level relationship mapping",
-        "commands": ["/familyinfo", "/familyinfo"],
+        "commands": ["/familyinfo", "/family"],
         "example": "123456789012",
         "validation": r"^\d{12}$",
         "cost": 1,
@@ -219,7 +219,7 @@ SEARCH_COMMANDS = {
     "aadhar": {
         "name": "🆔 Aadhar Comprehensive",
         "description": "📈 **Complete Aadhar Cross-Reference**\n\n🔸 **Input:** 12-digit Aadhar number\n🔸 **Returns:** All linked numbers • Bank accounts • Addresses • Biometric status • Registration history\n🔸 **Sources:** UIDAI • Bank linkages • Government databases\n🔸 **Scope:** Pan-India coverage",
-        "commands": ["/aadhar", "/aadhar", "/aadhar"],
+        "commands": ["/aadhar", "/adh", "/aadhaar"],
         "example": "123456789012",
         "validation": r"^\d{12}$",
         "cost": 2,
@@ -234,14 +234,14 @@ SEARCH_COMMANDS = {
         "example": "UP53CZ3391",
         "validation": r"^[A-Z]{2}\d{2}[A-Z]{1,2}\d{4}$",
         "cost": 2,
-        "priority": "secondary",
+        "priority": "primary",
         "icon": "🚗",
         "category": "assets"
     },
     "upi": {
         "name": "💳 UPI Financial Intelligence",
         "description": "💰 **UPI Account & Transaction Analysis**\n\n🔸 **Input:** UPI ID (username@paytm/bank)\n🔸 **Returns:** Account holder • Linked bank • Transaction patterns • KYC status • Last active\n🔸 **Sources:** NPCI databases • Bank records • Financial institutions\n🔸 **Security:** Bank-grade encryption",
-        "commands": ["/upiinfo", "/upiinfo"],
+        "commands": ["/upiinfo", "/upi"],
         "example": "username@paytm",
         "validation": r"^[\w\.-]+@[\w\.-]+$",
         "cost": 1,
@@ -263,7 +263,7 @@ SEARCH_COMMANDS = {
     "telegram": {
         "name": "📲 Telegram Intelligence",
         "description": "⚡ **Telegram Profile Deep Analysis**\n\n🔸 **Input:** Telegram username or phone\n🔸 **Returns:** Mobile number • Profile details • Linked accounts • Activity patterns • Group memberships\n🔸 **Daily Limit:** 1 search for security\n🔸 **Privacy:** Encrypted processing",
-        "commands": ["/tg", "/tg"],
+        "commands": ["/tg", "/telegram"],
         "example": "@username or 9876543210",
         "validation": r"^(@?\w{5,32}|\d{10})$",
         "daily_limit": 1,
@@ -297,7 +297,7 @@ SEARCH_COMMANDS = {
     "insta": {
         "name": "📸 Instagram Intelligence",
         "description": "✨ **Instagram Profile Deep Analysis**\n\n🔸 **Input:** Instagram username\n🔸 **Returns:** Personal information • Contact details • Location data • Linked accounts • Activity history\n🔸 **Sources:** Social media APIs • Public databases • Metadata analysis\n🔸 **Insights:** Engagement patterns",
-        "commands": ["/insta", "/insta"],
+        "commands": ["/insta", "/instagram"],
         "example": "username",
         "validation": r"^[a-zA-Z0-9_.]{1,30}$",
         "cost": 1,
@@ -308,13 +308,35 @@ SEARCH_COMMANDS = {
     "pak": {
         "name": "🌐 Pakistan Intelligence",
         "description": "🕌 **Pakistan Number Comprehensive Analysis**\n\n🔸 **Input:** Pakistan mobile number (+92 format)\n🔸 **Returns:** Complete subscriber information • Location • Network details • Registration data\n🔸 **Sources:** International telecom databases • Government records\n🔸 **Coverage:** All major Pakistani networks",
-        "commands": ["/pak", "/pak"],
+        "commands": ["/pak", "/pk"],
         "example": "+923001234567",
         "validation": r"^\+92\d{10}$",
         "cost": 3,
         "priority": "tertiary",
         "icon": "🌐",
         "category": "international"
+    },
+    "ip": {
+        "name": "🌍 IP Location",
+        "description": "📍 **IP Address Geolocation Analysis**\n\n🔸 **Input:** IP address (IPv4/IPv6)\n🔸 **Returns:** Country • City • ISP • Coordinates • Timezone • Threat level\n🔸 **Sources:** GeoIP databases • Threat intelligence • ASN records\n🔸 **Accuracy:** Street-level precision",
+        "commands": ["/ip", "/location", "/geo"],
+        "example": "8.8.8.8",
+        "validation": r"^(\d{1,3}\.){3}\d{1,3}$|^([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$",
+        "cost": 1,
+        "priority": "secondary",
+        "icon": "🌍",
+        "category": "digital"
+    },
+    "ifsc": {
+        "name": "🏦 IFSC Code Lookup",
+        "description": "💼 **Bank Branch Information**\n\n🔸 **Input:** 11-digit IFSC code\n🔸 **Returns:** Bank name • Branch • Address • Contact • MICR code • Services\n🔸 **Sources:** RBI database • Bank records • Financial institutions\n🔸 **Verification:** Real-time validation",
+        "commands": ["/ifsc", "/bank"],
+        "example": "SBIN0001707",
+        "validation": r"^[A-Z]{4}0[A-Z0-9]{6}$",
+        "cost": 1,
+        "priority": "secondary",
+        "icon": "🏦",
+        "category": "finance"
     }
 }
 
@@ -679,46 +701,36 @@ class DatabaseManager:
             logger.error(f"❌ Error adding referral credit: {e}")
             return False
 
-# ================== PREMIUM KEYBOARD BUILDER ==================
+# ================== ONE COMMAND PER LINE KEYBOARD ==================
 
-class PremiumKeyboard:
+class OneLineKeyboard:
     @staticmethod
     def main_menu(is_admin: bool = False) -> List[List[Button]]:
-        """Build premium main menu"""
-        # Single row with all main services
-        top_services = ["phone", "vehicle", "aadhar", "telegram", "email", "insta"]
-        row = []
-        for service in top_services:
-            if service in SEARCH_COMMANDS:
-                cmd = SEARCH_COMMANDS[service]
-                row.append(Button.inline(f"{cmd['icon']}", f"search_{service}"))
-        
-        if row:
-            return [row]
-        
-        return [[Button.inline("📱 Phone", "search_phone"), Button.inline("🚗 Vehicle", "search_vehicle")]]
-    
-    @staticmethod
-    def services_menu() -> List[List[Button]]:
-        """All services in organized layout"""
+        """Build keyboard with ONE COMMAND PER LINE"""
         buttons = []
         
-        # Single row with all services
-        all_services = list(SEARCH_COMMANDS.keys())
-        row = []
-        for service in all_services[:8]:  # First 8 services
-            cmd = SEARCH_COMMANDS[service]
-            row.append(Button.inline(cmd["icon"], f"search_{service}"))
-        if row:
-            buttons.append(row)
+        # Add each command in its own line
+        commands_in_order = [
+            "phone", "family", "aadhar", "vehicle", 
+            "upi", "email", "telegram", "imei",
+            "gst", "insta", "pak", "ip", "ifsc"
+        ]
         
-        # Action Buttons in second row
-        buttons.append([
-            Button.inline("👤 Profile", "profile"),
-            Button.inline("💎 Premium", "premium"),
-            Button.inline("📊 Referral", "referrals"),
-            Button.inline("🆘 Support", "support")
-        ])
+        for cmd_key in commands_in_order:
+            if cmd_key in SEARCH_COMMANDS:
+                cmd = SEARCH_COMMANDS[cmd_key]
+                # Each command gets its own line
+                buttons.append([Button.inline(f"{cmd['icon']} {cmd['name'].split()[1]}", f"search_{cmd_key}")])
+        
+        # Add action buttons in their own lines
+        buttons.append([Button.inline("👤 Profile", "profile")])
+        buttons.append([Button.inline("💎 Premium Plans", "premium")])
+        buttons.append([Button.inline("📊 Refer & Earn", "referrals")])
+        buttons.append([Button.inline("🆘 Support", "support")])
+        
+        # Add admin button if admin
+        if is_admin:
+            buttons.append([Button.inline("⚙️ Admin Panel", "admin")])
         
         return buttons
     
@@ -728,19 +740,19 @@ class PremiumKeyboard:
         cmd = SEARCH_COMMANDS.get(search_type, {})
         return [
             [Button.inline(f"{cmd.get('icon', '🔍')} {cmd.get('name', 'Search')}", f"info_{search_type}")],
-            [Button.inline("« Back to Services", "services")]
+            [Button.inline("« Back to Main Menu", "main_menu")]
         ]
     
     @staticmethod
     def subscription_plans() -> List[List[Button]]:
-        """Premium subscription plans"""
+        """Premium subscription plans - one per line"""
         buttons = []
         
         for plan_id, plan in SUBSCRIPTION_PLANS.items():
             label = f"{plan['icon']} {plan['name']} - ₹{plan['price']}"
             buttons.append([Button.inline(label, f"buy_{plan_id}")])
         
-        buttons.append([Button.inline("« Back to Menu", "main_menu")])
+        buttons.append([Button.inline("« Back to Main Menu", "main_menu")])
         return buttons
     
     @staticmethod
@@ -758,10 +770,12 @@ class PremiumKeyboard:
     
     @staticmethod
     def admin_controls() -> List[List[Button]]:
-        """Admin control panel"""
+        """Admin control panel - one per line"""
         return [
-            [Button.inline("📊 Statistics", "admin_stats"), Button.inline("📢 Broadcast", "admin_broadcast")],
-            [Button.inline("⚙️ Settings", "admin_settings"), Button.inline("👥 Users", "admin_users")],
+            [Button.inline("📊 Statistics", "admin_stats")],
+            [Button.inline("📢 Broadcast Message", "admin_broadcast")],
+            [Button.inline("⚙️ Settings", "admin_settings")],
+            [Button.inline("👥 User Management", "admin_users")],
             [Button.inline("« Main Menu", "main_menu")]
         ]
 
@@ -1178,6 +1192,7 @@ user_client = (
 db_manager = DatabaseManager()
 search_engine = None
 user_states = {}
+bot_info = None
 
 # Now define event handlers
 @bot_client.on(events.NewMessage(pattern=r'/start(?: (.+))?'))
@@ -1206,35 +1221,17 @@ async def start_handler(event):
         # Send welcome message
         welcome_text = PremiumFormatter.format_welcome(user.first_name, user_doc)
         
-        # Use single row inline keyboard
+        # Get keyboard - ONE COMMAND PER LINE
+        buttons = OneLineKeyboard.main_menu(is_admin)
+        
         await event.respond(
             welcome_text,
-            buttons=PremiumKeyboard.main_menu(is_admin),
+            buttons=buttons,
             parse_mode="md"
         )
         
     except Exception as e:
         logger.error(f"❌ Error in start_handler: {e}")
-
-@bot_client.on(events.CallbackQuery(pattern='^services$'))
-async def services_menu_callback(event):
-    """Show all services menu"""
-    try:
-        await event.edit(
-            "🛠️ **INTELLIGENCE SERVICES**\n\n"
-            "Select a service:\n\n"
-            "🔍 **Identity Services**\n"
-            "📱 Phone • 👨‍👩‍👧‍👦 Family • 🆔 Aadhar • 🚗 Vehicle\n\n"
-            "💰 **Financial Services**\n"
-            "💳 UPI • 🏢 GST • 🏦 Banking\n\n"
-            "🌐 **Digital Services**\n"
-            "📲 Telegram • 📸 Instagram • 📧 Email • 📱 Device\n\n"
-            "Select service:",
-            buttons=PremiumKeyboard.services_menu(),
-            parse_mode="md"
-        )
-    except Exception as e:
-        logger.error(f"❌ Error in services_menu_callback: {e}")
 
 @bot_client.on(events.CallbackQuery(pattern=r'^search_(.+)$'))
 async def search_callback(event):
@@ -1288,7 +1285,7 @@ async def search_callback(event):
                 "├─ Dedicated Support\n"
                 "└─ 30-day Access\n\n"
                 "Select a plan to continue:",
-                buttons=PremiumKeyboard.subscription_plans(),
+                buttons=OneLineKeyboard.subscription_plans(),
                 parse_mode="md"
             )
             return
@@ -1301,7 +1298,7 @@ async def search_callback(event):
             f"⚡ **Cost:** {cmd['cost']} credit{'s' if cmd['cost'] > 1 else ''}\n"
             f"📝 **Example:** `{cmd['example']}`\n\n"
             f"Enter your query below:",
-            buttons=PremiumKeyboard.cancel_button(),
+            buttons=OneLineKeyboard.cancel_button(),
             parse_mode="md"
         )
         
@@ -1330,7 +1327,10 @@ async def main_menu_callback(event):
             f"🛠️ **SELECT SERVICE**"
         )
         
-        await event.edit(message, buttons=PremiumKeyboard.main_menu(is_admin), parse_mode="md")
+        # Get keyboard - ONE COMMAND PER LINE
+        buttons = OneLineKeyboard.main_menu(is_admin)
+        
+        await event.edit(message, buttons=buttons, parse_mode="md")
         
     except Exception as e:
         logger.error(f"❌ Error in main_menu_callback: {e}")
@@ -1356,7 +1356,7 @@ async def premium_callback(event):
         plans_text += "4. Send screenshot to @darkboxesAdmin\n\n"
         plans_text += "⚡ Activation within 5 minutes of verification."
         
-        await event.edit(plans_text, buttons=PremiumKeyboard.subscription_plans(), parse_mode="md")
+        await event.edit(plans_text, buttons=OneLineKeyboard.subscription_plans(), parse_mode="md")
         
     except Exception as e:
         logger.error(f"❌ Error in premium_callback: {e}")
@@ -1390,7 +1390,7 @@ async def buy_plan_callback(event):
         payment_msg += "4. Send screenshot to @darkboxesAdmin for verification\n\n"
         payment_msg += "⚡ Subscription activated within 5 minutes of verification."
         
-        await event.edit(payment_msg, buttons=PremiumKeyboard.payment_buttons(plan_id), parse_mode="md")
+        await event.edit(payment_msg, buttons=OneLineKeyboard.payment_buttons(plan_id), parse_mode="md")
         
     except Exception as e:
         logger.error(f"❌ Error in buy_plan_callback: {e}")
@@ -1429,7 +1429,7 @@ async def confirm_payment_callback(event):
             f"💰 Amount: ₹{plan['price']}\n\n"
             f"📸 Please send payment screenshot to @darkboxesAdmin for verification.\n"
             f"⚡ Your subscription will be activated within 5 minutes of verification.",
-            buttons=PremiumKeyboard.cancel_button(),
+            buttons=OneLineKeyboard.cancel_button(),
             parse_mode="md"
         )
         
@@ -1462,7 +1462,7 @@ async def referrals_callback(event):
             f"• Special discounts for active referrers"
         )
         
-        await event.edit(referrals_text, buttons=PremiumKeyboard.cancel_button(), parse_mode="md")
+        await event.edit(referrals_text, buttons=OneLineKeyboard.cancel_button(), parse_mode="md")
         
     except Exception as e:
         logger.error(f"❌ Error in referrals_callback: {e}")
@@ -1501,7 +1501,7 @@ async def profile_callback(event):
             f"**⏰ LAST ACTIVITY:** {user_doc.get('last_seen', 'N/A')[:19]}"
         )
         
-        await event.edit(profile_text, buttons=PremiumKeyboard.cancel_button(), parse_mode="md")
+        await event.edit(profile_text, buttons=OneLineKeyboard.cancel_button(), parse_mode="md")
         
     except Exception as e:
         logger.error(f"❌ Error in profile_callback: {e}")
@@ -1556,7 +1556,7 @@ async def query_handler(event):
                 "• All databases\n"
                 "• Priority processing\n\n"
                 "Contact @darkboxesAdmin for assistance.",
-                buttons=PremiumKeyboard.subscription_plans()
+                buttons=OneLineKeyboard.subscription_plans()
             )
             user_states.pop(user_id, None)
             return
