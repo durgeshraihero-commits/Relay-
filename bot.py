@@ -65,7 +65,7 @@ class BotConfig:
     REFERRAL_REWARD: int = int(os.getenv("REFERRAL_REWARD", "2"))
     
     # Payment
-    UPI_ID: str = os.getenv("UPI_ID", "darkboxes@ybl")
+    UPI_ID: str = os.getenv("UPI_ID", "durgeshraihero@oksbi")
     ADMIN_CONTACT: str = "@darkboxesAdmin"
 
 config = BotConfig()
@@ -197,7 +197,7 @@ SEARCH_COMMANDS = {
     "phone": {
         "name": "📱 Phone Intelligence",
         "description": "📊 **Complete Mobile Intelligence**\n\n🔸 **Input:** 10-digit Indian mobile number\n🔸 **Returns:** Full name • Father's name • Aadhar ID • Complete address • Alternate numbers\n🔸 **Sources:** Government databases • Telecom records • Public directories\n🔸 **Confidence:** 98% accurate",
-        "commands": ["/num", "/phone", "/mobile"],
+        "commands": ["/num", "/num", "/num"],
         "example": "9876543210",
         "validation": r"^\d{10,15}$",
         "cost": 1,
@@ -208,7 +208,7 @@ SEARCH_COMMANDS = {
     "family": {
         "name": "👨‍👩‍👧‍👦 Family Network",
         "description": "🏠 **Complete Family Analysis**\n\n🔸 **Input:** 12-digit Aadhar number\n🔸 **Returns:** All family members • Names • Relations • Ages • Addresses\n🔸 **Sources:** UIDAI database • Family registration • Government records\n🔸 **Depth:** 3-level relationship mapping",
-        "commands": ["/familyinfo", "/family"],
+        "commands": ["/familyinfo", "/familyinfo"],
         "example": "123456789012",
         "validation": r"^\d{12}$",
         "cost": 1,
@@ -219,7 +219,7 @@ SEARCH_COMMANDS = {
     "aadhar": {
         "name": "🆔 Aadhar Comprehensive",
         "description": "📈 **Complete Aadhar Cross-Reference**\n\n🔸 **Input:** 12-digit Aadhar number\n🔸 **Returns:** All linked numbers • Bank accounts • Addresses • Biometric status • Registration history\n🔸 **Sources:** UIDAI • Bank linkages • Government databases\n🔸 **Scope:** Pan-India coverage",
-        "commands": ["/aadhar", "/adh", "/aadhaar"],
+        "commands": ["/aadhar", "/aadhar", "/aadhar"],
         "example": "123456789012",
         "validation": r"^\d{12}$",
         "cost": 2,
@@ -230,18 +230,18 @@ SEARCH_COMMANDS = {
     "vehicle": {
         "name": "🚗 Vehicle Intelligence",
         "description": "🏎️ **Complete Vehicle & Owner Analysis**\n\n🔸 **Input:** Vehicle number (Format: UP53CZ3391)\n🔸 **Returns:** Vehicle details • Owner information • Mobile number • Address • Registration history • Insurance\n🔸 **Premium Feature:** Celebrity vehicle database access\n🔸 **Real-time:** Current registration status",
-        "commands": ["/vehicle", "/vnum", "/car"],
+        "commands": ["/vehicle", "/vnum", "/rc"],
         "example": "UP53CZ3391",
         "validation": r"^[A-Z]{2}\d{2}[A-Z]{1,2}\d{4}$",
         "cost": 2,
-        "priority": "primary",
+        "priority": "secondary",
         "icon": "🚗",
         "category": "assets"
     },
     "upi": {
         "name": "💳 UPI Financial Intelligence",
         "description": "💰 **UPI Account & Transaction Analysis**\n\n🔸 **Input:** UPI ID (username@paytm/bank)\n🔸 **Returns:** Account holder • Linked bank • Transaction patterns • KYC status • Last active\n🔸 **Sources:** NPCI databases • Bank records • Financial institutions\n🔸 **Security:** Bank-grade encryption",
-        "commands": ["/upiinfo", "/upi"],
+        "commands": ["/upiinfo", "/upiinfo"],
         "example": "username@paytm",
         "validation": r"^[\w\.-]+@[\w\.-]+$",
         "cost": 1,
@@ -402,7 +402,7 @@ class PremiumFormatter:
         welcome += f"└─ Active Referrals: {user_data.get('referrals', 0)}\n\n"
         
         welcome += "🌟 **PREMIUM FEATURES**\n"
-        welcome += "• 🔓 Government Database Access\n"
+        welcome += "• 🔓 OSINT Database\n"
         welcome += "• 👑 Celebrity Information Network\n"
         welcome += "• 🌐 International Data Sources\n"
         welcome += "• ⚡ Priority Processing\n"
