@@ -88,7 +88,7 @@ GROUP_PRIORITIES = {
     },
     "secondary": {
         "name": "🌐 Standard Database",
-        "identifier": "darkboxesv3",  # Your secondary group
+        "identifier": "IntelXGroup",  # Your secondary group
         "timeout": 35,
         "weight": 7,
         "enabled": True,
@@ -195,7 +195,7 @@ SEARCH_COMMANDS = {
         "example": "UP53CZ3391",
         "validation": r"^[A-Z]{2}\d{2}[A-Z]{1,2}\d{4}$",
         "cost": 2,
-        "priority": "primary",
+        "priority": "secondary",
         "icon": "🚗",
         "category": "assets"
     },
