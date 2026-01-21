@@ -61,8 +61,8 @@ class BotConfig:
     MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "20"))
     
     # Credits and rewards
-    NEW_USER_CREDITS: int = int(os.getenv("NEW_USER_CREDITS", "3"))
-    REFERRAL_REWARD: int = int(os.getenv("REFERRAL_REWARD", "2"))
+    NEW_USER_CREDITS: int = int(os.getenv("NEW_USER_CREDITS", "1"))
+    REFERRAL_REWARD: int = int(os.getenv("REFERRAL_REWARD", "1"))
     
     # Payment
     UPI_ID: str = os.getenv("UPI_ID", "durgeshraihero@oksbi")
@@ -156,7 +156,7 @@ SUBSCRIPTION_PLANS = {
     "basic": {
         "name": "🔰 Basic Plan",
         "price": 100,
-        "searches": 5,
+        "searches": 10,
         "validity": "7 days",
         "features": ["5 premium searches", "Standard data sources", "7-day access"],
         "icon": "🔰",
@@ -164,8 +164,8 @@ SUBSCRIPTION_PLANS = {
     },
     "standard": {
         "name": "⭐ Standard Plan",
-        "price": 200,
-        "searches": 10,
+        "price": 250,
+        "searches": 30,
         "validity": "7 days",
         "features": ["10 premium searches", "Extended data sources", "Priority processing"],
         "icon": "⭐",
@@ -173,7 +173,7 @@ SUBSCRIPTION_PLANS = {
     },
     "premium": {
         "name": "👑 Premium Plan",
-        "price": 500,
+        "price": 400,
         "searches": "∞",
         "validity": "7 days",
         "features": ["Unlimited searches", "All data sources", "Priority processing", "24/7 support"],
@@ -182,7 +182,7 @@ SUBSCRIPTION_PLANS = {
     },
     "enterprise": {
         "name": "🚀 Enterprise Plan",
-        "price": 800,
+        "price": 600,
         "searches": "∞",
         "validity": "30 days",
         "features": ["Unlimited searches", "All premium sources", "Highest priority", "Dedicated support", "API access"],
