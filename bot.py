@@ -1,6 +1,6 @@
 """
 Premium Information Bot - Advanced Edition
-Enhanced file waiting system
+Enhanced file waiting system with caption fix
 """
 
 import os
@@ -253,10 +253,14 @@ class TextProcessor:
         keywords = [
             'file generated', 'report generated', 'download file',
             'txt file', 'download txt', 'successfully generated',
-            '✅ file generated', '📂 report_', '.txt', 'auto-delete'
+            '✅ file generated', '📂 report_', '.txt', 'auto-delete',
+            'file ready', 'file is ready', 'report is ready'
         ]
         
-        return any(keyword in text_lower for keyword in keywords)
+        result = any(keyword in text_lower for keyword in keywords)
+        if result:
+            logger.info(f"📄 Detected file generation message: {text[:50]}...")
+        return result
     
     @staticmethod
     def is_no_info_message(text: str) -> bool:
@@ -517,7 +521,7 @@ class SearchEngine:
             # Also check if we're waiting for a file (not necessarily a reply)
             # Look for recent messages in the same chat
             for search_id, search_info in list(self.active_searches.items()):
-                # Check if this message is in the same chat and we're expecting a file
+                # Check if this message is in the same chat
                 chat_match = False
                 try:
                     if hasattr(search_info["group"]["entity"], 'id'):
@@ -528,55 +532,100 @@ class SearchEngine:
                 except:
                     pass
                 
-                if chat_match and search_info.get("expecting_file"):
+                if chat_match:
                     # Check if this message has a file
-                    if message.file:
-                        logger.info(f"📁 Found file while waiting in {search_info['group']['name']}")
+                    file_check = await self._check_and_process_file(message, search_info)
+                    if file_check is not None:
+                        logger.info(f"📁 Found file in {search_info['group']['name']} (not reply)")
                         await self._process_search_response(search_id, search_info, message)
                         return
-                    elif message.text:
-                        # Check if it's another file generation message
-                        if TextProcessor.is_file_generated_message(message.text):
-                            logger.info(f"📄 Another file generation message, continuing to wait...")
-                            return
                     
         except Exception as e:
             logger.error(f"Error handling incoming message: {e}")
+    
+    async def _check_and_process_file(self, message, search_info: Dict) -> Optional[Dict]:
+        """Check if message has file and process it"""
+        # Check for document/media
+        if message.media and hasattr(message.media, 'document'):
+            logger.info(f"📁 Found document media in message")
+            return await self._process_file(message, search_info)
+        
+        # Check for file attribute
+        if hasattr(message, 'file') and message.file:
+            logger.info(f"📁 Found file attribute in message")
+            return await self._process_file(message, search_info)
+        
+        # Check if it's a document message
+        if message.document:
+            logger.info(f"📁 Found document in message")
+            return await self._process_file(message, search_info)
+        
+        return None
     
     async def _process_search_response(self, search_id: str, search_info: Dict, message):
         """Process a search response message"""
         try:
             text = message.text or message.raw_text or ""
+            logger.info(f"📨 Processing message in {search_info['group']['name']}: {text[:100]}...")
             
-            # Check if this is a file generation message
+            # FIRST: Check if message has a file/document
+            file_result = await self._check_and_process_file(message, search_info)
+            if file_result is not None:
+                logger.info(f"✅ Processing file from message")
+                # Complete the search with file result
+                if search_id in self.active_searches:
+                    future = self.active_searches[search_id]["future"]
+                    if not future.done():
+                        future.set_result(file_result)
+                    del self.active_searches[search_id]
+                return
+            
+            # SECOND: Check if it's a file generation message (caption without file yet)
             if TextProcessor.is_file_generated_message(text):
-                logger.info(f"📄 File generation message detected in {search_info['group']['name']}, will wait for file...")
+                logger.info(f"📄 File generation message detected in {search_info['group']['name']}")
+                
+                # If this message itself has no file, check if it's a reply
+                if message.reply_to:
+                    logger.info(f"🔗 File message is a reply, checking replied message...")
+                    try:
+                        # Get the replied message
+                        replied_msg = await message.get_reply_message()
+                        if replied_msg:
+                            # Check if replied message has a file
+                            replied_file_result = await self._check_and_process_file(replied_msg, search_info)
+                            if replied_file_result:
+                                logger.info(f"✅ Found file in replied message")
+                                # Complete with replied message file
+                                if search_id in self.active_searches:
+                                    future = self.active_searches[search_id]["future"]
+                                    if not future.done():
+                                        future.set_result(replied_file_result)
+                                    del self.active_searches[search_id]
+                                return
+                    except Exception as e:
+                        logger.error(f"Error checking replied message: {e}")
+                
                 # Mark that we're expecting a file
                 search_info["expecting_file"] = True
                 search_info["file_wait_start"] = time.time()
-                
-                # Reset the timeout to give more time for file to arrive
-                # We'll give it 20 more seconds to get the file
+                logger.info(f"⏳ Waiting for file to arrive...")
                 return
             
-            # Check if processing message
+            # THIRD: Check if processing message
             if TextProcessor.is_processing_message(text):
-                logger.info(f"⏳ Processing message in {search_info['group']['name']}, waiting...")
+                logger.info(f"⏳ Processing message, waiting...")
                 return
             
-            # Check for files FIRST
-            if message.file:
-                logger.info(f"📁 File received from {search_info['group']['name']}")
-                result = await self._process_file(message, search_info)
-            elif text:
-                # Check if it's a no-info message
-                if TextProcessor.is_no_info_message(text):
-                    logger.info(f"🚫 No-info message from {search_info['group']['name']}")
-                    result = {"success": False}
-                else:
-                    logger.info(f"📝 Text response from {search_info['group']['name']}")
-                    result = await self._process_text(text, search_info)
+            # FOURTH: Check if no-info message
+            if TextProcessor.is_no_info_message(text):
+                logger.info(f"🚫 No-info message")
+                result = {"success": False}
+            elif text and len(text.strip()) > 10:
+                # Process as text result
+                logger.info(f"📝 Processing text response")
+                result = await self._process_text(text, search_info)
             else:
+                logger.info(f"⚠️ Empty or short message, ignoring")
                 return
             
             # Complete the search
@@ -593,7 +642,7 @@ class SearchEngine:
         """Process file message"""
         try:
             # Check file size
-            if message.file.size > config.MAX_FILE_SIZE_MB * 1024 * 1024:
+            if hasattr(message.file, 'size') and message.file.size > config.MAX_FILE_SIZE_MB * 1024 * 1024:
                 logger.warning(f"📁 File too large: {message.file.size} bytes")
                 return {"success": False}
             
@@ -707,7 +756,7 @@ class SearchEngine:
 
 # ================== CLEANUP TASK ==================
 
-async def cleanup_tasks():
+async def cleanup_expired_searches():
     """Clean up expired searches and check for files"""
     while True:
         try:
@@ -728,7 +777,7 @@ async def cleanup_tasks():
                     else:
                         logger.info(f"⏱️ File wait timeout in {search_info['group']['name']}")
                 
-                # Check overall timeot
+                # Check overall timeout
                 if current_time - search_info["start_time"] > timeout:
                     expired.append(search_id)
             
@@ -748,9 +797,6 @@ async def cleanup_tasks():
                 
         except Exception as e:
             logger.error(f"Error in cleanup: {e}")
-
-# ================== REST OF THE CODE REMAINS THE SAME ==============
-            
 
 # ================== DATABASE MANAGER ==================
 
@@ -1094,37 +1140,6 @@ async def admin_reply_handler(event):
         
     except Exception as e:
         logger.error(f"Error in admin_reply_handler: {e}")
-
-# ================== CLEANUP ==================
-
-async def cleanup_expired_searches():
-    """Clean up expired searches"""
-    while True:
-        try:
-            await asyncio.sleep(60)
-            
-            current_time = time.time()
-            expired = []
-            
-            for search_id, search_info in list(search_engine.active_searches.items()):
-                if current_time - search_info["start_time"] > 300:  # 5 minutes
-                    expired.append(search_id)
-            
-            for search_id in expired:
-                search_info = search_engine.active_searches.pop(search_id, None)
-                if search_info:
-                    future = search_info["future"]
-                    if not future.done():
-                        try:
-                            future.set_exception(TimeoutError("Search expired"))
-                        except:
-                            pass
-            
-            if expired:
-                logger.info(f"🧹 Cleaned {len(expired)} expired searches")
-                
-        except Exception as e:
-            logger.error(f"Error in cleanup: {e}")
 
 # ================== WEB SERVER ==================
 
