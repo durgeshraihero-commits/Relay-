@@ -2183,18 +2183,18 @@ async def start_web_server():
             content_type="text/plain"
         )
     
-    async def bot_stats(request):
-        if not admin_panel:
-            return web.json_response({"error": "Bot not ready"}, status=503)
-        
-                stats = await admin_panel.get_bot_statistics()
-        return web.json_response({
-            "status": "running",
-            "users": stats.get('total_users', 0),
-            "searches_today": stats.get('today_searches', 0),
-            "uptime": int(time.time() - start_time)
-        })
     
+    async def bot_stats(request):
+    if not admin_panel:
+        return web.json_response({"error": "Bot not ready"}, status=503)
+
+    stats = await admin_panel.get_bot_statistics()
+    return web.json_response({
+        "status": "running",
+        "users": stats.get('total_users', 0),
+        "searches_today": stats.get('today_searches', 0),
+        "uptime": int(time.time() - start_time)
+    })
     # FIX: Add all routes
     app.router.add_get("/", root_handler)  # Root endpoint
     app.router.add_get("/health", health_check)
