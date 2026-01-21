@@ -1,6 +1,7 @@
 """
 DarkBoxes Intelligence System - Premium Edition
 Advanced information retrieval with premium interface
+Professional Admin Panel
 """
 
 import os
@@ -12,9 +13,15 @@ import uuid
 import logging
 import asyncio
 import secrets
+import traceback
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Union
 from dataclasses import dataclass
+from collections import Counter, defaultdict
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from io import BytesIO
 
 # Third-party imports
 try:
@@ -23,9 +30,11 @@ try:
     from telethon.tl.types import PeerChannel, PeerUser, Channel, User, MessageMediaDocument
     from telethon.tl.functions.channels import GetParticipantRequest
     from pymongo import MongoClient
+    import pandas as pd
+    from bson import ObjectId
 except ImportError as e:
     print(f"Missing required dependency: {e}")
-    print("Install with: pip install telethon aiohttp pymongo")
+    print("Install with: pip install telethon aiohttp pymongo pandas matplotlib")
     sys.exit(1)
 
 # ================== CONFIGURATION ==================
@@ -535,12 +544,266 @@ class TextProcessor:
         
         return content.strip()
 
+# ================== ADMIN DATABASE MANAGER ==================
+
+class AdminDatabaseManager:
+    def __init__(self, db_manager):
+        self.db = db_manager.db
+    
+    async def get_today_stats(self) -> Dict:
+        """Get today's statistics"""
+        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        # Total users today
+        new_users = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: self.db.users.count_documents({
+                "joined_at": {"$gte": today.isoformat()}
+            })
+        )
+        
+        # Total searches today
+        search_logs = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: list(self.db.search_logs.find({
+                "timestamp": {"$gte": today.isoformat()}
+            }))
+        )
+        
+        # Total payments today
+        payments = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: list(self.db.payments.find({
+                "timestamp": {"$gte": today.isoformat()},
+                "status": "completed"
+            }))
+        )
+        
+        total_payments = sum(p.get('amount', 0) for p in payments)
+        
+        return {
+            "new_users": new_users,
+            "total_searches": len(search_logs),
+            "total_payments": total_payments,
+            "payment_count": len(payments)
+        }
+    
+    async def get_user_stats(self, user_id: int) -> Dict:
+        """Get detailed user statistics"""
+        user = await asyncio.get_running_loop().run_in_executor(
+            None, self.db.users.find_one, {"user_id": user_id}
+        )
+        
+        if not user:
+            return {}
+        
+        # User's searches
+        user_searches = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: list(self.db.search_logs.find({"user_id": user_id}))
+        )
+        
+        # User's referrals
+        referrals = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: self.db.users.count_documents({"referred_by": str(user.get('referral_code', ''))})
+        )
+        
+        return {
+            "user_info": user,
+            "total_searches": len(user_searches),
+            "referrals": referrals,
+            "last_searches": user_searches[-10:] if len(user_searches) > 10 else user_searches
+        }
+    
+    async def get_top_users(self, limit: int = 10) -> List[Dict]:
+        """Get top users by searches"""
+        pipeline = [
+            {"$group": {
+                "_id": "$user_id",
+                "total_searches": {"$sum": 1},
+                "last_search": {"$max": "$timestamp"}
+            }},
+            {"$sort": {"total_searches": -1}},
+            {"$limit": limit},
+            {"$lookup": {
+                "from": "users",
+                "localField": "_id",
+                "foreignField": "user_id",
+                "as": "user_info"
+            }},
+            {"$unwind": "$user_info"},
+            {"$project": {
+                "user_id": "$_id",
+                "username": "$user_info.username",
+                "first_name": "$user_info.first_name",
+                "total_searches": 1,
+                "last_search": 1,
+                "searches_remaining": "$user_info.searches_remaining",
+                "subscription": "$user_info.subscription"
+            }}
+        ]
+        
+        return await asyncio.get_running_loop().run_in_executor(
+            None, lambda: list(self.db.search_logs.aggregate(pipeline))
+        )
+    
+    async def get_command_stats(self) -> Dict:
+        """Get command usage statistics"""
+        pipeline = [
+            {"$group": {
+                "_id": "$search_type",
+                "count": {"$sum": 1},
+                "unique_users": {"$addToSet": "$user_id"}
+            }},
+            {"$project": {
+                "command": "$_id",
+                "count": 1,
+                "unique_users": {"$size": "$unique_users"}
+            }},
+            {"$sort": {"count": -1}}
+        ]
+        
+        command_stats = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: list(self.db.search_logs.aggregate(pipeline))
+        )
+        
+        # Get today's command stats
+        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        today_pipeline = [
+            {"$match": {"timestamp": {"$gte": today.isoformat()}}},
+            {"$group": {
+                "_id": "$search_type",
+                "count": {"$sum": 1}
+            }},
+            {"$sort": {"count": -1}}
+        ]
+        
+        today_stats = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: list(self.db.search_logs.aggregate(today_pipeline))
+        )
+        
+        return {
+            "all_time": command_stats,
+            "today": today_stats
+        }
+    
+    async def get_referral_stats(self) -> Dict:
+        """Get referral statistics"""
+        pipeline = [
+            {"$match": {"referrals": {"$gt": 0}}},
+            {"$sort": {"referrals": -1}},
+            {"$limit": 20},
+            {"$project": {
+                "user_id": 1,
+                "username": 1,
+                "first_name": 1,
+                "referrals": 1,
+                "referral_code": 1,
+                "referral_credits": 1
+            }}
+        ]
+        
+        top_referrers = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: list(self.db.users.aggregate(pipeline))
+        )
+        
+        total_referrals = sum(user.get('referrals', 0) for user in top_referrers)
+        
+        return {
+            "top_referrers": top_referrers,
+            "total_referrals": total_referrals
+        }
+    
+    async def get_payment_stats(self) -> Dict:
+        """Get payment statistics"""
+        pipeline = [
+            {"$match": {"status": "completed"}},
+            {"$group": {
+                "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": {"$toDate": "$timestamp"}}},
+                "total_amount": {"$sum": "$amount"},
+                "count": {"$sum": 1}
+            }},
+            {"$sort": {"_id": -1}},
+            {"$limit": 30}
+        ]
+        
+        daily_stats = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: list(self.db.payments.aggregate(pipeline))
+        )
+        
+        # Total revenue
+        total_revenue = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: self.db.payments.aggregate([
+                {"$match": {"status": "completed"}},
+                {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
+            ])
+        )
+        
+        total_revenue = list(total_revenue)
+        total = total_revenue[0]['total'] if total_revenue else 0
+        
+        return {
+            "daily_stats": daily_stats,
+            "total_revenue": total
+        }
+    
+    async def get_user_list(self, page: int = 1, limit: int = 20) -> Dict:
+        """Get paginated user list"""
+        skip = (page - 1) * limit
+        
+        users = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: list(self.db.users.find(
+                {},
+                {"user_id": 1, "username": 1, "first_name": 1, "joined_at": 1, "total_searches": 1}
+            ).sort("joined_at", -1).skip(skip).limit(limit))
+        )
+        
+        total_users = await asyncio.get_running_loop().run_in_executor(
+            None, self.db.users.count_documents, {}
+        )
+        
+        total_pages = (total_users + limit - 1) // limit
+        
+        return {
+            "users": users,
+            "page": page,
+            "total_pages": total_pages,
+            "total_users": total_users
+        }
+    
+    async def search_users(self, query: str) -> List[Dict]:
+        """Search users by username, name, or user_id"""
+        try:
+            # Try user_id if query is numeric
+            if query.isdigit():
+                user_id = int(query)
+                users = await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: list(self.db.users.find(
+                        {"user_id": user_id},
+                        {"user_id": 1, "username": 1, "first_name": 1, "joined_at": 1, "total_searches": 1}
+                    ))
+                )
+            else:
+                # Search by username or first name
+                regex = re.compile(f".*{re.escape(query)}.*", re.IGNORECASE)
+                users = await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: list(self.db.users.find(
+                        {"$or": [
+                            {"username": regex},
+                            {"first_name": regex}
+                        ]},
+                        {"user_id": 1, "username": 1, "first_name": 1, "joined_at": 1, "total_searches": 1}
+                    ))
+                )
+            
+            return users
+        except Exception as e:
+            logger.error(f"Error searching users: {e}")
+            return []
+
 # ================== DATABASE MANAGER ==================
 
 class DatabaseManager:
     def __init__(self):
         self.client = None
         self.db = None
+        self.admin_db = None
     
     async def connect(self) -> bool:
         """Connect to MongoDB"""
@@ -549,6 +812,22 @@ class DatabaseManager:
             self.client = MongoClient(config.MONGODB_URI, serverSelectionTimeoutMS=5000)
             self.client.server_info()
             self.db = self.client[config.MONGODB_DBNAME]
+            self.admin_db = AdminDatabaseManager(self)
+            
+            # Create indexes
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.users.create_index([("user_id", 1)], unique=True)
+            )
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.search_logs.create_index([("timestamp", -1)])
+            )
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.search_logs.create_index([("user_id", 1), ("timestamp", -1)])
+            )
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.payments.create_index([("timestamp", -1)])
+            )
+            
             logger.info("✅ MongoDB connected")
             return True
         except Exception as e:
@@ -579,7 +858,9 @@ class DatabaseManager:
                 "referral_credits": 0,
                 "subscription": None,
                 "subscription_expiry": None,
-                "wallet_balance": 0
+                "wallet_balance": 0,
+                "is_banned": False,
+                "is_admin": False
             }
             
             if referral_info:
@@ -610,8 +891,8 @@ class DatabaseManager:
             logger.error(f"❌ Error getting user: {e}")
             return None
     
-    async def update_searches(self, user_id: int, decrement: int = 1) -> bool:
-        """Update user search count"""
+    async def update_searches(self, user_id: int, search_type: str, query: str, success: bool = True) -> bool:
+        """Update user search count and log search"""
         try:
             user = await self.get_user(user_id)
             if not user:
@@ -634,6 +915,21 @@ class DatabaseManager:
                             }
                         )
                     )
+                    
+                    # Log search
+                    search_log = {
+                        "user_id": user_id,
+                        "search_type": search_type,
+                        "query": query,
+                        "success": success,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "credits_used": 0,
+                        "subscription_used": subscription
+                    }
+                    
+                    await asyncio.get_running_loop().run_in_executor(
+                        None, lambda: self.db.search_logs.insert_one(search_log)
+                    )
                     return True
             
             # Use credits
@@ -641,17 +937,34 @@ class DatabaseManager:
             if searches_remaining <= 0:
                 return False
             
+            credits_used = SEARCH_COMMANDS.get(search_type, {}).get("cost", 1)
+            
             await asyncio.get_running_loop().run_in_executor(
                 None, lambda: self.db.users.update_one(
                     {"user_id": user_id},
                     {
                         "$inc": {
-                            "searches_remaining": -decrement,
-                            "total_searches": decrement
+                            "searches_remaining": -credits_used,
+                            "total_searches": 1
                         },
                         "$set": {"last_seen": datetime.now(timezone.utc).isoformat()}
                     }
                 )
+            )
+            
+            # Log search
+            search_log = {
+                "user_id": user_id,
+                "search_type": search_type,
+                "query": query,
+                "success": success,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "credits_used": credits_used,
+                "subscription_used": None
+            }
+            
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.search_logs.insert_one(search_log)
             )
             return True
         except Exception as e:
@@ -676,6 +989,21 @@ class DatabaseManager:
                     }
                 )
             )
+            
+            # Log payment
+            payment_log = {
+                "user_id": user_id,
+                "plan_id": plan_id,
+                "amount": plan["price"],
+                "status": "completed",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "admin_added": True
+            }
+            
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.payments.insert_one(payment_log)
+            )
+            
             return True
         except Exception as e:
             logger.error(f"❌ Error adding subscription: {e}")
@@ -699,6 +1027,90 @@ class DatabaseManager:
             return True
         except Exception as e:
             logger.error(f"❌ Error adding referral credit: {e}")
+            return False
+    
+    async def ban_user(self, user_id: int, reason: str = "Violation of terms") -> bool:
+        """Ban a user"""
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.users.update_one(
+                    {"user_id": user_id},
+                    {
+                        "$set": {
+                            "is_banned": True,
+                            "ban_reason": reason,
+                            "banned_at": datetime.now(timezone.utc).isoformat()
+                        }
+                    }
+                )
+            )
+            return True
+        except Exception as e:
+            logger.error(f"❌ Error banning user: {e}")
+            return False
+    
+    async def unban_user(self, user_id: int) -> bool:
+        """Unban a user"""
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.users.update_one(
+                    {"user_id": user_id},
+                    {
+                        "$set": {
+                            "is_banned": False
+                        },
+                        "$unset": {
+                            "ban_reason": "",
+                            "banned_at": ""
+                        }
+                    }
+                )
+            )
+            return True
+        except Exception as e:
+            logger.error(f"❌ Error unbanning user: {e}")
+            return False
+    
+    async def add_admin(self, user_id: int) -> bool:
+        """Add user as admin"""
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.users.update_one(
+                    {"user_id": user_id},
+                    {"$set": {"is_admin": True}}
+                )
+            )
+            return True
+        except Exception as e:
+            logger.error(f"❌ Error adding admin: {e}")
+            return False
+    
+    async def remove_admin(self, user_id: int) -> bool:
+        """Remove user from admin"""
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.users.update_one(
+                    {"user_id": user_id},
+                    {"$set": {"is_admin": False}}
+                )
+            )
+            return True
+        except Exception as e:
+            logger.error(f"❌ Error removing admin: {e}")
+            return False
+    
+    async def add_credits(self, user_id: int, credits: int) -> bool:
+        """Add credits to user"""
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.users.update_one(
+                    {"user_id": user_id},
+                    {"$inc": {"searches_remaining": credits}}
+                )
+            )
+            return True
+        except Exception as e:
+            logger.error(f"❌ Error adding credits: {e}")
             return False
 
 # ================== ONE COMMAND PER LINE KEYBOARD ==================
@@ -730,29 +1142,82 @@ class OneLineKeyboard:
         
         # Add admin button if admin
         if is_admin:
-            buttons.append([Button.inline("⚙️ Admin Panel", "admin")])
+            buttons.append([Button.inline("⚙️ Admin Panel", "admin_panel")])
         
         return buttons
     
     @staticmethod
-    def search_type_menu(search_type: str) -> List[List[Button]]:
-        """Menu for specific search type"""
-        cmd = SEARCH_COMMANDS.get(search_type, {})
-        return [
-            [Button.inline(f"{cmd.get('icon', '🔍')} {cmd.get('name', 'Search')}", f"info_{search_type}")],
-            [Button.inline("« Back to Main Menu", "main_menu")]
+    def admin_panel() -> List[List[Button]]:
+        """Professional admin panel with all features"""
+        buttons = [
+            [Button.inline("📊 Today's Stats", "admin_today")],
+            [Button.inline("👥 User Management", "admin_users")],
+            [Button.inline("📈 Search Analytics", "admin_analytics")],
+            [Button.inline("💰 Payment Stats", "admin_payments")],
+            [Button.inline("🔍 Search Users", "admin_search_user")],
+            [Button.inline("📢 Broadcast", "admin_broadcast")],
+            [Button.inline("⚙️ Bot Settings", "admin_settings")],
+            [Button.inline("🚫 Ban/Unban User", "admin_ban")],
+            [Button.inline("👑 Add/Remove Admin", "admin_admin")],
+            [Button.inline("🎯 Add Credits", "admin_add_credits")],
+            [Button.inline("📊 Export Data", "admin_export")],
+            [Button.inline("« Main Menu", "main_menu")]
         ]
+        return buttons
     
     @staticmethod
-    def subscription_plans() -> List[List[Button]]:
-        """Premium subscription plans - one per line"""
+    def user_management_panel() -> List[List[Button]]:
+        """User management panel"""
+        buttons = [
+            [Button.inline("📋 User List", "admin_user_list_1")],
+            [Button.inline("🏆 Top Users", "admin_top_users")],
+            [Button.inline("📊 Referral Stats", "admin_referrals")],
+            [Button.inline("« Admin Panel", "admin_panel")]
+        ]
+        return buttons
+    
+    @staticmethod
+    def analytics_panel() -> List[List[Button]]:
+        """Analytics panel"""
+        buttons = [
+            [Button.inline("📈 Command Usage", "admin_command_stats")],
+            [Button.inline("📊 Daily Stats Graph", "admin_graph_daily")],
+            [Button.inline("📋 Most Used Commands", "admin_top_commands")],
+            [Button.inline("👤 User Activity", "admin_user_activity")],
+            [Button.inline("« Admin Panel", "admin_panel")]
+        ]
+        return buttons
+    
+    @staticmethod
+    def payment_panel() -> List[List[Button]]:
+        """Payment management panel"""
+        buttons = [
+            [Button.inline("💰 Today's Revenue", "admin_today_payments")],
+            [Button.inline("📊 Revenue Graph", "admin_graph_revenue")],
+            [Button.inline("💸 Total Revenue", "admin_total_revenue")],
+            [Button.inline("« Admin Panel", "admin_panel")]
+        ]
+        return buttons
+    
+    @staticmethod
+    def user_list_buttons(page: int, total_pages: int) -> List[List[Button]]:
+        """User list pagination buttons"""
         buttons = []
         
-        for plan_id, plan in SUBSCRIPTION_PLANS.items():
-            label = f"{plan['icon']} {plan['name']} - ₹{plan['price']}"
-            buttons.append([Button.inline(label, f"buy_{plan_id}")])
+        # Navigation buttons
+        nav_row = []
+        if page > 1:
+            nav_row.append(Button.inline("⬅️ Previous", f"admin_user_list_{page-1}"))
+        nav_row.append(Button.inline(f"{page}/{total_pages}", "noop"))
+        if page < total_pages:
+            nav_row.append(Button.inline("Next ➡️", f"admin_user_list_{page+1}"))
         
-        buttons.append([Button.inline("« Back to Main Menu", "main_menu")])
+        if nav_row:
+            buttons.append(nav_row)
+        
+        buttons.append([Button.inline("« User Management", "admin_users")])
+        buttons.append([Button.inline("« Admin Panel", "admin_panel")])
+        
         return buttons
     
     @staticmethod
@@ -761,23 +1226,1090 @@ class OneLineKeyboard:
         return [[Button.inline("❌ Cancel", "main_menu")]]
     
     @staticmethod
-    def payment_buttons(plan_id: str) -> List[List[Button]]:
-        """Payment confirmation buttons"""
-        return [
-            [Button.inline("✅ Payment Done", f"confirm_{plan_id}")],
-            [Button.inline("❌ Cancel", "premium")]
-        ]
+    def back_to_admin() -> List[List[Button]]:
+        """Back to admin panel button"""
+        return [[Button.inline("« Back to Admin", "admin_panel")]]
     
     @staticmethod
-    def admin_controls() -> List[List[Button]]:
-        """Admin control panel - one per line"""
+    def confirm_buttons(action: str, target_id: int) -> List[List[Button]]:
+        """Confirmation buttons for actions"""
         return [
-            [Button.inline("📊 Statistics", "admin_stats")],
-            [Button.inline("📢 Broadcast Message", "admin_broadcast")],
-            [Button.inline("⚙️ Settings", "admin_settings")],
-            [Button.inline("👥 User Management", "admin_users")],
-            [Button.inline("« Main Menu", "main_menu")]
+            [Button.inline(f"✅ Confirm {action}", f"confirm_{action}_{target_id}")],
+            [Button.inline("❌ Cancel", "admin_panel")]
         ]
+
+# ================== ADMIN PANEL HANDLER ==================
+
+class AdminPanelHandler:
+    def __init__(self, db_manager: DatabaseManager, bot_client: TelegramClient):
+        self.db = db_manager
+        self.bot = bot_client
+        self.admin_users = set()
+        
+        # Load admin users from database
+        asyncio.create_task(self.load_admin_users())
+    
+    async def load_admin_users(self):
+        """Load admin users from database"""
+        try:
+            admins = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: list(self.db.db.users.find({"is_admin": True}, {"user_id": 1}))
+            )
+            self.admin_users = {admin["user_id"] for admin in admins}
+            logger.info(f"✅ Loaded {len(self.admin_users)} admin users")
+        except Exception as e:
+            logger.error(f"❌ Error loading admin users: {e}")
+    
+    def is_admin(self, user_id: int) -> bool:
+        """Check if user is admin"""
+        return user_id in self.admin_users or user_id == config.ADMIN_USER_ID
+    
+    async def handle_admin_callback(self, event):
+        """Handle admin panel callbacks"""
+        try:
+            user_id = event.sender_id
+            
+            if not self.is_admin(user_id):
+                await event.answer("❌ Access denied", alert=True)
+                return
+            
+            data = event.data.decode()
+            
+            if data == "admin_panel":
+                await self.show_admin_panel(event)
+            
+            elif data == "admin_today":
+                await self.show_today_stats(event)
+            
+            elif data.startswith("admin_user_list_"):
+                page = int(data.split("_")[-1])
+                await self.show_user_list(event, page)
+            
+            elif data == "admin_users":
+                await self.show_user_management(event)
+            
+            elif data == "admin_top_users":
+                await self.show_top_users(event)
+            
+            elif data == "admin_referrals":
+                await self.show_referral_stats(event)
+            
+            elif data == "admin_analytics":
+                await self.show_analytics_panel(event)
+            
+            elif data == "admin_command_stats":
+                await self.show_command_stats(event)
+            
+            elif data == "admin_top_commands":
+                await self.show_top_commands(event)
+            
+            elif data == "admin_user_activity":
+                await self.show_user_activity(event)
+            
+            elif data == "admin_graph_daily":
+                await self.generate_daily_graph(event)
+            
+            elif data == "admin_payments":
+                await self.show_payment_panel(event)
+            
+            elif data == "admin_today_payments":
+                await self.show_today_payments(event)
+            
+            elif data == "admin_total_revenue":
+                await self.show_total_revenue(event)
+            
+            elif data == "admin_graph_revenue":
+                await self.generate_revenue_graph(event)
+            
+            elif data == "admin_search_user":
+                await self.ask_for_user_search(event)
+            
+            elif data == "admin_broadcast":
+                await self.ask_for_broadcast(event)
+            
+            elif data == "admin_ban":
+                await self.ask_for_ban_user(event)
+            
+            elif data == "admin_admin":
+                await self.ask_for_admin_management(event)
+            
+            elif data == "admin_add_credits":
+                await self.ask_for_add_credits(event)
+            
+            elif data == "admin_settings":
+                await self.show_bot_settings(event)
+            
+            elif data == "admin_export":
+                await self.export_data(event)
+            
+            elif data.startswith("confirm_ban_"):
+                target_id = int(data.split("_")[-1])
+                await self.confirm_ban_user(event, target_id)
+            
+            elif data.startswith("confirm_unban_"):
+                target_id = int(data.split("_")[-1])
+                await self.confirm_unban_user(event, target_id)
+            
+            elif data.startswith("confirm_add_admin_"):
+                target_id = int(data.split("_")[-1])
+                await self.confirm_add_admin(event, target_id)
+            
+            elif data.startswith("confirm_remove_admin_"):
+                target_id = int(data.split("_")[-1])
+                await self.confirm_remove_admin(event, target_id)
+            
+            elif data.startswith("user_detail_"):
+                target_id = int(data.split("_")[-1])
+                await self.show_user_detail(event, target_id)
+            
+        except Exception as e:
+            logger.error(f"❌ Error in admin callback: {e}")
+            await event.answer("❌ Error processing request", alert=True)
+    
+    async def show_admin_panel(self, event):
+        """Show main admin panel"""
+        admin_text = (
+            "⚙️ **DARKBOXES ADMIN PANEL**\n\n"
+            "📊 **Quick Stats**\n"
+        )
+        
+        # Get quick stats
+        try:
+            today_stats = await self.db.admin_db.get_today_stats()
+            admin_text += f"├─ Today's Users: {today_stats['new_users']}\n"
+            admin_text += f"├─ Today's Searches: {today_stats['total_searches']}\n"
+            admin_text += f"├─ Today's Payments: ₹{today_stats['total_payments']}\n"
+            
+            total_users = await asyncio.get_running_loop().run_in_executor(
+                None, self.db.db.users.count_documents, {}
+            )
+            admin_text += f"└─ Total Users: {total_users}\n"
+        except Exception as e:
+            logger.error(f"Error getting stats: {e}")
+            admin_text += "⚠️ Error loading stats\n"
+        
+        admin_text += "\n🔧 **Select an option below:**"
+        
+        await event.edit(admin_text, buttons=OneLineKeyboard.admin_panel(), parse_mode="md")
+    
+    async def show_today_stats(self, event):
+        """Show today's statistics in detail"""
+        try:
+            today_stats = await self.db.admin_db.get_today_stats()
+            command_stats = await self.db.admin_db.get_command_stats()
+            
+            stats_text = (
+                "📊 **TODAY'S STATISTICS**\n"
+                "═══════════════════════\n\n"
+                f"📈 **User Statistics**\n"
+                f"├─ New Users: {today_stats['new_users']}\n"
+                f"├─ Total Searches: {today_stats['total_searches']}\n"
+                f"├─ Total Payments: ₹{today_stats['total_payments']}\n"
+                f"└─ Payment Count: {today_stats['payment_count']}\n\n"
+            )
+            
+            if command_stats['today']:
+                stats_text += "🔍 **Top Commands Today**\n"
+                for i, cmd in enumerate(command_stats['today'][:5], 1):
+                    cmd_name = SEARCH_COMMANDS.get(cmd['_id'], {}).get('name', cmd['_id'])
+                    stats_text += f"{i}. {cmd_name}: {cmd['count']} searches\n"
+            
+            await event.edit(stats_text, buttons=OneLineKeyboard.back_to_admin(), parse_mode="md")
+        except Exception as e:
+            logger.error(f"Error showing today stats: {e}")
+            await event.edit("❌ Error loading statistics", buttons=OneLineKeyboard.back_to_admin())
+    
+    async def show_user_list(self, event, page: int = 1):
+        """Show paginated user list"""
+        try:
+            user_list = await self.db.admin_db.get_user_list(page, 15)
+            
+            users_text = f"👥 **USER LIST** (Page {page}/{user_list['total_pages']})\n"
+            users_text += "═══════════════════════\n\n"
+            
+            for i, user in enumerate(user_list['users'], 1):
+                idx = (page - 1) * 15 + i
+                username = f"@{user['username']}" if user.get('username') else "No username"
+                joined = user.get('joined_at', '')[:10]
+                searches = user.get('total_searches', 0)
+                
+                users_text += (
+                    f"{idx}. **{user['first_name']}**\n"
+                    f"   ├─ {username}\n"
+                    f"   ├─ ID: `{user['user_id']}`\n"
+                    f"   ├─ Joined: {joined}\n"
+                    f"   └─ Searches: {searches}\n\n"
+                )
+            
+            users_text += f"📊 **Total Users:** {user_list['total_users']}"
+            
+            await event.edit(
+                users_text,
+                buttons=OneLineKeyboard.user_list_buttons(page, user_list['total_pages']),
+                parse_mode="md"
+            )
+        except Exception as e:
+            logger.error(f"Error showing user list: {e}")
+            await event.edit("❌ Error loading user list", buttons=OneLineKeyboard.back_to_admin())
+    
+    async def show_user_management(self, event):
+        """Show user management panel"""
+        management_text = (
+            "👥 **USER MANAGEMENT**\n"
+            "═══════════════════════\n\n"
+            "📋 **Available Actions:**\n"
+            "• View all users with pagination\n"
+            "• View top users by searches\n"
+            "• View referral statistics\n"
+            "• Search for specific users\n"
+            "• View user details\n\n"
+            "Select an option below:"
+        )
+        
+        await event.edit(management_text, buttons=OneLineKeyboard.user_management_panel(), parse_mode="md")
+    
+    async def show_top_users(self, event):
+        """Show top users by searches"""
+        try:
+            top_users = await self.db.admin_db.get_top_users(15)
+            
+            top_text = "🏆 **TOP USERS BY SEARCHES**\n"
+            top_text += "═══════════════════════\n\n"
+            
+            for i, user in enumerate(top_users, 1):
+                username = f"@{user['username']}" if user.get('username') else "No username"
+                sub_status = user.get('subscription', 'None')
+                
+                top_text += (
+                    f"{i}. **{user['first_name']}**\n"
+                    f"   ├─ {username}\n"
+                    f"   ├─ ID: `{user['user_id']}`\n"
+                    f"   ├─ Searches: {user['total_searches']}\n"
+                    f"   ├─ Credits: {user.get('searches_remaining', 0)}\n"
+                    f"   ├─ Subscription: {sub_status}\n"
+                    f"   └─ Last: {user.get('last_search', '')[:10]}\n\n"
+                )
+            
+            await event.edit(top_text, buttons=OneLineKeyboard.back_to_admin(), parse_mode="md")
+        except Exception as e:
+            logger.error(f"Error showing top users: {e}")
+            await event.edit("❌ Error loading top users", buttons=OneLineKeyboard.back_to_admin())
+    
+    async def show_referral_stats(self, event):
+        """Show referral statistics"""
+        try:
+            referral_stats = await self.db.admin_db.get_referral_stats()
+            
+            ref_text = "📊 **REFERRAL STATISTICS**\n"
+            ref_text += "═══════════════════════\n\n"
+            
+            ref_text += f"📈 **Total Referrals:** {referral_stats['total_referrals']}\n\n"
+            
+            if referral_stats['top_referrers']:
+                ref_text += "🏆 **TOP REFERRERS**\n"
+                for i, user in enumerate(referral_stats['top_referrers'][:10], 1):
+                    username = f"@{user['username']}" if user.get('username') else "No username"
+                    ref_text += (
+                        f"{i}. **{user['first_name']}**\n"
+                        f"   ├─ {username}\n"
+                        f"   ├─ Referrals: {user['referrals']}\n"
+                        f"   ├─ Code: `{user.get('referral_code', 'N/A')}`\n"
+                        f"   └─ Credits: {user.get('referral_credits', 0)}\n\n"
+                    )
+            else:
+                ref_text += "No referrals yet.\n"
+            
+            await event.edit(ref_text, buttons=OneLineKeyboard.back_to_admin(), parse_mode="md")
+        except Exception as e:
+            logger.error(f"Error showing referral stats: {e}")
+            await event.edit("❌ Error loading referral statistics", buttons=OneLineKeyboard.back_to_admin())
+    
+    async def show_analytics_panel(self, event):
+        """Show analytics panel"""
+        analytics_text = (
+            "📈 **SEARCH ANALYTICS**\n"
+            "═══════════════════════\n\n"
+            "📊 **Available Reports:**\n"
+            "• Command usage statistics\n"
+            "• Daily activity graphs\n"
+            "• Most used commands\n"
+            "• User activity patterns\n\n"
+            "Select an option below:"
+        )
+        
+        await event.edit(analytics_text, buttons=OneLineKeyboard.analytics_panel(), parse_mode="md")
+    
+    async def show_command_stats(self, event):
+        """Show command usage statistics"""
+        try:
+            command_stats = await self.db.admin_db.get_command_stats()
+            
+            stats_text = "🔍 **COMMAND USAGE STATISTICS**\n"
+            stats_text += "═══════════════════════\n\n"
+            
+            # All-time stats
+            stats_text += "📊 **ALL-TIME STATS**\n"
+            total_searches = sum(cmd['count'] for cmd in command_stats['all_time'])
+            stats_text += f"Total Searches: {total_searches}\n\n"
+            
+            for cmd in command_stats['all_time'][:10]:
+                cmd_name = SEARCH_COMMANDS.get(cmd['command'], {}).get('name', cmd['command'])
+                percentage = (cmd['count'] / total_searches * 100) if total_searches > 0 else 0
+                stats_text += (
+                    f"• **{cmd_name}**\n"
+                    f"  ├─ Searches: {cmd['count']}\n"
+                    f"  ├─ Unique Users: {cmd['unique_users']}\n"
+                    f"  └─ Usage: {percentage:.1f}%\n\n"
+                )
+            
+            # Today's stats
+            if command_stats['today']:
+                stats_text += "📅 **TODAY'S STATS**\n"
+                for cmd in command_stats['today'][:5]:
+                    cmd_name = SEARCH_COMMANDS.get(cmd['_id'], {}).get('name', cmd['_id'])
+                    stats_text += f"• {cmd_name}: {cmd['count']}\n"
+            
+            await event.edit(stats_text, buttons=OneLineKeyboard.back_to_admin(), parse_mode="md")
+        except Exception as e:
+            logger.error(f"Error showing command stats: {e}")
+            await event.edit("❌ Error loading command statistics", buttons=OneLineKeyboard.back_to_admin())
+    
+    async def show_top_commands(self, event):
+        """Show most used commands"""
+        try:
+            command_stats = await self.db.admin_db.get_command_stats()
+            
+            top_text = "🎯 **MOST USED COMMANDS**\n"
+            top_text += "═══════════════════════\n\n"
+            
+            # Prepare data for bar chart
+            commands = []
+            counts = []
+            
+            for cmd in command_stats['all_time'][:8]:
+                cmd_name = SEARCH_COMMANDS.get(cmd['command'], {}).get('name', cmd['command'])
+                commands.append(cmd_name[:15])  # Truncate long names
+                counts.append(cmd['count'])
+            
+            # Create bar chart
+            plt.figure(figsize=(10, 6))
+            bars = plt.bar(commands, counts, color='skyblue')
+            plt.title('Most Used Commands', fontsize=14, fontweight='bold')
+            plt.xlabel('Commands', fontsize=12)
+            plt.ylabel('Number of Searches', fontsize=12)
+            plt.xticks(rotation=45, ha='right')
+            
+            # Add value labels on bars
+            for bar in bars:
+                height = bar.get_height()
+                plt.text(bar.get_x() + bar.get_width()/2., height,
+                        f'{int(height)}', ha='center', va='bottom')
+            
+            plt.tight_layout()
+            
+            # Save to bytes
+            buf = BytesIO()
+            plt.savefig(buf, format='png', dpi=100)
+            buf.seek(0)
+            plt.close()
+            
+            # Send image
+            await event.delete()
+            await self.bot.send_file(
+                event.chat_id,
+                buf,
+                caption="📊 **Command Usage Visualization**",
+                buttons=OneLineKeyboard.back_to_admin()
+            )
+            
+        except Exception as e:
+            logger.error(f"Error generating command chart: {e}")
+            await event.edit("❌ Error generating visualization", buttons=OneLineKeyboard.back_to_admin())
+    
+    async def show_user_activity(self, event):
+        """Show user activity patterns"""
+        try:
+            # Get activity data for last 7 days
+            seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+            
+            pipeline = [
+                {"$match": {"timestamp": {"$gte": seven_days_ago.isoformat()}}},
+                {"$group": {
+                    "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": {"$toDate": "$timestamp"}}},
+                    "count": {"$sum": 1},
+                    "unique_users": {"$addToSet": "$user_id"}
+                }},
+                {"$project": {
+                    "date": "$_id",
+                    "searches": "$count",
+                    "unique_users": {"$size": "$unique_users"}
+                }},
+                {"$sort": {"date": 1}}
+            ]
+            
+            activity_data = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: list(self.db.db.search_logs.aggregate(pipeline))
+            )
+            
+            if not activity_data:
+                await event.edit("📊 No activity data available for the last 7 days.", 
+                               buttons=OneLineKeyboard.back_to_admin())
+                return
+            
+            # Create visualization
+            dates = [data['date'][5:] for data in activity_data]  # Remove year
+            searches = [data['searches'] for data in activity_data]
+            users = [data['unique_users'] for data in activity_data]
+            
+            plt.figure(figsize=(12, 6))
+            
+            x = range(len(dates))
+            width = 0.35
+            
+            plt.bar([i - width/2 for i in x], searches, width, label='Searches', color='skyblue')
+            plt.bar([i + width/2 for i in x], users, width, label='Unique Users', color='lightcoral')
+            
+            plt.title('User Activity (Last 7 Days)', fontsize=14, fontweight='bold')
+            plt.xlabel('Date', fontsize=12)
+            plt.ylabel('Count', fontsize=12)
+            plt.xticks(x, dates, rotation=45)
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            plt.tight_layout()
+            
+            # Add value labels
+            for i, (s, u) in enumerate(zip(searches, users)):
+                plt.text(i - width/2, s + max(searches)*0.01, str(s), 
+                        ha='center', va='bottom', fontsize=8)
+                plt.text(i + width/2, u + max(users)*0.01, str(u), 
+                        ha='center', va='bottom', fontsize=8)
+            
+            # Save to bytes
+            buf = BytesIO()
+            plt.savefig(buf, format='png', dpi=100)
+            buf.seek(0)
+            plt.close()
+            
+            # Calculate totals
+            total_searches = sum(searches)
+            total_users = sum(users)
+            avg_searches = total_searches / len(activity_data)
+            
+            caption = (
+                f"📊 **User Activity Analysis**\n\n"
+                f"📈 **Last 7 Days Summary:**\n"
+                f"├─ Total Searches: {total_searches}\n"
+                f"├─ Total Unique Users: {total_users}\n"
+                f"├─ Average Daily Searches: {avg_searches:.1f}\n"
+                f"└─ Peak Day: {dates[searches.index(max(searches))]} ({max(searches)} searches)"
+            )
+            
+            # Send image
+            await event.delete()
+            await self.bot.send_file(
+                event.chat_id,
+                buf,
+                caption=caption,
+                buttons=OneLineKeyboard.back_to_admin()
+            )
+            
+        except Exception as e:
+            logger.error(f"Error generating activity chart: {e}")
+            await event.edit("❌ Error generating activity visualization", 
+                           buttons=OneLineKeyboard.back_to_admin())
+    
+    async def generate_daily_graph(self, event):
+        """Generate daily activity graph"""
+        try:
+            # Get daily stats for last 30 days
+            thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+            
+            pipeline = [
+                {"$match": {"timestamp": {"$gte": thirty_days_ago.isoformat()}}},
+                {"$group": {
+                    "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": {"$toDate": "$timestamp"}}},
+                    "searches": {"$sum": 1},
+                    "users": {"$addToSet": "$user_id"}
+                }},
+                {"$project": {
+                    "date": "$_id",
+                    "searches": 1,
+                    "users": {"$size": "$users"}
+                }},
+                {"$sort": {"date": 1}}
+            ]
+            
+            daily_data = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: list(self.db.db.search_logs.aggregate(pipeline))
+            )
+            
+            if not daily_data:
+                await event.edit("📊 No activity data available.", 
+                               buttons=OneLineKeyboard.back_to_admin())
+                return
+            
+            # Prepare data
+            dates = [data['date'][5:] for data in daily_data]  # Remove year
+            searches = [data['searches'] for data in daily_data]
+            
+            # Create line chart
+            plt.figure(figsize=(14, 7))
+            plt.plot(dates, searches, marker='o', linewidth=2, markersize=6, color='royalblue')
+            plt.fill_between(dates, searches, alpha=0.3, color='skyblue')
+            
+            plt.title('Daily Search Activity (Last 30 Days)', fontsize=16, fontweight='bold')
+            plt.xlabel('Date', fontsize=12)
+            plt.ylabel('Number of Searches', fontsize=12)
+            plt.xticks(rotation=45, ha='right')
+            plt.grid(True, alpha=0.3)
+            
+            # Highlight max point
+            max_idx = searches.index(max(searches))
+            plt.plot(dates[max_idx], searches[max_idx], 'ro', markersize=10)
+            plt.annotate(f'Peak: {searches[max_idx]}', 
+                        xy=(dates[max_idx], searches[max_idx]),
+                        xytext=(10, 10), textcoords='offset points',
+                        fontsize=10, color='red', fontweight='bold')
+            
+            plt.tight_layout()
+            
+            # Calculate statistics
+            total_searches = sum(searches)
+            avg_searches = total_searches / len(searches)
+            growth = ((searches[-1] - searches[0]) / searches[0] * 100) if searches[0] > 0 else 0
+            
+            # Save to bytes
+            buf = BytesIO()
+            plt.savefig(buf, format='png', dpi=100)
+            buf.seek(0)
+            plt.close()
+            
+            caption = (
+                f"📈 **Daily Activity Analysis**\n\n"
+                f"📊 **Statistics (Last 30 Days):**\n"
+                f"├─ Total Searches: {total_searches}\n"
+                f"├─ Average Daily: {avg_searches:.1f}\n"
+                f"├─ Peak Activity: {searches[max_idx]} searches\n"
+                f"└─ Growth Rate: {growth:+.1f}%\n\n"
+                f"📅 **Trend Analysis:**\n"
+            )
+            
+            if growth > 0:
+                caption += "📈 Positive growth trend detected\n"
+            else:
+                caption += "📉 Negative growth trend detected\n"
+            
+            # Send image
+            await event.delete()
+            await self.bot.send_file(
+                event.chat_id,
+                buf,
+                caption=caption,
+                buttons=OneLineKeyboard.back_to_admin()
+            )
+            
+        except Exception as e:
+            logger.error(f"Error generating daily graph: {e}")
+            await event.edit("❌ Error generating daily graph", 
+                           buttons=OneLineKeyboard.back_to_admin())
+    
+    async def show_payment_panel(self, event):
+        """Show payment management panel"""
+        payment_text = (
+            "💰 **PAYMENT MANAGEMENT**\n"
+            "═══════════════════════\n\n"
+            "📊 **Available Reports:**\n"
+            "• Today's revenue\n"
+            "• Revenue graphs\n"
+            "• Total revenue\n"
+            "• Payment history\n\n"
+            "Select an option below:"
+        )
+        
+        await event.edit(payment_text, buttons=OneLineKeyboard.payment_panel(), parse_mode="md")
+    
+    async def show_today_payments(self, event):
+        """Show today's payment statistics"""
+        try:
+            today_stats = await self.db.admin_db.get_today_stats()
+            payment_stats = await self.db.admin_db.get_payment_stats()
+            
+            # Get today's payments
+            today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+            today_payments = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: list(self.db.db.payments.find({
+                    "timestamp": {"$gte": today.isoformat()},
+                    "status": "completed"
+                }).sort("timestamp", -1).limit(10))
+            )
+            
+            payment_text = "💰 **TODAY'S PAYMENTS**\n"
+            payment_text += "═══════════════════════\n\n"
+            
+            payment_text += f"📊 **Summary**\n"
+            payment_text += f"├─ Total Revenue: ₹{today_stats['total_payments']}\n"
+            payment_text += f"├─ Number of Payments: {today_stats['payment_count']}\n"
+            payment_text += f"└─ Average Payment: ₹{today_stats['total_payments']/today_stats['payment_count']:.2f}\n\n"
+            
+            if today_payments:
+                payment_text += "📋 **Recent Payments**\n"
+                for i, payment in enumerate(today_payments[:5], 1):
+                    plan = SUBSCRIPTION_PLANS.get(payment.get('plan_id', ''), {})
+                    plan_name = plan.get('name', payment.get('plan_id', 'N/A'))
+                    time_str = payment.get('timestamp', '')[:16]
+                    
+                    payment_text += (
+                        f"{i}. **₹{payment.get('amount', 0)}**\n"
+                        f"   ├─ Plan: {plan_name}\n"
+                        f"   ├─ User: `{payment.get('user_id', 'N/A')}`\n"
+                        f"   └─ Time: {time_str}\n\n"
+                    )
+            else:
+                payment_text += "No payments today.\n"
+            
+            await event.edit(payment_text, buttons=OneLineKeyboard.back_to_admin(), parse_mode="md")
+        except Exception as e:
+            logger.error(f"Error showing today payments: {e}")
+            await event.edit("❌ Error loading payment statistics", buttons=OneLineKeyboard.back_to_admin())
+    
+    async def show_total_revenue(self, event):
+        """Show total revenue statistics"""
+        try:
+            payment_stats = await self.db.admin_db.get_payment_stats()
+            
+            revenue_text = "💰 **TOTAL REVENUE**\n"
+            revenue_text += "═══════════════════════\n\n"
+            
+            revenue_text += f"📊 **Overall Statistics**\n"
+            revenue_text += f"├─ Total Revenue: ₹{payment_stats['total_revenue']}\n"
+            revenue_text += f"├─ Daily Average: ₹{payment_stats['total_revenue']/30:.2f}\n"
+            revenue_text += f"└─ Projected Monthly: ₹{payment_stats['total_revenue']:.2f}\n\n"
+            
+            if payment_stats['daily_stats']:
+                revenue_text += "📅 **Last 30 Days Revenue**\n"
+                total_last_30 = sum(day['total_amount'] for day in payment_stats['daily_stats'])
+                avg_last_30 = total_last_30 / len(payment_stats['daily_stats'])
+                
+                revenue_text += f"├─ Total (30 days): ₹{total_last_30}\n"
+                revenue_text += f"├─ Daily Average: ₹{avg_last_30:.2f}\n"
+                revenue_text += f"└─ Growth Potential: ₹{avg_last_30 * 30:.2f}/month\n\n"
+                
+                revenue_text += "📈 **Top 5 Revenue Days**\n"
+                top_days = sorted(payment_stats['daily_stats'], key=lambda x: x['total_amount'], reverse=True)[:5]
+                for i, day in enumerate(top_days, 1):
+                    revenue_text += f"{i}. {day['_id']}: ₹{day['total_amount']} ({day['count']} payments)\n"
+            
+            await event.edit(revenue_text, buttons=OneLineKeyboard.back_to_admin(), parse_mode="md")
+        except Exception as e:
+            logger.error(f"Error showing total revenue: {e}")
+            await event.edit("❌ Error loading revenue statistics", buttons=OneLineKeyboard.back_to_admin())
+    
+    async def generate_revenue_graph(self, event):
+        """Generate revenue graph"""
+        try:
+            payment_stats = await self.db.admin_db.get_payment_stats()
+            
+            if not payment_stats['daily_stats']:
+                await event.edit("💰 No revenue data available.", 
+                               buttons=OneLineKeyboard.back_to_admin())
+                return
+            
+            # Prepare data
+            dates = [day['_id'][5:] for day in payment_stats['daily_stats']]  # Remove year
+            amounts = [day['total_amount'] for day in payment_stats['daily_stats']]
+            counts = [day['count'] for day in payment_stats['daily_stats']]
+            
+            # Create figure with two subplots
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
+            
+            # Revenue line chart
+            ax1.plot(dates, amounts, marker='o', linewidth=2, markersize=6, color='green')
+            ax1.fill_between(dates, amounts, alpha=0.3, color='lightgreen')
+            ax1.set_title('Daily Revenue (Last 30 Days)', fontsize=14, fontweight='bold')
+            ax1.set_ylabel('Revenue (₹)', fontsize=12)
+            ax1.grid(True, alpha=0.3)
+            ax1.tick_params(axis='x', rotation=45)
+            
+            # Add value labels for peaks
+            for i, (date, amount) in enumerate(zip(dates, amounts)):
+                if amount == max(amounts):
+                    ax1.annotate(f'₹{amount}', xy=(date, amount),
+                                xytext=(0, 10), textcoords='offset points',
+                                fontsize=10, color='red', fontweight='bold',
+                                ha='center')
+            
+            # Payment count bar chart
+            bars = ax2.bar(dates, counts, color='orange', alpha=0.7)
+            ax2.set_title('Daily Payment Count', fontsize=14, fontweight='bold')
+            ax2.set_xlabel('Date', fontsize=12)
+            ax2.set_ylabel('Number of Payments', fontsize=12)
+            ax2.grid(True, alpha=0.3)
+            ax2.tick_params(axis='x', rotation=45)
+            
+            # Add value labels on bars
+            for bar in bars:
+                height = bar.get_height()
+                if height > 0:
+                    ax2.text(bar.get_x() + bar.get_width()/2., height,
+                            f'{int(height)}', ha='center', va='bottom', fontsize=9)
+            
+            plt.tight_layout()
+            
+            # Calculate statistics
+            total_revenue = sum(amounts)
+            total_payments = sum(counts)
+            avg_revenue = total_revenue / len(amounts)
+            avg_payments = total_payments / len(counts)
+            
+            # Save to bytes
+            buf = BytesIO()
+            plt.savefig(buf, format='png', dpi=100)
+            buf.seek(0)
+            plt.close()
+            
+            caption = (
+                f"📊 **Revenue Analysis**\n\n"
+                f"💰 **Last 30 Days Summary:**\n"
+                f"├─ Total Revenue: ₹{total_revenue}\n"
+                f"├─ Total Payments: {total_payments}\n"
+                f"├─ Average Daily Revenue: ₹{avg_revenue:.2f}\n"
+                f"├─ Average Daily Payments: {avg_payments:.1f}\n"
+                f"└─ Average Payment Value: ₹{total_revenue/total_payments:.2f}\n\n"
+                f"📈 **Insights:**\n"
+            )
+            
+            if avg_revenue > 1000:
+                caption += "• 📈 Strong revenue performance\n"
+            elif avg_revenue > 500:
+                caption += "• 📊 Moderate revenue growth\n"
+            else:
+                caption += "• ⚠️ Revenue needs improvement\n"
+            
+            # Send image
+            await event.delete()
+            await self.bot.send_file(
+                event.chat_id,
+                buf,
+                caption=caption,
+                buttons=OneLineKeyboard.back_to_admin()
+            )
+            
+        except Exception as e:
+            logger.error(f"Error generating revenue graph: {e}")
+            await event.edit("❌ Error generating revenue visualization", 
+                           buttons=OneLineKeyboard.back_to_admin())
+    
+    async def ask_for_user_search(self, event):
+        """Ask for user search query"""
+        await event.edit(
+            "🔍 **SEARCH USER**\n\n"
+            "Enter search criteria:\n"
+            "• User ID (numeric)\n"
+            "• Username (with or without @)\n"
+            "• First name\n\n"
+            "Type your search query:",
+            buttons=OneLineKeyboard.back_to_admin()
+        )
+        
+        # Set state for message handler
+        user_states[event.sender_id] = {"action": "admin_search_user"}
+    
+    async def ask_for_broadcast(self, event):
+        """Ask for broadcast message"""
+        await event.edit(
+            "📢 **BROADCAST MESSAGE**\n\n"
+            "Enter your broadcast message:\n"
+            "(Supports Markdown formatting)\n\n"
+            "Type your message:",
+            buttons=OneLineKeyboard.back_to_admin()
+        )
+        
+        user_states[event.sender_id] = {"action": "admin_broadcast"}
+    
+    async def ask_for_ban_user(self, event):
+        """Ask for user ID to ban/unban"""
+        await event.edit(
+            "🚫 **BAN/UNBAN USER**\n\n"
+            "Enter user ID to ban/unban:\n"
+            "(Numeric user ID)\n\n"
+            "Type the user ID:",
+            buttons=OneLineKeyboard.back_to_admin()
+        )
+        
+        user_states[event.sender_id] = {"action": "admin_ban"}
+    
+    async def ask_for_admin_management(self, event):
+        """Ask for user ID for admin management"""
+        await event.edit(
+            "👑 **ADMIN MANAGEMENT**\n\n"
+            "Enter user ID to add/remove as admin:\n"
+            "(Numeric user ID)\n\n"
+            "Type the user ID:",
+            buttons=OneLineKeyboard.back_to_admin()
+        )
+        
+        user_states[event.sender_id] = {"action": "admin_management"}
+    
+    async def ask_for_add_credits(self, event):
+        """Ask for user ID and credits to add"""
+        await event.edit(
+            "🎯 **ADD CREDITS**\n\n"
+            "Enter in format:\n"
+            "`user_id credits`\n\n"
+            "Example: `123456789 10`\n"
+            "This will add 10 credits to user 123456789\n\n"
+            "Type the command:",
+            buttons=OneLineKeyboard.back_to_admin()
+        )
+        
+        user_states[event.sender_id] = {"action": "admin_add_credits"}
+    
+    async def show_bot_settings(self, event):
+        """Show bot settings"""
+        settings_text = (
+            "⚙️ **BOT SETTINGS**\n"
+            "═══════════════════════\n\n"
+            "📊 **Current Configuration:**\n"
+            f"├─ Bot: @{bot_info.username}\n"
+            f"├─ Admin: {config.ADMIN_USER_ID}\n"
+            f"├─ New User Credits: {config.NEW_USER_CREDITS}\n"
+            f"├─ Referral Reward: {config.REFERRAL_REWARD}\n"
+            f"├─ Max File Size: {config.MAX_FILE_SIZE_MB}MB\n"
+            f"├─ Group Timeout: {config.GROUP_TIMEOUT}s\n"
+            f"└─ UPI ID: {config.UPI_ID}\n\n"
+            "🔄 **Available Actions:**\n"
+            "• Adjust user credits\n"
+            "• Modify referral rewards\n"
+            "• Update configuration\n"
+            "• Restart services\n\n"
+            "⚠️ **Note:** Some settings require bot restart."
+        )
+        
+        await event.edit(settings_text, buttons=OneLineKeyboard.back_to_admin(), parse_mode="md")
+    
+    async def export_data(self, event):
+        """Export bot data"""
+        try:
+            await event.edit("📥 **EXPORTING DATA...**\n\nThis may take a moment...")
+            
+            # Get all data
+            users = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: list(self.db.db.users.find({}, {
+                    "user_id": 1, "username": 1, "first_name": 1, 
+                    "joined_at": 1, "total_searches": 1, "searches_remaining": 1,
+                    "subscription": 1, "referrals": 1, "is_banned": 1
+                }))
+            )
+            
+            payments = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: list(self.db.db.payments.find({}, {
+                    "user_id": 1, "amount": 1, "plan_id": 1, 
+                    "timestamp": 1, "status": 1
+                }))
+            )
+            
+            searches = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: list(self.db.db.search_logs.find({}, {
+                    "user_id": 1, "search_type": 1, "query": 1,
+                    "timestamp": 1, "success": 1, "credits_used": 1
+                }).limit(10000))  # Limit to prevent memory issues
+            )
+            
+            # Create CSV data
+            import csv
+            from io import StringIO
+            
+            # Users CSV
+            users_csv = StringIO()
+            users_writer = csv.writer(users_csv)
+            users_writer.writerow(['User ID', 'Username', 'Name', 'Joined', 'Searches', 'Credits', 'Subscription', 'Referrals', 'Banned'])
+            for user in users:
+                users_writer.writerow([
+                    user.get('user_id', ''),
+                    user.get('username', ''),
+                    user.get('first_name', ''),
+                    user.get('joined_at', '')[:10],
+                    user.get('total_searches', 0),
+                    user.get('searches_remaining', 0),
+                    user.get('subscription', 'None'),
+                    user.get('referrals', 0),
+                    'Yes' if user.get('is_banned') else 'No'
+                ])
+            
+            users_csv.seek(0)
+            
+            # Payments CSV
+            payments_csv = StringIO()
+            payments_writer = csv.writer(payments_csv)
+            payments_writer.writerow(['User ID', 'Amount', 'Plan', 'Date', 'Status'])
+            for payment in payments:
+                payments_writer.writerow([
+                    payment.get('user_id', ''),
+                    payment.get('amount', 0),
+                    payment.get('plan_id', ''),
+                    payment.get('timestamp', '')[:10],
+                    payment.get('status', '')
+                ])
+            
+            payments_csv.seek(0)
+            
+            # Prepare message
+            export_text = (
+                "📊 **DATA EXPORT COMPLETE**\n\n"
+                f"✅ **Exported Data:**\n"
+                f"├─ Users: {len(users)} records\n"
+                f"├─ Payments: {len(payments)} records\n"
+                f"└─ Searches: {len(searches)} records\n\n"
+                "📁 **Files are ready for download.**\n"
+                "Use the buttons below to download:"
+            )
+            
+            buttons = [
+                [Button.inline("📥 Download Users CSV", "export_users")],
+                [Button.inline("📥 Download Payments CSV", "export_payments")],
+                [Button.inline("📥 Download Searches CSV", "export_searches")],
+                [Button.inline("« Admin Panel", "admin_panel")]
+            ]
+            
+            # Store export data temporarily
+            export_data_storage[event.sender_id] = {
+                "users": users_csv.getvalue(),
+                "payments": payments_csv.getvalue(),
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            await event.edit(export_text, buttons=buttons)
+            
+        except Exception as e:
+            logger.error(f"Error exporting data: {e}")
+            await event.edit("❌ Error exporting data", buttons=OneLineKeyboard.back_to_admin())
+    
+    async def show_user_detail(self, event, user_id: int):
+        """Show detailed user information"""
+        try:
+            user_stats = await self.db.admin_db.get_user_stats(user_id)
+            
+            if not user_stats.get('user_info'):
+                await event.answer("❌ User not found", alert=True)
+                return
+            
+            user = user_stats['user_info']
+            
+            detail_text = f"👤 **USER DETAILS**\n"
+            detail_text += "═══════════════════════\n\n"
+            
+            detail_text += f"📋 **Basic Information**\n"
+            detail_text += f"├─ Name: {user.get('first_name', 'N/A')}\n"
+            detail_text += f"├─ Username: @{user.get('username', 'N/A')}\n"
+            detail_text += f"├─ User ID: `{user_id}`\n"
+            detail_text += f"├─ Joined: {user.get('joined_at', 'N/A')[:10]}\n"
+            detail_text += f"├─ Last Seen: {user.get('last_seen', 'N/A')[:16]}\n"
+            detail_text += f"├─ Credits: {user.get('searches_remaining', 0)}\n"
+            detail_text += f"├─ Total Searches: {user_stats['total_searches']}\n"
+            detail_text += f"├─ Referrals: {user_stats['referrals']}\n"
+            detail_text += f"└─ Banned: {'Yes' if user.get('is_banned') else 'No'}\n\n"
+            
+            # Subscription info
+            if user.get('subscription'):
+                expiry = user.get('subscription_expiry', '')
+                if expiry:
+                    expiry_date = datetime.fromisoformat(expiry)
+                    days_left = (expiry_date - datetime.now(timezone.utc)).days
+                    detail_text += f"💎 **Subscription**\n"
+                    detail_text += f"├─ Plan: {user['subscription']}\n"
+                    detail_text += f"└─ Expires in: {days_left} days\n\n"
+            
+            # Recent searches
+            if user_stats.get('last_searches'):
+                detail_text += "🔍 **Recent Searches**\n"
+                for search in user_stats['last_searches'][:5]:
+                    search_type = search.get('search_type', 'N/A')
+                    cmd_name = SEARCH_COMMANDS.get(search_type, {}).get('name', search_type)
+                    time_str = search.get('timestamp', '')[:16]
+                    success = "✅" if search.get('success') else "❌"
+                    
+                    detail_text += f"{success} {cmd_name}\n"
+                    detail_text += f"   ├─ Query: `{search.get('query', 'N/A')}`\n"
+                    detail_text += f"   └─ Time: {time_str}\n\n"
+            
+            # Action buttons
+            buttons = []
+            if user.get('is_banned'):
+                buttons.append([Button.inline("🔓 Unban User", f"confirm_unban_{user_id}")])
+            else:
+                buttons.append([Button.inline("🚫 Ban User", f"confirm_ban_{user_id}")])
+            
+            if user.get('is_admin'):
+                buttons.append([Button.inline("👑 Remove Admin", f"confirm_remove_admin_{user_id}")])
+            else:
+                buttons.append([Button.inline("👑 Add Admin", f"confirm_add_admin_{user_id}")])
+            
+            buttons.append([Button.inline("🎯 Add Credits", f"admin_add_credits_user_{user_id}")])
+            buttons.append([Button.inline("« User Management", "admin_users")])
+            
+            await event.edit(detail_text, buttons=buttons, parse_mode="md")
+            
+        except Exception as e:
+            logger.error(f"Error showing user detail: {e}")
+            await event.answer("❌ Error loading user details", alert=True)
+    
+    async def confirm_ban_user(self, event, user_id: int):
+        """Confirm ban user"""
+        try:
+            success = await self.db.ban_user(user_id, "Admin action")
+            if success:
+                # Remove from admin cache if they were admin
+                if user_id in self.admin_users:
+                    self.admin_users.remove(user_id)
+                
+                await event.answer("✅ User banned successfully", alert=True)
+                await self.show_admin_panel(event)
+            else:
+                await event.answer("❌ Failed to ban user", alert=True)
+        except Exception as e:
+            logger.error(f"Error banning user: {e}")
+            await event.answer("❌ Error banning user", alert=True)
+    
+    async def confirm_unban_user(self, event, user_id: int):
+        """Confirm unban user"""
+        try:
+            success = await self.db.unban_user(user_id)
+            if success:
+                await event.answer("✅ User unbanned successfully", alert=True)
+                await self.show_admin_panel(event)
+            else:
+                await event.answer("❌ Failed to unban user", alert=True)
+        except Exception as e:
+            logger.error(f"Error unbanning user: {e}")
+            await event.answer("❌ Error unbanning user", alert=True)
+    
+    async def confirm_add_admin(self, event, user_id: int):
+        """Confirm add admin"""
+        try:
+            success = await self.db.add_admin(user_id)
+            if success:
+                self.admin_users.add(user_id)
+                await event.answer("✅ User added as admin", alert=True)
+                await self.show_admin_panel(event)
+            else:
+                await event.answer("❌ Failed to add admin", alert=True)
+        except Exception as e:
+            logger.error(f"Error adding admin: {e}")
+            await event.answer("❌ Error adding admin", alert=True)
+    
+    async def confirm_remove_admin(self, event, user_id: int):
+        """Confirm remove admin"""
+        try:
+            success = await self.db.remove_admin(user_id)
+            if success:
+                self.admin_users.remove(user_id)
+                await event.answer("✅ Admin privileges removed", alert=True)
+                await self.show_admin_panel(event)
+            else:
+                await event.answer("❌ Failed to remove admin", alert=True)
+        except Exception as e:
+            logger.error(f"Error removing admin: {e}")
+            await event.answer("❌ Error removing admin", alert=True)
 
 # ================== SEARCH ENGINE WITH PRIORITY MANAGEMENT ==================
 
@@ -1178,9 +2710,8 @@ async def start_web_server():
     except Exception as e:
         logger.error(f"❌ Web server failed: {e}")
 
-# ================== EVENT HANDLERS ==================
+# ================== GLOBAL VARIABLES ==================
 
-# Initialize clients first
 bot_client = TelegramClient(config.BOT_SESSION_FILE, config.BOT_API_ID, config.BOT_API_HASH)
 user_client = (
     TelegramClient(config.USER_SESSION_FILE, config.USER_API_ID, config.USER_API_HASH)
@@ -1188,13 +2719,15 @@ user_client = (
     else bot_client
 )
 
-# Initialize managers
 db_manager = DatabaseManager()
 search_engine = None
+admin_panel = None
 user_states = {}
 bot_info = None
+export_data_storage = {}
 
-# Now define event handlers
+# ================== EVENT HANDLERS ==================
+
 @bot_client.on(events.NewMessage(pattern=r'/start(?: (.+))?'))
 async def start_handler(event):
     """Premium start handler"""
@@ -1203,8 +2736,13 @@ async def start_handler(event):
         user_id = user.id
         referral_code = event.pattern_match.group(1)
         
-        # Get or create user
+        # Check if user is banned
         user_doc = await db_manager.get_user(user_id)
+        if user_doc and user_doc.get('is_banned'):
+            await event.respond("🚫 Your account has been banned. Contact @darkboxesAdmin for assistance.")
+            return
+        
+        # Get or create user
         if not user_doc:
             await db_manager.create_user(user_id, user.username, user.first_name, referral_code)
             user_doc = await db_manager.get_user(user_id)
@@ -1216,7 +2754,7 @@ async def start_handler(event):
                 if referrer:
                     await db_manager.add_referral_credit(referrer_id, config.REFERRAL_REWARD)
         
-        is_admin = user_id == config.ADMIN_USER_ID
+        is_admin = admin_panel.is_admin(user_id) if admin_panel else (user_id == config.ADMIN_USER_ID)
         
         # Send welcome message
         welcome_text = PremiumFormatter.format_welcome(user.first_name, user_doc)
@@ -1233,6 +2771,11 @@ async def start_handler(event):
     except Exception as e:
         logger.error(f"❌ Error in start_handler: {e}")
 
+@bot_client.on(events.CallbackQuery(pattern=r'^admin_'))
+async def admin_callback_handler(event):
+    """Handle admin panel callbacks"""
+    await admin_panel.handle_admin_callback(event)
+
 @bot_client.on(events.CallbackQuery(pattern=r'^search_(.+)$'))
 async def search_callback(event):
     """Handle search type selection"""
@@ -1240,11 +2783,16 @@ async def search_callback(event):
         user_id = event.sender_id
         search_type = event.data.decode().split('_', 1)[1]
         
+        # Check if user is banned
+        user_doc = await db_manager.get_user(user_id)
+        if user_doc and user_doc.get('is_banned'):
+            await event.answer("🚫 Your account has been banned.", alert=True)
+            return
+        
         if search_type not in SEARCH_COMMANDS:
             await event.answer("❌ Invalid selection", alert=True)
             return
         
-        user_doc = await db_manager.get_user(user_id)
         if not user_doc:
             await event.answer("❌ User not found", alert=True)
             return
@@ -1308,207 +2856,9 @@ async def search_callback(event):
         logger.error(f"❌ Error in search_callback: {e}")
         await event.answer("❌ Error", alert=True)
 
-@bot_client.on(events.CallbackQuery(pattern='^main_menu$'))
-async def main_menu_callback(event):
-    """Return to main menu"""
-    try:
-        user_id = event.sender_id
-        user_states.pop(user_id, None)
-        
-        user_doc = await db_manager.get_user(user_id)
-        is_admin = user_id == config.ADMIN_USER_ID
-        
-        message = (
-            f"🎭 **DARK BOXES INTELLIGENCE**\n\n"
-            f"📊 **ACCOUNT STATUS**\n"
-            f"├─ Credits: {user_doc.get('searches_remaining', 0)}\n"
-            f"├─ Total Searches: {user_doc.get('total_searches', 0)}\n"
-            f"└─ Subscription: {user_doc.get('subscription', 'None')}\n\n"
-            f"🛠️ **SELECT SERVICE**"
-        )
-        
-        # Get keyboard - ONE COMMAND PER LINE
-        buttons = OneLineKeyboard.main_menu(is_admin)
-        
-        await event.edit(message, buttons=buttons, parse_mode="md")
-        
-    except Exception as e:
-        logger.error(f"❌ Error in main_menu_callback: {e}")
-
-@bot_client.on(events.CallbackQuery(pattern='^premium$'))
-async def premium_callback(event):
-    """Show premium plans"""
-    try:
-        plans_text = "💎 **PREMIUM SUBSCRIPTION PLANS**\n\n"
-        
-        for plan_id, plan in SUBSCRIPTION_PLANS.items():
-            plans_text += f"{plan['icon']} **{plan['name']}** - ₹{plan['price']}\n"
-            plans_text += f"├─ Searches: {plan['searches']}\n"
-            plans_text += f"├─ Validity: {plan['validity']}\n"
-            for feature in plan['features']:
-                plans_text += f"├─ {feature}\n"
-            plans_text += "\n"
-        
-        plans_text += "💰 **PAYMENT INSTRUCTIONS**\n"
-        plans_text += f"1. Send ₹[Plan Price] to UPI: `{config.UPI_ID}`\n"
-        plans_text += "2. Take screenshot of payment\n"
-        plans_text += "3. Click 'Payment Done' for your plan\n"
-        plans_text += "4. Send screenshot to @darkboxesAdmin\n\n"
-        plans_text += "⚡ Activation within 5 minutes of verification."
-        
-        await event.edit(plans_text, buttons=OneLineKeyboard.subscription_plans(), parse_mode="md")
-        
-    except Exception as e:
-        logger.error(f"❌ Error in premium_callback: {e}")
-
-@bot_client.on(events.CallbackQuery(pattern=r'^buy_(.+)$'))
-async def buy_plan_callback(event):
-    """Handle plan purchase"""
-    try:
-        plan_id = event.data.decode().split('_', 1)[1]
-        
-        if plan_id not in SUBSCRIPTION_PLANS:
-            await event.answer("❌ Invalid plan", alert=True)
-            return
-        
-        plan = SUBSCRIPTION_PLANS[plan_id]
-        
-        payment_msg = (
-            f"💰 **PURCHASE CONFIRMATION: {plan['name']}**\n\n"
-            f"**Price:** ₹{plan['price']}\n"
-            f"**UPI ID:** `{config.UPI_ID}`\n"
-            f"**Plan Details:**\n"
-        )
-        
-        for feature in plan['features']:
-            payment_msg += f"• {feature}\n"
-        
-        payment_msg += "\n**📋 PAYMENT PROCESS**\n"
-        payment_msg += "1. Send exact amount to above UPI\n"
-        payment_msg += "2. Take screenshot of successful payment\n"
-        payment_msg += "3. Click 'Payment Done' below\n"
-        payment_msg += "4. Send screenshot to @darkboxesAdmin for verification\n\n"
-        payment_msg += "⚡ Subscription activated within 5 minutes of verification."
-        
-        await event.edit(payment_msg, buttons=OneLineKeyboard.payment_buttons(plan_id), parse_mode="md")
-        
-    except Exception as e:
-        logger.error(f"❌ Error in buy_plan_callback: {e}")
-
-@bot_client.on(events.CallbackQuery(pattern=r'^confirm_(.+)$'))
-async def confirm_payment_callback(event):
-    """Handle payment confirmation"""
-    try:
-        plan_id = event.data.decode().split('_', 1)[1]
-        user_id = event.sender_id
-        
-        if plan_id not in SUBSCRIPTION_PLANS:
-            await event.answer("❌ Invalid plan", alert=True)
-            return
-        
-        plan = SUBSCRIPTION_PLANS[plan_id]
-        
-        # Notify admin
-        user_doc = await db_manager.get_user(user_id)
-        admin_msg = (
-            f"💰 **PAYMENT CONFIRMATION REQUEST**\n\n"
-            f"👤 User: {user_doc['first_name']} (@{user_doc['username']})\n"
-            f"🆔 ID: `{user_id}`\n"
-            f"📋 Plan: {plan['name']}\n"
-            f"💰 Amount: ₹{plan['price']}\n"
-            f"⏰ Time: {datetime.now().strftime('%H:%M:%S')}\n\n"
-            f"⚡ Use `/activate {user_id} {plan_id}` to activate subscription."
-        )
-        
-        await bot_client.send_message(config.ADMIN_USER_ID, admin_msg, parse_mode="md")
-        
-        await event.edit(
-            f"✅ **PAYMENT CONFIRMATION RECEIVED**\n\n"
-            f"Thank you for your payment confirmation.\n"
-            f"📋 Plan: {plan['name']}\n"
-            f"💰 Amount: ₹{plan['price']}\n\n"
-            f"📸 Please send payment screenshot to @darkboxesAdmin for verification.\n"
-            f"⚡ Your subscription will be activated within 5 minutes of verification.",
-            buttons=OneLineKeyboard.cancel_button(),
-            parse_mode="md"
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ Error in confirm_payment_callback: {e}")
-
-@bot_client.on(events.CallbackQuery(pattern='^referrals$'))
-async def referrals_callback(event):
-    """Show referrals information"""
-    try:
-        user_id = event.sender_id
-        user_doc = await db_manager.get_user(user_id)
-        
-        referrals_text = (
-            f"📊 **REFER & EARN PROGRAM**\n\n"
-            f"**📈 YOUR REFERRAL STATS**\n"
-            f"├─ Referral Code: `{user_doc.get('referral_code', 'N/A')}`\n"
-            f"├─ Total Referrals: {user_doc.get('referrals', 0)}\n"
-            f"└─ Earned Credits: {user_doc.get('referral_credits', 0)}\n\n"
-            f"**🔄 HOW IT WORKS**\n"
-            f"1. Share your referral link:\n"
-            f"`https://t.me/{bot_info.username}?start={user_id}`\n\n"
-            f"2. When someone joins using your link:\n"
-            f"• They get {config.NEW_USER_CREDITS} free credits\n"
-            f"• You get {config.REFERRAL_REWARD} search credits\n\n"
-            f"3. No limits - refer unlimited users\n\n"
-            f"**🎁 BENEFITS**\n"
-            f"• Free credits for both parties\n"
-            f"• Priority support for top referrers\n"
-            f"• Special discounts for active referrers"
-        )
-        
-        await event.edit(referrals_text, buttons=OneLineKeyboard.cancel_button(), parse_mode="md")
-        
-    except Exception as e:
-        logger.error(f"❌ Error in referrals_callback: {e}")
-
-@bot_client.on(events.CallbackQuery(pattern='^profile$'))
-async def profile_callback(event):
-    """Show user profile"""
-    try:
-        user_id = event.sender_id
-        user_doc = await db_manager.get_user(user_id)
-        
-        # Calculate subscription status
-        subscription_status = "None"
-        if user_doc.get('subscription') and user_doc.get('subscription_expiry'):
-            expiry_date = datetime.fromisoformat(user_doc['subscription_expiry'])
-            if expiry_date > datetime.now(timezone.utc):
-                days_left = (expiry_date - datetime.now(timezone.utc)).days
-                subscription_status = f"{user_doc['subscription']} ({days_left} days remaining)"
-        
-        profile_text = (
-            f"👤 **USER PROFILE**\n\n"
-            f"**📋 BASIC INFORMATION**\n"
-            f"├─ Name: {user_doc.get('first_name', 'N/A')}\n"
-            f"├─ Username: @{user_doc.get('username', 'N/A')}\n"
-            f"├─ User ID: `{user_id}`\n"
-            f"└─ Member Since: {user_doc.get('joined_at', 'N/A')[:10]}\n\n"
-            f"**📊 ACCOUNT STATUS**\n"
-            f"├─ Available Credits: {user_doc.get('searches_remaining', 0)}\n"
-            f"├─ Total Searches: {user_doc.get('total_searches', 0)}\n"
-            f"├─ Active Subscription: {subscription_status}\n"
-            f"└─ Wallet Balance: ₹{user_doc.get('wallet_balance', 0)}\n\n"
-            f"**📈 REFERRAL INFORMATION**\n"
-            f"├─ Referral Code: `{user_doc.get('referral_code', 'N/A')}`\n"
-            f"├─ Total Referrals: {user_doc.get('referrals', 0)}\n"
-            f"└─ Earned Credits: {user_doc.get('referral_credits', 0)}\n\n"
-            f"**⏰ LAST ACTIVITY:** {user_doc.get('last_seen', 'N/A')[:19]}"
-        )
-        
-        await event.edit(profile_text, buttons=OneLineKeyboard.cancel_button(), parse_mode="md")
-        
-    except Exception as e:
-        logger.error(f"❌ Error in profile_callback: {e}")
-
 @bot_client.on(events.NewMessage(func=lambda e: e.is_private and not e.text.startswith('/')))
-async def query_handler(event):
-    """Handle search queries with premium UI"""
+async def private_message_handler(event):
+    """Handle private messages (queries and admin actions)"""
     try:
         user_id = event.sender_id
         
@@ -1516,9 +2866,32 @@ async def query_handler(event):
             return
         
         state = user_states[user_id]
-        if state.get("action") != "search":
-            return
         
+        if state.get("action") == "search":
+            await handle_search_query(event, state)
+        
+        elif state.get("action") == "admin_search_user":
+            await handle_admin_search_user(event)
+        
+        elif state.get("action") == "admin_broadcast":
+            await handle_admin_broadcast(event)
+        
+        elif state.get("action") == "admin_ban":
+            await handle_admin_ban(event)
+        
+        elif state.get("action") == "admin_management":
+            await handle_admin_management(event)
+        
+        elif state.get("action") == "admin_add_credits":
+            await handle_admin_add_credits(event)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in private_message_handler: {e}")
+
+async def handle_search_query(event, state):
+    """Handle search queries"""
+    try:
+        user_id = event.sender_id
         search_type = state["type"]
         query = event.text.strip()
         
@@ -1572,73 +2945,285 @@ async def query_handler(event):
         
         if result["success"]:
             await event.respond(result["result"], parse_mode="md")
-            await db_manager.update_searches(user_id)
+            await db_manager.update_searches(user_id, search_type, query, True)
         else:
             await event.respond(result["error"], parse_mode="md")
+            await db_manager.update_searches(user_id, search_type, query, False)
         
         # Clear state
         user_states.pop(user_id, None)
         
     except Exception as e:
-        logger.error(f"❌ Error in query_handler: {e}")
+        logger.error(f"❌ Error in handle_search_query: {e}")
         await event.respond("❌ An error occurred during processing.")
 
-@user_client.on(events.NewMessage())
-async def handle_all_messages(event):
-    """Handle all incoming messages for search responses"""
+async def handle_admin_search_user(event):
+    """Handle admin user search"""
     try:
-        await search_engine.handle_incoming_message(event)
+        query = event.text.strip()
+        if not query:
+            await event.respond("❌ Please enter a search query.")
+            return
+        
+        users = await db_manager.admin_db.search_users(query)
+        
+        if not users:
+            await event.respond("❌ No users found matching your query.")
+            user_states.pop(event.sender_id, None)
+            return
+        
+        if len(users) == 1:
+            # Show single user detail
+            user = users[0]
+            await admin_panel.show_user_detail(event, user['user_id'])
+        else:
+            # Show list of users
+            result_text = f"🔍 **SEARCH RESULTS** ({len(users)} users found)\n\n"
+            
+            for i, user in enumerate(users[:10], 1):
+                username = f"@{user['username']}" if user.get('username') else "No username"
+                joined = user.get('joined_at', '')[:10]
+                searches = user.get('total_searches', 0)
+                
+                result_text += (
+                    f"{i}. **{user['first_name']}**\n"
+                    f"   ├─ {username}\n"
+                    f"   ├─ ID: `{user['user_id']}`\n"
+                    f"   ├─ Joined: {joined}\n"
+                    f"   └─ Searches: {searches}\n\n"
+                )
+            
+            if len(users) > 10:
+                result_text += f"... and {len(users) - 10} more users\n"
+            
+            result_text += "\nClick on a user ID to view details:"
+            
+            # Create buttons with user IDs
+            buttons = []
+            for user in users[:5]:
+                buttons.append([Button.inline(
+                    f"👤 {user['first_name']} (ID: {user['user_id']})",
+                    f"user_detail_{user['user_id']}"
+                )])
+            
+            buttons.append([Button.inline("« Back to Admin", "admin_panel")])
+            
+            await event.respond(result_text, buttons=buttons, parse_mode="md")
+        
+        user_states.pop(event.sender_id, None)
+        
     except Exception as e:
-        pass
+        logger.error(f"❌ Error in handle_admin_search_user: {e}")
+        await event.respond("❌ Error searching users.")
 
-@bot_client.on(events.NewMessage(pattern=r'/activate (\d+) (\w+)'))
-async def activate_subscription_handler(event):
-    """Admin command to activate subscription"""
+async def handle_admin_broadcast(event):
+    """Handle admin broadcast"""
     try:
-        if event.sender_id != config.ADMIN_USER_ID:
+        message = event.text.strip()
+        if not message or len(message) < 5:
+            await event.respond("❌ Message too short. Minimum 5 characters required.")
             return
         
-        user_id = int(event.pattern_match.group(1))
-        plan_id = event.pattern_match.group(2)
+        # Confirm broadcast
+        confirm_text = (
+            f"📢 **BROADCAST CONFIRMATION**\n\n"
+            f"**Message:**\n{message[:500]}...\n\n"
+            f"**This message will be sent to all users.**\n"
+            f"Estimated recipients: [Calculating...]\n\n"
+            f"Are you sure you want to proceed?"
+        )
         
-        if plan_id not in SUBSCRIPTION_PLANS:
-            await event.respond("❌ Invalid plan ID")
+        # Store message for confirmation
+        user_states[event.sender_id] = {
+            "action": "confirm_broadcast",
+            "message": message
+        }
+        
+        buttons = [
+            [Button.inline("✅ Yes, Send Broadcast", "confirm_broadcast_yes")],
+            [Button.inline("❌ Cancel", "admin_panel")]
+        ]
+        
+        await event.respond(confirm_text, buttons=buttons, parse_mode="md")
+        
+    except Exception as e:
+        logger.error(f"❌ Error in handle_admin_broadcast: {e}")
+        await event.respond("❌ Error processing broadcast message.")
+
+async def handle_admin_ban(event):
+    """Handle admin ban user"""
+    try:
+        user_input = event.text.strip()
+        if not user_input.isdigit():
+            await event.respond("❌ Please enter a valid numeric user ID.")
             return
         
-        plan = SUBSCRIPTION_PLANS[plan_id]
-        days = 7 if plan_id in ["basic", "standard", "premium"] else 30
+        user_id = int(user_input)
+        user = await db_manager.get_user(user_id)
         
-        success = await db_manager.add_subscription(user_id, plan_id, days)
+        if not user:
+            await event.respond(f"❌ User with ID {user_id} not found.")
+            user_states.pop(event.sender_id, None)
+            return
+        
+        if user.get('is_banned'):
+            # User is already banned, show unban option
+            buttons = OneLineKeyboard.confirm_buttons("unban", user_id)
+            await event.respond(
+                f"🚫 **USER IS ALREADY BANNED**\n\n"
+                f"👤 User: {user.get('first_name', 'N/A')}\n"
+                f"🆔 ID: `{user_id}`\n"
+                f"📅 Banned on: {user.get('banned_at', 'N/A')[:10]}\n"
+                f"📝 Reason: {user.get('ban_reason', 'N/A')}\n\n"
+                f"Do you want to unban this user?",
+                buttons=buttons,
+                parse_mode="md"
+            )
+        else:
+            # User is not banned, show ban option
+            buttons = OneLineKeyboard.confirm_buttons("ban", user_id)
+            await event.respond(
+                f"🚫 **BAN USER CONFIRMATION**\n\n"
+                f"👤 User: {user.get('first_name', 'N/A')}\n"
+                f"🆔 ID: `{user_id}`\n"
+                f"📅 Joined: {user.get('joined_at', 'N/A')[:10]}\n"
+                f"📊 Searches: {user.get('total_searches', 0)}\n\n"
+                f"Are you sure you want to ban this user?",
+                buttons=buttons,
+                parse_mode="md"
+            )
+        
+        user_states.pop(event.sender_id, None)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in handle_admin_ban: {e}")
+        await event.respond("❌ Error processing ban request.")
+
+async def handle_admin_management(event):
+    """Handle admin management"""
+    try:
+        user_input = event.text.strip()
+        if not user_input.isdigit():
+            await event.respond("❌ Please enter a valid numeric user ID.")
+            return
+        
+        user_id = int(user_input)
+        user = await db_manager.get_user(user_id)
+        
+        if not user:
+            await event.respond(f"❌ User with ID {user_id} not found.")
+            user_states.pop(event.sender_id, None)
+            return
+        
+        if user.get('is_admin'):
+            # User is already admin, show remove option
+            buttons = OneLineKeyboard.confirm_buttons("remove_admin", user_id)
+            await event.respond(
+                f"👑 **REMOVE ADMIN PRIVILEGES**\n\n"
+                f"👤 User: {user.get('first_name', 'N/A')}\n"
+                f"🆔 ID: `{user_id}`\n"
+                f"📅 Joined: {user.get('joined_at', 'N/A')[:10]}\n\n"
+                f"This user currently has admin privileges.\n"
+                f"Do you want to remove admin privileges?",
+                buttons=buttons,
+                parse_mode="md"
+            )
+        else:
+            # User is not admin, show add option
+            buttons = OneLineKeyboard.confirm_buttons("add_admin", user_id)
+            await event.respond(
+                f"👑 **ADD ADMIN PRIVILEGES**\n\n"
+                f"👤 User: {user.get('first_name', 'N/A')}\n"
+                f"🆔 ID: `{user_id}`\n"
+                f"📅 Joined: {user.get('joined_at', 'N/A')[:10]}\n"
+                f"📊 Searches: {user.get('total_searches', 0)}\n\n"
+                f"Are you sure you want to add this user as admin?",
+                buttons=buttons,
+                parse_mode="md"
+            )
+        
+        user_states.pop(event.sender_id, None)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in handle_admin_management: {e}")
+        await event.respond("❌ Error processing admin management request.")
+
+async def handle_admin_add_credits(event):
+    """Handle admin add credits"""
+    try:
+        user_input = event.text.strip()
+        parts = user_input.split()
+        
+        if len(parts) != 2:
+            await event.respond("❌ Invalid format. Use: `user_id credits`")
+            return
+        
+        if not parts[0].isdigit() or not parts[1].isdigit():
+            await event.respond("❌ Both user ID and credits must be numbers.")
+            return
+        
+        user_id = int(parts[0])
+        credits = int(parts[1])
+        
+        if credits <= 0 or credits > 1000:
+            await event.respond("❌ Credits must be between 1 and 1000.")
+            return
+        
+        user = await db_manager.get_user(user_id)
+        if not user:
+            await event.respond(f"❌ User with ID {user_id} not found.")
+            user_states.pop(event.sender_id, None)
+            return
+        
+        # Add credits
+        success = await db_manager.add_credits(user_id, credits)
         
         if success:
-            user_doc = await db_manager.get_user(user_id)
-            await bot_client.send_message(
-                user_id,
-                f"✅ **SUBSCRIPTION ACTIVATED**\n\n"
-                f"Your {plan['name']} has been activated.\n\n"
-                f"📋 **PLAN DETAILS**\n"
-                f"├─ Plan: {plan['name']}\n"
-                f"├─ Validity: {plan['validity']}\n"
-                f"└─ Features: {', '.join(plan['features'][:3])}\n\n"
-                f"⚡ You now have unlimited searches until {(datetime.now(timezone.utc) + timedelta(days=days)).strftime('%Y-%m-%d')}.\n\n"
-                f"🔗 For support: @darkboxesAdmin"
+            await event.respond(
+                f"✅ **CREDITS ADDED SUCCESSFULLY**\n\n"
+                f"👤 User: {user.get('first_name', 'N/A')}\n"
+                f"🆔 ID: `{user_id}`\n"
+                f"🎯 Credits Added: {credits}\n"
+                f"💰 New Balance: {user.get('searches_remaining', 0) + credits}\n\n"
+                f"User has been notified.",
+                parse_mode="md"
             )
             
-            await event.respond(f"✅ Subscription activated for user {user_id}")
+            # Notify user
+            await bot_client.send_message(
+                user_id,
+                f"🎁 **CREDITS ADDED**\n\n"
+                f"Administrator has added {credits} credits to your account.\n"
+                f"💰 New Balance: {user.get('searches_remaining', 0) + credits}\n\n"
+                f"Thank you for using DarkBoxes!",
+                parse_mode="md"
+            )
         else:
-            await event.respond(f"❌ Failed to activate subscription")
+            await event.respond("❌ Failed to add credits.")
+        
+        user_states.pop(event.sender_id, None)
         
     except Exception as e:
-        logger.error(f"❌ Error in activate_subscription_handler: {e}")
+        logger.error(f"❌ Error in handle_admin_add_credits: {e}")
+        await event.respond("❌ Error adding credits.")
 
-@bot_client.on(events.NewMessage(pattern=r'/broadcast (.+)'))
-async def broadcast_handler(event):
-    """Admin broadcast command"""
+@bot_client.on(events.CallbackQuery(pattern=r'^confirm_broadcast_yes$'))
+async def confirm_broadcast_handler(event):
+    """Handle broadcast confirmation"""
     try:
-        if event.sender_id != config.ADMIN_USER_ID:
+        user_id = event.sender_id
+        state = user_states.get(user_id, {})
+        
+        if state.get("action") != "confirm_broadcast":
+            await event.answer("❌ No broadcast pending", alert=True)
             return
         
-        message = event.pattern_match.group(1)
+        message = state.get("message", "")
+        if not message:
+            await event.answer("❌ No message found", alert=True)
+            return
+        
+        await event.edit("📢 **SENDING BROADCAST...**\n\nPlease wait...")
         
         # Get all users
         users = await asyncio.get_running_loop().run_in_executor(
@@ -1648,29 +3233,206 @@ async def broadcast_handler(event):
         sent = 0
         failed = 0
         
-        await event.respond(f"📢 Starting broadcast to {len(users)} users...")
+        broadcast_text = f"📢 **ANNOUNCEMENT**\n\n{message}\n\n— DarkBoxes Administration"
         
         for user in users:
             try:
                 await bot_client.send_message(
                     user["user_id"],
-                    f"📢 **ANNOUNCEMENT**\n\n{message}\n\n— DarkBoxes Administration"
+                    broadcast_text,
+                    parse_mode="md"
                 )
                 sent += 1
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.1)  # Rate limiting
             except Exception as e:
                 failed += 1
         
-        await event.respond(f"✅ Broadcast complete\n📤 Sent: {sent}\n❌ Failed: {failed}")
+        # Clear state
+        user_states.pop(user_id, None)
+        
+        result_text = (
+            f"✅ **BROADCAST COMPLETE**\n\n"
+            f"📊 **Results:**\n"
+            f"├─ Total Users: {len(users)}\n"
+            f"├─ Successfully Sent: {sent}\n"
+            f"└─ Failed: {failed}\n\n"
+            f"📝 **Message Preview:**\n{message[:200]}..."
+        )
+        
+        await event.edit(result_text, buttons=OneLineKeyboard.back_to_admin(), parse_mode="md")
         
     except Exception as e:
-        logger.error(f"❌ Error in broadcast_handler: {e}")
+        logger.error(f"❌ Error in confirm_broadcast_handler: {e}")
+        await event.answer("❌ Error sending broadcast", alert=True)
+
+@bot_client.on(events.CallbackQuery(pattern=r'^main_menu$'))
+async def main_menu_callback(event):
+    """Return to main menu"""
+    try:
+        user_id = event.sender_id
+        user_states.pop(user_id, None)
+        
+        user_doc = await db_manager.get_user(user_id)
+        is_admin = admin_panel.is_admin(user_id) if admin_panel else (user_id == config.ADMIN_USER_ID)
+        
+        message = (
+            f"🎭 **DARK BOXES INTELLIGENCE**\n\n"
+            f"📊 **ACCOUNT STATUS**\n"
+            f"├─ Credits: {user_doc.get('searches_remaining', 0)}\n"
+            f"├─ Total Searches: {user_doc.get('total_searches', 0)}\n"
+            f"└─ Subscription: {user_doc.get('subscription', 'None')}\n\n"
+            f"🛠️ **SELECT SERVICE**"
+        )
+        
+        # Get keyboard - ONE COMMAND PER LINE
+        buttons = OneLineKeyboard.main_menu(is_admin)
+        
+        await event.edit(message, buttons=buttons, parse_mode="md")
+        
+    except Exception as e:
+        logger.error(f"❌ Error in main_menu_callback: {e}")
+
+@bot_client.on(events.CallbackQuery(pattern=r'^user_detail_(\d+)$'))
+async def user_detail_callback(event):
+    """Handle user detail callback"""
+    try:
+        user_id = int(event.data.decode().split('_')[-1])
+        await admin_panel.show_user_detail(event, user_id)
+    except Exception as e:
+        logger.error(f"❌ Error in user_detail_callback: {e}")
+        await event.answer("❌ Error loading user details", alert=True)
+
+@bot_client.on(events.CallbackQuery(pattern=r'^export_'))
+async def export_data_callback(event):
+    """Handle export data callbacks"""
+    try:
+        data_type = event.data.decode().split('_', 1)[1]
+        user_id = event.sender_id
+        
+        if user_id not in export_data_storage:
+            await event.answer("❌ No export data available", alert=True)
+            return
+        
+        data = export_data_storage[user_id].get(data_type)
+        if not data:
+            await event.answer("❌ No data available for export", alert=True)
+            return
+        
+        # Create file
+        filename = f"darkboxes_{data_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        
+        # Send file
+        await event.delete()
+        await bot_client.send_file(
+            event.chat_id,
+            bytes(data, 'utf-8'),
+            filename=filename,
+            caption=f"📊 **{data_type.upper()} DATA EXPORT**\n\nExported on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Error in export_data_callback: {e}")
+        await event.answer("❌ Error exporting data", alert=True)
+
+# ================== ADMIN COMMANDS ==================
+
+@bot_client.on(events.NewMessage(pattern=r'/admin'))
+async def admin_command_handler(event):
+    """Handle /admin command"""
+    try:
+        user_id = event.sender_id
+        
+        if not admin_panel.is_admin(user_id):
+            await event.respond("❌ Access denied. Admin privileges required.")
+            return
+        
+        await admin_panel.show_admin_panel(event)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in admin_command_handler: {e}")
+
+@bot_client.on(events.NewMessage(pattern=r'/stats'))
+async def stats_command_handler(event):
+    """Handle /stats command"""
+    try:
+        user_id = event.sender_id
+        
+        if not admin_panel.is_admin(user_id):
+            await event.respond("❌ Access denied. Admin privileges required.")
+            return
+        
+        await admin_panel.show_today_stats(event)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in stats_command_handler: {e}")
+
+@bot_client.on(events.NewMessage(pattern=r'/broadcast (.+)'))
+async def broadcast_command_handler(event):
+    """Handle /broadcast command"""
+    try:
+        user_id = event.sender_id
+        
+        if not admin_panel.is_admin(user_id):
+            await event.respond("❌ Access denied. Admin privileges required.")
+            return
+        
+        message = event.pattern_match.group(1)
+        user_states[user_id] = {
+            "action": "confirm_broadcast",
+            "message": message
+        }
+        
+        await admin_panel.ask_for_broadcast(event)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in broadcast_command_handler: {e}")
+
+@bot_client.on(events.NewMessage(pattern=r'/ban (\d+)'))
+async def ban_command_handler(event):
+    """Handle /ban command"""
+    try:
+        user_id = event.sender_id
+        
+        if not admin_panel.is_admin(user_id):
+            await event.respond("❌ Access denied. Admin privileges required.")
+            return
+        
+        target_id = int(event.pattern_match.group(1))
+        user_states[user_id] = {"action": "admin_ban"}
+        
+        # Simulate message event
+        event.text = str(target_id)
+        await handle_admin_ban(event)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in ban_command_handler: {e}")
+
+@bot_client.on(events.NewMessage(pattern=r'/addcredits (\d+) (\d+)'))
+async def add_credits_command_handler(event):
+    """Handle /addcredits command"""
+    try:
+        user_id = event.sender_id
+        
+        if not admin_panel.is_admin(user_id):
+            await event.respond("❌ Access denied. Admin privileges required.")
+            return
+        
+        target_id = int(event.pattern_match.group(1))
+        credits = int(event.pattern_match.group(2))
+        user_states[user_id] = {"action": "admin_add_credits"}
+        
+        # Simulate message event
+        event.text = f"{target_id} {credits}"
+        await handle_admin_add_credits(event)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in add_credits_command_handler: {e}")
 
 @bot_client.on(events.NewMessage(pattern=r'/reply (\d+) (.+)'))
 async def admin_reply_handler(event):
     """Handle admin reply command"""
     try:
-        if event.sender_id != config.ADMIN_USER_ID:
+        if not admin_panel.is_admin(event.sender_id):
             return
         
         user_id = int(event.pattern_match.group(1))
@@ -1686,64 +3448,19 @@ async def admin_reply_handler(event):
     except Exception as e:
         logger.error(f"❌ Error in admin_reply_handler: {e}")
 
-@bot_client.on(events.NewMessage(pattern=r'/priority (\w+) (\w+)'))
-async def set_priority_handler(event):
-    """Set group priority for specific search type"""
+@user_client.on(events.NewMessage())
+async def handle_all_messages(event):
+    """Handle all incoming messages for search responses"""
     try:
-        if event.sender_id != config.ADMIN_USER_ID:
-            return
-        
-        search_type = event.pattern_match.group(1)
-        priority = event.pattern_match.group(2)
-        
-        if search_type not in SEARCH_COMMANDS:
-            await event.respond("❌ Invalid search type")
-            return
-        
-        if priority not in ["primary", "secondary", "tertiary"]:
-            await event.respond("❌ Invalid priority. Use: primary, secondary, tertiary")
-            return
-        
-        SEARCH_COMMANDS[search_type]["priority"] = priority
-        await event.respond(f"✅ Set {search_type} priority to {priority}")
-        
+        await search_engine.handle_incoming_message(event)
     except Exception as e:
-        logger.error(f"❌ Error in set_priority_handler: {e}")
-
-@bot_client.on(events.NewMessage(pattern=r'/groupstats'))
-async def group_stats_handler(event):
-    """Show group performance statistics"""
-    try:
-        if event.sender_id != config.ADMIN_USER_ID:
-            return
-        
-        if not hasattr(search_engine, 'group_performance'):
-            await event.respond("❌ No group statistics available")
-            return
-        
-        stats_text = "📊 **GROUP PERFORMANCE STATISTICS**\n\n"
-        
-        for group_name, performance in search_engine.group_performance.items():
-            total = performance["total"]
-            success = performance["success"]
-            success_rate = (success / total * 100) if total > 0 else 0
-            
-            stats_text += f"**{group_name}**\n"
-            stats_text += f"├─ Total Requests: {total}\n"
-            stats_text += f"├─ Success: {success}\n"
-            stats_text += f"├─ Success Rate: {success_rate:.1f}%\n"
-            stats_text += f"└─ Current Weight: {performance.get('weight', 'N/A')}\n\n"
-        
-        await event.respond(stats_text, parse_mode="md")
-        
-    except Exception as e:
-        logger.error(f"❌ Error in group_stats_handler: {e}")
+        pass
 
 # ================== MAIN FUNCTION ==================
 
 async def main():
     """Main function"""
-    global search_engine, bot_info
+    global search_engine, admin_panel, bot_info
     
     try:
         logger.info("🚀 Starting DarkBoxes Intelligence System...")
@@ -1767,6 +3484,9 @@ async def main():
         if not await db_manager.connect():
             logger.error("❌ Database connection failed")
             return
+        
+        # Initialize admin panel
+        admin_panel = AdminPanelHandler(db_manager, bot_client)
         
         # Initialize search engine
         search_engine = SearchEngine(db_manager, db_manager)
@@ -1796,6 +3516,7 @@ async def main():
         logger.info("🛑 Shutting down...")
     except Exception as e:
         logger.error(f"💀 Fatal error: {e}")
+        logger.error(traceback.format_exc())
     finally:
         # Clean shutdown
         try:
