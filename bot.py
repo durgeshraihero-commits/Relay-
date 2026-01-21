@@ -762,7 +762,7 @@ class TextProcessor:
             if not re.match(validation_pattern, query):
                 return False, "Invalid email format"
         
-                elif search_type == "gst":
+        elif search_type == "gst":
             query = query.upper().replace(' ', '')
             if not re.match(validation_pattern, query):
                 return False, "Invalid GST number format"
