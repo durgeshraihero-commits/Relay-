@@ -1,6 +1,6 @@
 """
 Premium Information Bot - Advanced Edition
-Fixed version with proper message handling and better UI
+Fixed file processing version
 """
 
 import os
@@ -21,7 +21,7 @@ from enum import Enum
 try:
     from aiohttp import web
     from telethon import TelegramClient, events, Button
-    from telethon.tl.types import PeerChannel, PeerUser, Channel, User
+    from telethon.tl.types import PeerChannel, PeerUser, Channel, User, MessageMediaDocument
     from telethon.tl.functions.channels import GetParticipantRequest
     from pymongo import MongoClient
 except ImportError as e:
@@ -237,7 +237,23 @@ class TextProcessor:
             'processing', 'please wait', 'fetching', 'loading', 'searching',
             'retrieving', 'hold on', 'wait a moment', 'in progress',
             'gathering data', 'working on it', '⏳', '🔍', 'searching for',
-            'please wait while', 'getting information', 'fetching data'
+            'please wait while', 'getting information', 'fetching data',
+            'generating', 'creating report', 'file generated'
+        ]
+        
+        return any(keyword in text_lower for keyword in keywords)
+    
+    @staticmethod
+    def is_file_generated_message(text: str) -> bool:
+        """Check if message indicates file generation"""
+        if not text:
+            return False
+        
+        text_lower = text.lower()
+        keywords = [
+            'file generated', 'report generated', 'download file',
+            'txt file', 'download txt', 'successfully generated',
+            '✅ file generated'
         ]
         
         return any(keyword in text_lower for keyword in keywords)
@@ -259,7 +275,7 @@ class TextProcessor:
         return any(keyword in text_lower for keyword in keywords)
     
     @staticmethod
-    def clean_content(content: str) -> str:
+    def clean_content(content: str, search_type: str = None) -> str:
         """Clean and format content"""
         if not content:
             return ""
@@ -274,13 +290,20 @@ class TextProcessor:
             r'powered by.*',
             r'developed by.*',
             r'created by.*',
+            r'designed by.*',
             r'©.*',
             r'copyright.*',
             r'join.*channel',
             r'subscribe.*',
             r'follow.*',
             r'contact.*admin',
-            r'admin.*@\w+'
+            r'admin.*@\w+',
+            r'auto-delete.*',
+            r'✅ file generated.*',
+            r'📂 report_.*\.txt',
+            r'⚡.*@\w+',
+            r'download.*file',
+            r'click.*download'
         ]
         
         for pattern in patterns:
@@ -290,7 +313,149 @@ class TextProcessor:
         content = re.sub(r'\n{3,}', '\n\n', content)
         content = re.sub(r' {2,}', ' ', content)
         
+        # Add emojis based on content type
+        if search_type == "family":
+            content = TextProcessor._add_family_emojis(content)
+        elif search_type == "phone":
+            content = TextProcessor._add_phone_emojis(content)
+        elif search_type == "aadhar":
+            content = TextProcessor._add_aadhar_emojis(content)
+        elif search_type == "vehicle":
+            content = TextProcessor._add_vehicle_emojis(content)
+        
         return content.strip()
+    
+    @staticmethod
+    def _add_family_emojis(content: str) -> str:
+        """Add emojis to family info"""
+        lines = content.split('\n')
+        result = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            if any(word in line.lower() for word in ['father', 'dad', 'papa']):
+                result.append(f"👨 {line}")
+            elif any(word in line.lower() for word in ['mother', 'mom', 'mummy']):
+                result.append(f"👩 {line}")
+            elif any(word in line.lower() for word in ['brother', 'bhai']):
+                result.append(f"👦 {line}")
+            elif any(word in line.lower() for word in ['sister', 'behen']):
+                result.append(f"👧 {line}")
+            elif any(word in line.lower() for word in ['wife', 'spouse']):
+                result.append(f"👰 {line}")
+            elif any(word in line.lower() for word in ['husband']):
+                result.append(f"🤵 {line}")
+            elif any(word in line.lower() for word in ['son', 'beta']):
+                result.append(f"👶 {line}")
+            elif any(word in line.lower() for word in ['daughter', 'beti']):
+                result.append(f"👧 {line}")
+            elif 'name' in line.lower():
+                result.append(f"👤 {line}")
+            elif 'age' in line.lower():
+                result.append(f"🎂 {line}")
+            elif 'address' in line.lower():
+                result.append(f"🏠 {line}")
+            else:
+                result.append(line)
+        
+        return '\n'.join(result)
+    
+    @staticmethod
+    def _add_phone_emojis(content: str) -> str:
+        """Add emojis to phone info"""
+        lines = content.split('\n')
+        result = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            if any(word in line.lower() for word in ['name', 'full name']):
+                result.append(f"👤 {line}")
+            elif 'phone' in line.lower() or 'mobile' in line.lower() or 'number' in line.lower():
+                result.append(f"📱 {line}")
+            elif 'address' in line.lower():
+                result.append(f"🏠 {line}")
+            elif 'email' in line.lower():
+                result.append(f"📧 {line}")
+            elif 'operator' in line.lower() or 'carrier' in line.lower():
+                result.append(f"📶 {line}")
+            elif 'state' in line.lower():
+                result.append(f"🗺️ {line}")
+            elif 'city' in line.lower():
+                result.append(f"🏙️ {line}")
+            elif 'pincode' in line.lower() or 'zip' in line.lower():
+                result.append(f"📮 {line}")
+            else:
+                result.append(line)
+        
+        return '\n'.join(result)
+    
+    @staticmethod
+    def _add_aadhar_emojis(content: str) -> str:
+        """Add emojis to Aadhar info"""
+        lines = content.split('\n')
+        result = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            if 'name' in line.lower():
+                result.append(f"👤 {line}")
+            elif 'aadhar' in line.lower() or 'number' in line.lower():
+                result.append(f"🆔 {line}")
+            elif 'address' in line.lower():
+                result.append(f"🏠 {line}")
+            elif 'dob' in line.lower() or 'birth' in line.lower():
+                result.append(f"🎂 {line}")
+            elif 'gender' in line.lower():
+                result.append(f"⚧️ {line}")
+            elif 'state' in line.lower():
+                result.append(f"🗺️ {line}")
+            elif 'district' in line.lower():
+                result.append(f"🏙️ {line}")
+            else:
+                result.append(line)
+        
+        return '\n'.join(result)
+    
+    @staticmethod
+    def _add_vehicle_emojis(content: str) -> str:
+        """Add emojis to vehicle info"""
+        lines = content.split('\n')
+        result = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            if 'owner' in line.lower() or 'name' in line.lower():
+                result.append(f"👤 {line}")
+            elif 'vehicle' in line.lower() or 'registration' in line.lower() or 'number' in line.lower():
+                result.append(f"🚗 {line}")
+            elif 'model' in line.lower() or 'make' in line.lower():
+                result.append(f"🏭 {line}")
+            elif 'year' in line.lower():
+                result.append(f"📅 {line}")
+            elif 'color' in line.lower():
+                result.append(f"🎨 {line}")
+            elif 'engine' in line.lower():
+                result.append(f"⚙️ {line}")
+            elif 'fuel' in line.lower():
+                result.append(f"⛽ {line}")
+            elif 'address' in line.lower():
+                result.append(f"🏠 {line}")
+            else:
+                result.append(line)
+        
+        return '\n'.join(result)
     
     @staticmethod
     def format_result(content: str, search_type: str, query: str, source: str) -> str:
@@ -303,6 +468,10 @@ class TextProcessor:
         header += f"🔍 Query: `{query}`\n"
         header += f"📊 Source: {source}\n"
         header += "─" * 35 + "\n\n"
+        
+        # Add content
+        if not content or len(content.strip()) < 20:
+            content = "❌ No valid information found in the file.\nThe file might be empty or contain only promotional content."
         
         footer = "\n" + "─" * 35 + "\n"
         footer += "💎 **Premium Info Bot**\n"
@@ -318,7 +487,6 @@ class SearchEngine:
         self.db = db_manager
         self.user_manager = user_manager
         self.active_searches = {}  # {search_id: {user_id, future, start_time, group, message_id}}
-        self.message_handlers = {}
     
     async def perform_search(self, search_type: str, query: str, user_id: int) -> Dict:
         """Perform cascading search"""
@@ -353,7 +521,8 @@ class SearchEngine:
                     "group": group,
                     "message_id": sent_msg.id,
                     "search_type": search_type,
-                    "query": query
+                    "query": query,
+                    "chat_id": group["entity"].id if hasattr(group["entity"], 'id') else str(group["entity"])
                 }
                 
                 # Wait for response
@@ -391,10 +560,11 @@ class SearchEngine:
             if not message.reply_to:
                 return
             
+            reply_to_id = message.reply_to.reply_to_msg_id
+            
             # Find matching active search
             for search_id, search_info in list(self.active_searches.items()):
-                # Check if reply matches our sent message
-                if message.reply_to.reply_to_msg_id == search_info["message_id"]:
+                if reply_to_id == search_info["message_id"]:
                     await self._process_search_response(search_id, search_info, message)
                     break
                     
@@ -406,18 +576,31 @@ class SearchEngine:
         try:
             text = message.text or message.raw_text or ""
             
+            # Check if this is a file generation message (we should wait for the actual file)
+            if TextProcessor.is_file_generated_message(text):
+                logger.info(f"📄 File generation message detected, waiting for file...")
+                # Don't process this message, wait for the actual file
+                return
+            
             # Check if processing message
             if TextProcessor.is_processing_message(text):
                 logger.info(f"⏳ Processing message in {search_info['group']['name']}, waiting...")
                 return
             
-            # Check for files
+            # Check for files FIRST
             if message.file:
                 logger.info(f"📁 File received from {search_info['group']['name']}")
                 result = await self._process_file(message, search_info)
+            elif text:
+                # Check if it's a no-info message
+                if TextProcessor.is_no_info_message(text):
+                    logger.info(f"🚫 No-info message from {search_info['group']['name']}")
+                    result = {"success": False}
+                else:
+                    logger.info(f"📝 Text response from {search_info['group']['name']}")
+                    result = await self._process_text(text, search_info)
             else:
-                logger.info(f"📝 Text response from {search_info['group']['name']}")
-                result = await self._process_text(text, search_info)
+                return
             
             # Complete the search
             if search_id in self.active_searches:
@@ -430,54 +613,84 @@ class SearchEngine:
             logger.error(f"Error processing search response: {e}")
     
     async def _process_file(self, message, search_info: Dict) -> Dict:
-        """Process file message"""
+        """Process file message - FIXED VERSION"""
         try:
-            file_bytes = await message.download_media(bytes)
-            if not file_bytes:
+            # Check file size
+            if message.file.size > config.MAX_FILE_SIZE_MB * 1024 * 1024:
+                logger.warning(f"📁 File too large: {message.file.size} bytes")
                 return {"success": False}
             
-            # Try to decode
+            # Download file
+            logger.info(f"⬇️ Downloading file from {search_info['group']['name']}")
+            file_bytes = await message.download_media(bytes)
+            
+            if not file_bytes:
+                logger.error("❌ Failed to download file")
+                return {"success": False}
+            
+            # Try different encodings
             content = None
-            for encoding in ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252']:
+            encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1']
+            
+            for encoding in encodings:
                 try:
                     content = file_bytes.decode(encoding)
+                    logger.info(f"✅ Decoded with {encoding}")
                     break
                 except UnicodeDecodeError:
                     continue
             
-            if not content or len(content.strip()) < 20:
+            if not content:
+                logger.error("❌ Could not decode file with any encoding")
                 return {"success": False}
             
-            # Clean and format
-            cleaned = TextProcessor.clean_content(content)
-            if len(cleaned) < 20:
+            # Check if content is meaningful
+            if len(content.strip()) < 50:
+                logger.warning(f"⚠️ File content too short: {len(content)} chars")
+                # Try to extract more content
+                lines = content.split('\n')
+                meaningful_lines = []
+                for line in lines:
+                    line = line.strip()
+                    if len(line) > 10 and not any(word in line.lower() for word in ['powered', 'developed', 'created', 'join', 'subscribe']):
+                        meaningful_lines.append(line)
+                
+                if meaningful_lines:
+                    content = '\n'.join(meaningful_lines)
+                else:
+                    return {"success": False}
+            
+            # Clean and format content
+            cleaned_content = TextProcessor.clean_content(content, search_info["search_type"])
+            
+            if len(cleaned_content.strip()) < 30:
+                logger.warning(f"⚠️ Cleaned content too short: {len(cleaned_content)} chars")
                 return {"success": False}
             
-            formatted = TextProcessor.format_result(
-                cleaned,
+            # Format the result
+            formatted_result = TextProcessor.format_result(
+                cleaned_content,
                 search_info["search_type"],
                 search_info["query"],
                 search_info["group"]["name"]
             )
             
+            logger.info(f"✅ Processed file with {len(cleaned_content)} characters")
             return {
                 "success": True,
-                "result": formatted,
+                "result": formatted_result,
                 "has_file": True
             }
             
         except Exception as e:
-            logger.error(f"Error processing file: {e}")
+            logger.error(f"❌ Error processing file: {e}")
             return {"success": False}
     
     async def _process_text(self, text: str, search_info: Dict) -> Dict:
         """Process text message"""
-        # Check for no-info messages
-        if TextProcessor.is_no_info_message(text):
-            return {"success": False}
-        
         # Clean and check length
-        cleaned = TextProcessor.clean_content(text)
+        cleaned = TextProcessor.clean_content(text, search_info["search_type"])
+        
         if len(cleaned) < 20:
             return {"success": False}
         
@@ -603,21 +816,32 @@ class KeyboardBuilder:
         """Build professional main menu"""
         buttons = []
         
-        # First row: Popular searches
-        popular = ["phone", "family", "aadhar", "vehicle"]
-        row = []
-        for p in popular:
-            cmd = SEARCH_COMMANDS[p]
-            row.append(Button.inline(cmd["emoji"], f"search_{p}"))
-        buttons.append(row)
+        # Search buttons in 2 rows of 3
+        search_types = list(SEARCH_COMMANDS.keys())
         
-        # Second row: More searches
-        more = ["upi", "email", "telegram", "imei"]
-        row = []
-        for m in more:
-            cmd = SEARCH_COMMANDS[m]
-            row.append(Button.inline(cmd["emoji"], f"search_{m}"))
-        buttons.append(row)
+        # First row
+        row1 = []
+        for i in range(min(3, len(search_types))):
+            cmd = SEARCH_COMMANDS[search_types[i]]
+            row1.append(Button.inline(cmd["emoji"], f"search_{search_types[i]}"))
+        if row1:
+            buttons.append(row1)
+        
+        # Second row
+        row2 = []
+        for i in range(3, min(6, len(search_types))):
+            cmd = SEARCH_COMMANDS[search_types[i]]
+            row2.append(Button.inline(cmd["emoji"], f"search_{search_types[i]}"))
+        if row2:
+            buttons.append(row2)
+        
+        # Third row
+        row3 = []
+        for i in range(6, min(9, len(search_types))):
+            cmd = SEARCH_COMMANDS[search_types[i]]
+            row3.append(Button.inline(cmd["emoji"], f"search_{search_types[i]}"))
+        if row3:
+            buttons.append(row3)
         
         # User options
         buttons.append([
@@ -825,7 +1049,8 @@ async def handle_all_messages(event):
     try:
         await search_engine.handle_incoming_message(event)
     except Exception as e:
-        logger.error(f"Error in handle_all_messages: {e}")
+        # Ignore errors in message handler
+        pass
 
 @bot_client.on(events.NewMessage(pattern=r'/reply (\d+) (.+)'))
 async def admin_reply_handler(event):
