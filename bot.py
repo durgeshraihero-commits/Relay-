@@ -1499,21 +1499,21 @@ async def start_handler(event):
             return
         
         # Check channel membership
-        is_member = await check_channel_membership(user_id)
-        
-                if not is_member:
-            await event.respond(
-                f"👋 **Welcome to Premium Info Bot!**\n\n"
-                f"To use this bot, you must first join our channel:\n"
-                f"@{config.MANDATORY_CHANNEL}\n\n"
-                f"After joining, click the button below to verify.",
-                buttons=[
-                    [Button.url(f"📢 Join Channel", f"https://t.me/{config.MANDATORY_CHANNEL}")],
-                    [Button.inline("✅ I've Joined - Verify", "check_membership")]
-                ],
-                parse_mode="md"
-            )
-            return
+is_member = await check_channel_membership(user_id)
+
+if not is_member:
+    await event.respond(
+        f"👋 **Welcome to Premium Info Bot!**\n\n"
+        f"To use this bot, you must first join our channel:\n"
+        f"@{config.MANDATORY_CHANNEL}\n\n"
+        f"After joining, click the button below to verify.",
+        buttons=[
+            [Button.url(f"📢 Join Channel", f"https://t.me/{config.MANDATORY_CHANNEL}")],
+            [Button.inline("✅ I've Joined - Verify", "check_membership")]
+        ],
+        parse_mode="md"
+    )
+    return
         
         # Main welcome message
         plan_expiry = ""
