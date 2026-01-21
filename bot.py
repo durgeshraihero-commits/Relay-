@@ -1,6 +1,6 @@
 """
 Premium Information Bot - Advanced Edition
-Fixed file processing version
+Enhanced file waiting system
 """
 
 import os
@@ -57,7 +57,7 @@ class BotConfig:
     MONGODB_DBNAME: str = "premium_bot_db"
     
     # Timeouts and limits
-    GROUP_TIMEOUT: int = int(os.getenv("GROUP_TIMEOUT", "30"))
+    GROUP_TIMEOUT: int = int(os.getenv("GROUP_TIMEOUT", "45"))  # Increased for file waiting
     FETCH_WAIT_TIME: int = int(os.getenv("FETCH_WAIT_TIME", "3"))
     MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "20"))
     
@@ -253,7 +253,7 @@ class TextProcessor:
         keywords = [
             'file generated', 'report generated', 'download file',
             'txt file', 'download txt', 'successfully generated',
-            '✅ file generated'
+            '✅ file generated', '📂 report_', '.txt', 'auto-delete'
         ]
         
         return any(keyword in text_lower for keyword in keywords)
@@ -303,7 +303,8 @@ class TextProcessor:
             r'📂 report_.*\.txt',
             r'⚡.*@\w+',
             r'download.*file',
-            r'click.*download'
+            r'click.*download',
+            r'designed & powered.*'
         ]
         
         for pattern in patterns:
@@ -358,8 +359,12 @@ class TextProcessor:
                 result.append(f"🎂 {line}")
             elif 'address' in line.lower():
                 result.append(f"🏠 {line}")
-            else:
+            elif 'relation' in line.lower():
+                result.append(f"👨‍👩‍👧‍👦 {line}")
+            elif any(marker in line for marker in ['•', '-', '*', '→', '●', '|', ':']):
                 result.append(line)
+            elif len(line) > 10:
+                result.append(f"📝 {line}")
         
         return '\n'.join(result)
     
@@ -390,70 +395,10 @@ class TextProcessor:
                 result.append(f"🏙️ {line}")
             elif 'pincode' in line.lower() or 'zip' in line.lower():
                 result.append(f"📮 {line}")
-            else:
+            elif any(marker in line for marker in ['•', '-', '*', '→', '●', '|', ':']):
                 result.append(line)
-        
-        return '\n'.join(result)
-    
-    @staticmethod
-    def _add_aadhar_emojis(content: str) -> str:
-        """Add emojis to Aadhar info"""
-        lines = content.split('\n')
-        result = []
-        
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            
-            if 'name' in line.lower():
-                result.append(f"👤 {line}")
-            elif 'aadhar' in line.lower() or 'number' in line.lower():
-                result.append(f"🆔 {line}")
-            elif 'address' in line.lower():
-                result.append(f"🏠 {line}")
-            elif 'dob' in line.lower() or 'birth' in line.lower():
-                result.append(f"🎂 {line}")
-            elif 'gender' in line.lower():
-                result.append(f"⚧️ {line}")
-            elif 'state' in line.lower():
-                result.append(f"🗺️ {line}")
-            elif 'district' in line.lower():
-                result.append(f"🏙️ {line}")
-            else:
-                result.append(line)
-        
-        return '\n'.join(result)
-    
-    @staticmethod
-    def _add_vehicle_emojis(content: str) -> str:
-        """Add emojis to vehicle info"""
-        lines = content.split('\n')
-        result = []
-        
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            
-            if 'owner' in line.lower() or 'name' in line.lower():
-                result.append(f"👤 {line}")
-            elif 'vehicle' in line.lower() or 'registration' in line.lower() or 'number' in line.lower():
-                result.append(f"🚗 {line}")
-            elif 'model' in line.lower() or 'make' in line.lower():
-                result.append(f"🏭 {line}")
-            elif 'year' in line.lower():
-                result.append(f"📅 {line}")
-            elif 'color' in line.lower():
-                result.append(f"🎨 {line}")
-            elif 'engine' in line.lower():
-                result.append(f"⚙️ {line}")
-            elif 'fuel' in line.lower():
-                result.append(f"⛽ {line}")
-            elif 'address' in line.lower():
-                result.append(f"🏠 {line}")
-            else:
-                result.append(line)
+            elif len(line) > 10:
+                result.append(f"📝 {line}")
         
         return '\n'.join(result)
     
@@ -470,8 +415,8 @@ class TextProcessor:
         header += "─" * 35 + "\n\n"
         
         # Add content
-        if not content or len(content.strip()) < 20:
-            content = "❌ No valid information found in the file.\nThe file might be empty or contain only promotional content."
+        if not content or len(content.strip()) < 30:
+            content = "❌ No valid information found in the response.\nThe file might be empty or contain only promotional content."
         
         footer = "\n" + "─" * 35 + "\n"
         footer += "💎 **Premium Info Bot**\n"
@@ -487,6 +432,7 @@ class SearchEngine:
         self.db = db_manager
         self.user_manager = user_manager
         self.active_searches = {}  # {search_id: {user_id, future, start_time, group, message_id}}
+        self.waiting_for_files = {}  # {message_id: search_info} for messages expecting files
     
     async def perform_search(self, search_type: str, query: str, user_id: int) -> Dict:
         """Perform cascading search"""
@@ -522,7 +468,9 @@ class SearchEngine:
                     "message_id": sent_msg.id,
                     "search_type": search_type,
                     "query": query,
-                    "chat_id": group["entity"].id if hasattr(group["entity"], 'id') else str(group["entity"])
+                    "chat_id": group["entity"].id if hasattr(group["entity"], 'id') else str(group["entity"]),
+                    "expecting_file": False,
+                    "file_wait_start": None
                 }
                 
                 # Wait for response
@@ -557,16 +505,40 @@ class SearchEngine:
             message = event.message
             
             # Check if this is a reply
-            if not message.reply_to:
-                return
+            if message.reply_to:
+                reply_to_id = message.reply_to.reply_to_msg_id
+                
+                # Find matching active search by reply ID
+                for search_id, search_info in list(self.active_searches.items()):
+                    if reply_to_id == search_info["message_id"]:
+                        await self._process_search_response(search_id, search_info, message)
+                        return
             
-            reply_to_id = message.reply_to.reply_to_msg_id
-            
-            # Find matching active search
+            # Also check if we're waiting for a file (not necessarily a reply)
+            # Look for recent messages in the same chat
             for search_id, search_info in list(self.active_searches.items()):
-                if reply_to_id == search_info["message_id"]:
-                    await self._process_search_response(search_id, search_info, message)
-                    break
+                # Check if this message is in the same chat and we're expecting a file
+                chat_match = False
+                try:
+                    if hasattr(search_info["group"]["entity"], 'id'):
+                        chat_match = event.chat_id == search_info["group"]["entity"].id
+                    else:
+                        # Try to compare chat objects
+                        chat_match = str(event.chat_id) == str(search_info.get("chat_id", ""))
+                except:
+                    pass
+                
+                if chat_match and search_info.get("expecting_file"):
+                    # Check if this message has a file
+                    if message.file:
+                        logger.info(f"📁 Found file while waiting in {search_info['group']['name']}")
+                        await self._process_search_response(search_id, search_info, message)
+                        return
+                    elif message.text:
+                        # Check if it's another file generation message
+                        if TextProcessor.is_file_generated_message(message.text):
+                            logger.info(f"📄 Another file generation message, continuing to wait...")
+                            return
                     
         except Exception as e:
             logger.error(f"Error handling incoming message: {e}")
@@ -576,10 +548,15 @@ class SearchEngine:
         try:
             text = message.text or message.raw_text or ""
             
-            # Check if this is a file generation message (we should wait for the actual file)
+            # Check if this is a file generation message
             if TextProcessor.is_file_generated_message(text):
-                logger.info(f"📄 File generation message detected, waiting for file...")
-                # Don't process this message, wait for the actual file
+                logger.info(f"📄 File generation message detected in {search_info['group']['name']}, will wait for file...")
+                # Mark that we're expecting a file
+                search_info["expecting_file"] = True
+                search_info["file_wait_start"] = time.time()
+                
+                # Reset the timeout to give more time for file to arrive
+                # We'll give it 20 more seconds to get the file
                 return
             
             # Check if processing message
@@ -613,7 +590,7 @@ class SearchEngine:
             logger.error(f"Error processing search response: {e}")
     
     async def _process_file(self, message, search_info: Dict) -> Dict:
-        """Process file message - FIXED VERSION"""
+        """Process file message"""
         try:
             # Check file size
             if message.file.size > config.MAX_FILE_SIZE_MB * 1024 * 1024:
@@ -644,28 +621,26 @@ class SearchEngine:
                 logger.error("❌ Could not decode file with any encoding")
                 return {"success": False}
             
-            # Check if content is meaningful
-            if len(content.strip()) < 50:
-                logger.warning(f"⚠️ File content too short: {len(content)} chars")
-                # Try to extract more content
-                lines = content.split('\n')
-                meaningful_lines = []
-                for line in lines:
-                    line = line.strip()
-                    if len(line) > 10 and not any(word in line.lower() for word in ['powered', 'developed', 'created', 'join', 'subscribe']):
-                        meaningful_lines.append(line)
-                
-                if meaningful_lines:
-                    content = '\n'.join(meaningful_lines)
-                else:
-                    return {"success": False}
-            
             # Clean and format content
             cleaned_content = TextProcessor.clean_content(content, search_info["search_type"])
             
             if len(cleaned_content.strip()) < 30:
                 logger.warning(f"⚠️ Cleaned content too short: {len(cleaned_content)} chars")
-                return {"success": False}
+                # Try to extract more meaningful content
+                lines = content.split('\n')
+                meaningful_lines = []
+                for line in lines:
+                    line = line.strip()
+                    if len(line) > 10:
+                        # Remove promotional lines
+                        if not any(word in line.lower() for word in ['powered', 'developed', 'created', 'join', 'subscribe', 'channel', 'admin', '@']):
+                            meaningful_lines.append(line)
+                
+                if meaningful_lines:
+                    cleaned_content = '\n'.join(meaningful_lines)
+                    cleaned_content = TextProcessor.clean_content(cleaned_content, search_info["search_type"])
+                else:
+                    return {"success": False}
             
             # Format the result
             formatted_result = TextProcessor.format_result(
@@ -729,6 +704,53 @@ class SearchEngine:
             
         except Exception as e:
             logger.error(f"Error notifying admin: {e}")
+
+# ================== CLEANUP TASK ==================
+
+async def cleanup_tasks():
+    """Clean up expired searches and check for files"""
+    while True:
+        try:
+            await asyncio.sleep(30)  # Check every 30 seconds
+            
+            current_time = time.time()
+            expired = []
+            
+            for search_id, search_info in list(search_engine.active_searches.items()):
+                # Calculate timeout based on whether we're expecting a file
+                timeout = search_info["group"]["timeout"]
+                
+                # If we're expecting a file, give it more time (additional 20 seconds)
+                if search_info.get("expecting_file") and search_info.get("file_wait_start"):
+                    file_wait_time = current_time - search_info["file_wait_start"]
+                    if file_wait_time < 20:  # Still within file wait time
+                        continue
+                    else:
+                        logger.info(f"⏱️ File wait timeout in {search_info['group']['name']}")
+                
+                # Check overall timeot
+                if current_time - search_info["start_time"] > timeout:
+                    expired.append(search_id)
+            
+            for search_id in expired:
+                search_info = search_engine.active_searches.pop(search_id, None)
+                if search_info:
+                    future = search_info["future"]
+                    if not future.done():
+                        try:
+                            future.set_result({"success": False})
+                        except:
+                            pass
+                    logger.info(f"🧹 Cleaned expired search: {search_id}")
+            
+            if expired:
+                logger.info(f"🧹 Cleaned {len(expired)} expired searches")
+                
+        except Exception as e:
+            logger.error(f"Error in cleanup: {e}")
+
+# ================== REST OF THE CODE REMAINS THE SAME ==============
+            
 
 # ================== DATABASE MANAGER ==================
 
