@@ -15,7 +15,6 @@ import secrets
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
-from enum import Enum
 
 # Third-party imports
 try:
@@ -68,27 +67,67 @@ class BotConfig:
     # Payment
     UPI_ID: str = os.getenv("UPI_ID", "darkboxes@ybl")
     ADMIN_CONTACT: str = "@darkboxesAdmin"
-    
-    # UI Settings
-    PRIMARY_COLOR: str = "#2E86C1"
-    ACCENT_COLOR: str = "#E74C3C"
 
 config = BotConfig()
+
+# ================== LOGGING SETUP ==================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s]: %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("darkboxes.log", encoding="utf-8")
+    ]
+)
+
+logger = logging.getLogger("DarkBoxes")
+
+# ================== VALIDATION ==================
+
+def validate_config() -> bool:
+    """Validate all required configuration"""
+    errors = []
+    
+    required_configs = [
+        ("BOT_API_ID", config.BOT_API_ID, lambda x: x != 0),
+        ("BOT_API_HASH", config.BOT_API_HASH, lambda x: len(x) > 0),
+        ("BOT_TOKEN", config.BOT_TOKEN, lambda x: len(x) > 0),
+        ("ADMIN_USER_ID", config.ADMIN_USER_ID, lambda x: x != 0),
+        ("MONGODB_URI", config.MONGODB_URI, lambda x: len(x) > 0),
+    ]
+    
+    for name, value, validator in required_configs:
+        if not validator(value):
+            errors.append(f"{name} is not properly configured")
+    
+    if errors:
+        logger.error("Configuration validation failed:")
+        for error in errors:
+            logger.error(f"  {error}")
+        return False
+    
+    return True
+
+if not validate_config():
+    sys.exit(1)
+
+USE_USER_ACCOUNT = config.USER_API_ID != 0 and config.USER_API_HASH and config.USER_PHONE
 
 # ================== GROUP PRIORITY MANAGEMENT ==================
 
 GROUP_PRIORITIES = {
     "primary": {
         "name": "⚡ Premium Database",
-        "identifier": -1003596998816,  # Your primary group
+        "identifier": -1003596998816,
         "timeout": 30,
-        "weight": 10,  # Highest priority
+        "weight": 10,
         "enabled": True,
         "entity": None
     },
     "secondary": {
         "name": "🌐 Standard Database",
-        "identifier": "IntelXGroup",  # Your secondary group
+        "identifier": "IntelXGroup",
         "timeout": 35,
         "weight": 7,
         "enabled": True,
@@ -96,7 +135,7 @@ GROUP_PRIORITIES = {
     },
     "tertiary": {
         "name": "🔍 Basic Database",
-        "identifier": "nex_chats",  # Your backup group
+        "identifier": "nex_chats",
         "timeout": 40,
         "weight": 5,
         "enabled": True,
@@ -162,14 +201,14 @@ SEARCH_COMMANDS = {
         "example": "9876543210",
         "validation": r"^\d{10,15}$",
         "cost": 1,
-        "priority": "primary",  # Which group to try first
+        "priority": "primary",
         "icon": "📱",
         "category": "identity"
     },
     "family": {
         "name": "👨‍👩‍👧‍👦 Family Network",
         "description": "🏠 **Complete Family Analysis**\n\n🔸 **Input:** 12-digit Aadhar number\n🔸 **Returns:** All family members • Names • Relations • Ages • Addresses\n🔸 **Sources:** UIDAI database • Family registration • Government records\n🔸 **Depth:** 3-level relationship mapping",
-        "commands": ["/familyinfo", "/family"],
+        "commands": ["/familyinfo", "/familyinfo"],
         "example": "123456789012",
         "validation": r"^\d{12}$",
         "cost": 1,
@@ -180,7 +219,7 @@ SEARCH_COMMANDS = {
     "aadhar": {
         "name": "🆔 Aadhar Comprehensive",
         "description": "📈 **Complete Aadhar Cross-Reference**\n\n🔸 **Input:** 12-digit Aadhar number\n🔸 **Returns:** All linked numbers • Bank accounts • Addresses • Biometric status • Registration history\n🔸 **Sources:** UIDAI • Bank linkages • Government databases\n🔸 **Scope:** Pan-India coverage",
-        "commands": ["/aadhar", "/adh", "/aadhaar"],
+        "commands": ["/aadhar", "/aadhar", "/aadhar"],
         "example": "123456789012",
         "validation": r"^\d{12}$",
         "cost": 2,
@@ -202,7 +241,7 @@ SEARCH_COMMANDS = {
     "upi": {
         "name": "💳 UPI Financial Intelligence",
         "description": "💰 **UPI Account & Transaction Analysis**\n\n🔸 **Input:** UPI ID (username@paytm/bank)\n🔸 **Returns:** Account holder • Linked bank • Transaction patterns • KYC status • Last active\n🔸 **Sources:** NPCI databases • Bank records • Financial institutions\n🔸 **Security:** Bank-grade encryption",
-        "commands": ["/upiinfo", "/upi"],
+        "commands": ["/upiinfo", "/upiinfo"],
         "example": "username@paytm",
         "validation": r"^[\w\.-]+@[\w\.-]+$",
         "cost": 1,
@@ -224,7 +263,7 @@ SEARCH_COMMANDS = {
     "telegram": {
         "name": "📲 Telegram Intelligence",
         "description": "⚡ **Telegram Profile Deep Analysis**\n\n🔸 **Input:** Telegram username or phone\n🔸 **Returns:** Mobile number • Profile details • Linked accounts • Activity patterns • Group memberships\n🔸 **Daily Limit:** 1 search for security\n🔸 **Privacy:** Encrypted processing",
-        "commands": ["/tg", "/telegram"],
+        "commands": ["/tg", "/tg"],
         "example": "@username or 9876543210",
         "validation": r"^(@?\w{5,32}|\d{10})$",
         "daily_limit": 1,
@@ -258,7 +297,7 @@ SEARCH_COMMANDS = {
     "insta": {
         "name": "📸 Instagram Intelligence",
         "description": "✨ **Instagram Profile Deep Analysis**\n\n🔸 **Input:** Instagram username\n🔸 **Returns:** Personal information • Contact details • Location data • Linked accounts • Activity history\n🔸 **Sources:** Social media APIs • Public databases • Metadata analysis\n🔸 **Insights:** Engagement patterns",
-        "commands": ["/insta", "/instagram"],
+        "commands": ["/insta", "/insta"],
         "example": "username",
         "validation": r"^[a-zA-Z0-9_.]{1,30}$",
         "cost": 1,
@@ -269,7 +308,7 @@ SEARCH_COMMANDS = {
     "pak": {
         "name": "🌐 Pakistan Intelligence",
         "description": "🕌 **Pakistan Number Comprehensive Analysis**\n\n🔸 **Input:** Pakistan mobile number (+92 format)\n🔸 **Returns:** Complete subscriber information • Location • Network details • Registration data\n🔸 **Sources:** International telecom databases • Government records\n🔸 **Coverage:** All major Pakistani networks",
-        "commands": ["/pak", "/pk"],
+        "commands": ["/pak", "/pak"],
         "example": "+923001234567",
         "validation": r"^\+92\d{10}$",
         "cost": 3,
@@ -278,19 +317,6 @@ SEARCH_COMMANDS = {
         "category": "international"
     }
 }
-
-# ================== LOGGING SETUP ==================
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s [%(name)s]: %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler("darkboxes.log", encoding="utf-8")
-    ]
-)
-
-logger = logging.getLogger("DarkBoxes")
 
 # ================== PREMIUM TEXT FORMATTER ==================
 
@@ -391,6 +417,354 @@ class PremiumFormatter:
         
         return processing
 
+# ================== TEXT PROCESSOR ==================
+
+class TextProcessor:
+    @staticmethod
+    def is_processing_message(text: str) -> bool:
+        """Check if message indicates processing"""
+        if not text:
+            return True
+        
+        text_lower = text.lower()
+        keywords = [
+            'processing', 'please wait', 'fetching', 'loading', 'searching',
+            'retrieving', 'hold on', 'wait a moment', 'in progress',
+            'gathering data', 'working on it', 'searching for',
+            'please wait while', 'getting information', 'fetching data',
+            'generating', 'creating report', 'file generated'
+        ]
+        
+        return any(keyword in text_lower for keyword in keywords)
+    
+    @staticmethod
+    def is_file_generated_message(text: str) -> bool:
+        """Check if message indicates file generation"""
+        if not text:
+            return False
+        
+        text_lower = text.lower()
+        keywords = [
+            'file generated', 'report generated', 'download file',
+            'txt file', 'download txt', 'successfully generated',
+            'file generated', 'report_', '.txt', 'auto-delete',
+            'file ready', 'file is ready', 'report is ready'
+        ]
+        
+        result = any(keyword in text_lower for keyword in keywords)
+        if result:
+            logger.info(f"📄 Detected file generation message: {text[:50]}...")
+        return result
+    
+    @staticmethod
+    def is_no_info_message(text: str) -> bool:
+        """Check if message indicates no information found"""
+        if not text:
+            return False
+        
+        text_lower = text.lower()
+        keywords = [
+            'no info', 'no information', 'not found', 'no data', 'no result',
+            'no record', 'invalid', 'doesn\'t exist', 'does not exist',
+            'not available', 'no details', 'unable to find', 'could not find',
+            'couldn\'t find', 'no match', 'not exist', 'no information found'
+        ]
+        
+        return any(keyword in text_lower for keyword in keywords)
+    
+    @staticmethod
+    def clean_content(content: str, search_type: str = None) -> str:
+        """Clean and format content"""
+        if not content:
+            return ""
+        
+        # Remove promotional content
+        patterns = [
+            r'https?://\S+',
+            r'www\.\S+',
+            r't\.me/\S+',
+            r'@\w+',
+            r'tg://\S+',
+            r'powered by.*',
+            r'developed by.*',
+            r'created by.*',
+            r'designed by.*',
+            r'©.*',
+            r'copyright.*',
+            r'join.*channel',
+            r'subscribe.*',
+            r'follow.*',
+            r'contact.*admin',
+            r'admin.*@\w+',
+            r'auto-delete.*',
+            r'file generated.*',
+            r'report_.*\.txt',
+            r'download.*file',
+            r'click.*download',
+            r'designed & powered.*'
+        ]
+        
+        for pattern in patterns:
+            content = re.sub(pattern, '', content, flags=re.IGNORECASE)
+        
+        # Clean whitespace
+        content = re.sub(r'\n{3,}', '\n\n', content)
+        content = re.sub(r' {2,}', ' ', content)
+        
+        return content.strip()
+
+# ================== DATABASE MANAGER ==================
+
+class DatabaseManager:
+    def __init__(self):
+        self.client = None
+        self.db = None
+    
+    async def connect(self) -> bool:
+        """Connect to MongoDB"""
+        try:
+            logger.info("🔌 Connecting to MongoDB...")
+            self.client = MongoClient(config.MONGODB_URI, serverSelectionTimeoutMS=5000)
+            self.client.server_info()
+            self.db = self.client[config.MONGODB_DBNAME]
+            logger.info("✅ MongoDB connected")
+            return True
+        except Exception as e:
+            logger.error(f"❌ MongoDB connection failed: {e}")
+            return False
+    
+    async def create_user(self, user_id: int, username: str, first_name: str, referral_code: str = None) -> bool:
+        """Create new user with referral tracking"""
+        try:
+            referral_info = {}
+            if referral_code:
+                referral_info = {
+                    "referred_by": referral_code,
+                    "referral_code": str(user_id)[-6:],
+                    "referral_date": datetime.now(timezone.utc).isoformat()
+                }
+            
+            user_doc = {
+                "user_id": user_id,
+                "username": username,
+                "first_name": first_name,
+                "joined_at": datetime.now(timezone.utc).isoformat(),
+                "searches_remaining": config.NEW_USER_CREDITS,
+                "total_searches": 0,
+                "last_seen": datetime.now(timezone.utc).isoformat(),
+                "referral_code": str(user_id)[-6:],
+                "referrals": 0,
+                "referral_credits": 0,
+                "subscription": None,
+                "subscription_expiry": None,
+                "wallet_balance": 0
+            }
+            
+            if referral_info:
+                user_doc.update(referral_info)
+            
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.users.update_one(
+                    {"user_id": user_id},
+                    {"$setOnInsert": user_doc},
+                    upsert=True
+                )
+            )
+            
+            logger.info(f"✅ Created user {user_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error creating user: {e}")
+            return False
+    
+    async def get_user(self, user_id: int) -> Optional[Dict]:
+        """Get user by ID"""
+        try:
+            return await asyncio.get_running_loop().run_in_executor(
+                None, self.db.users.find_one, {"user_id": user_id}
+            )
+        except Exception as e:
+            logger.error(f"❌ Error getting user: {e}")
+            return None
+    
+    async def update_searches(self, user_id: int, decrement: int = 1) -> bool:
+        """Update user search count"""
+        try:
+            user = await self.get_user(user_id)
+            if not user:
+                return False
+            
+            # Check subscription first
+            subscription = user.get("subscription")
+            subscription_expiry = user.get("subscription_expiry")
+            
+            if subscription and subscription_expiry:
+                expiry_date = datetime.fromisoformat(subscription_expiry)
+                if expiry_date > datetime.now(timezone.utc):
+                    # User has active subscription
+                    await asyncio.get_running_loop().run_in_executor(
+                        None, lambda: self.db.users.update_one(
+                            {"user_id": user_id},
+                            {
+                                "$inc": {"total_searches": 1},
+                                "$set": {"last_seen": datetime.now(timezone.utc).isoformat()}
+                            }
+                        )
+                    )
+                    return True
+            
+            # Use credits
+            searches_remaining = user.get("searches_remaining", 0)
+            if searches_remaining <= 0:
+                return False
+            
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.users.update_one(
+                    {"user_id": user_id},
+                    {
+                        "$inc": {
+                            "searches_remaining": -decrement,
+                            "total_searches": decrement
+                        },
+                        "$set": {"last_seen": datetime.now(timezone.utc).isoformat()}
+                    }
+                )
+            )
+            return True
+        except Exception as e:
+            logger.error(f"❌ Error updating searches: {e}")
+            return False
+    
+    async def add_subscription(self, user_id: int, plan_id: str, days: int) -> bool:
+        """Add subscription to user"""
+        try:
+            plan = SUBSCRIPTION_PLANS[plan_id]
+            expiry_date = datetime.now(timezone.utc) + timedelta(days=days)
+            
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.users.update_one(
+                    {"user_id": user_id},
+                    {
+                        "$set": {
+                            "subscription": plan_id,
+                            "subscription_expiry": expiry_date.isoformat(),
+                            "searches_remaining": 0  # Reset as unlimited
+                        }
+                    }
+                )
+            )
+            return True
+        except Exception as e:
+            logger.error(f"❌ Error adding subscription: {e}")
+            return False
+    
+    async def add_referral_credit(self, referrer_id: int, credits: int = 1) -> bool:
+        """Add referral credits to referrer"""
+        try:
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.users.update_one(
+                    {"user_id": referrer_id},
+                    {
+                        "$inc": {
+                            "referrals": 1,
+                            "referral_credits": credits,
+                            "searches_remaining": credits
+                        }
+                    }
+                )
+            )
+            return True
+        except Exception as e:
+            logger.error(f"❌ Error adding referral credit: {e}")
+            return False
+
+# ================== PREMIUM KEYBOARD BUILDER ==================
+
+class PremiumKeyboard:
+    @staticmethod
+    def main_menu(is_admin: bool = False) -> List[List[Button]]:
+        """Build premium main menu"""
+        # Single row with all main services
+        top_services = ["phone", "vehicle", "aadhar", "telegram", "email", "insta"]
+        row = []
+        for service in top_services:
+            if service in SEARCH_COMMANDS:
+                cmd = SEARCH_COMMANDS[service]
+                row.append(Button.inline(f"{cmd['icon']}", f"search_{service}"))
+        
+        if row:
+            return [row]
+        
+        return [[Button.inline("📱 Phone", "search_phone"), Button.inline("🚗 Vehicle", "search_vehicle")]]
+    
+    @staticmethod
+    def services_menu() -> List[List[Button]]:
+        """All services in organized layout"""
+        buttons = []
+        
+        # Single row with all services
+        all_services = list(SEARCH_COMMANDS.keys())
+        row = []
+        for service in all_services[:8]:  # First 8 services
+            cmd = SEARCH_COMMANDS[service]
+            row.append(Button.inline(cmd["icon"], f"search_{service}"))
+        if row:
+            buttons.append(row)
+        
+        # Action Buttons in second row
+        buttons.append([
+            Button.inline("👤 Profile", "profile"),
+            Button.inline("💎 Premium", "premium"),
+            Button.inline("📊 Referral", "referrals"),
+            Button.inline("🆘 Support", "support")
+        ])
+        
+        return buttons
+    
+    @staticmethod
+    def search_type_menu(search_type: str) -> List[List[Button]]:
+        """Menu for specific search type"""
+        cmd = SEARCH_COMMANDS.get(search_type, {})
+        return [
+            [Button.inline(f"{cmd.get('icon', '🔍')} {cmd.get('name', 'Search')}", f"info_{search_type}")],
+            [Button.inline("« Back to Services", "services")]
+        ]
+    
+    @staticmethod
+    def subscription_plans() -> List[List[Button]]:
+        """Premium subscription plans"""
+        buttons = []
+        
+        for plan_id, plan in SUBSCRIPTION_PLANS.items():
+            label = f"{plan['icon']} {plan['name']} - ₹{plan['price']}"
+            buttons.append([Button.inline(label, f"buy_{plan_id}")])
+        
+        buttons.append([Button.inline("« Back to Menu", "main_menu")])
+        return buttons
+    
+    @staticmethod
+    def cancel_button() -> List[List[Button]]:
+        """Cancel button"""
+        return [[Button.inline("❌ Cancel", "main_menu")]]
+    
+    @staticmethod
+    def payment_buttons(plan_id: str) -> List[List[Button]]:
+        """Payment confirmation buttons"""
+        return [
+            [Button.inline("✅ Payment Done", f"confirm_{plan_id}")],
+            [Button.inline("❌ Cancel", "premium")]
+        ]
+    
+    @staticmethod
+    def admin_controls() -> List[List[Button]]:
+        """Admin control panel"""
+        return [
+            [Button.inline("📊 Statistics", "admin_stats"), Button.inline("📢 Broadcast", "admin_broadcast")],
+            [Button.inline("⚙️ Settings", "admin_settings"), Button.inline("👥 Users", "admin_users")],
+            [Button.inline("« Main Menu", "main_menu")]
+        ]
+
 # ================== SEARCH ENGINE WITH PRIORITY MANAGEMENT ==================
 
 class SearchEngine:
@@ -399,7 +773,7 @@ class SearchEngine:
         self.user_manager = user_manager
         self.active_searches = {}
         self.waiting_for_files = {}
-        self.group_performance = {}  # Track group success rates
+        self.group_performance = {}
     
     async def perform_search(self, search_type: str, query: str, user_id: int) -> Dict:
         """Perform cascading search with priority management"""
@@ -538,119 +912,274 @@ class SearchEngine:
                     continue
                     
         except Exception as e:
-            logger.error(f"Error handling incoming message: {e}")
+            logger.error(f"❌ Error handling incoming message: {e}")
+    
+    async def _check_and_process_file(self, message, search_info: Dict) -> Optional[Dict]:
+        """Check if message has file and process it"""
+        if message.media and hasattr(message.media, 'document'):
+            logger.info(f"📁 Found document media in message")
+            return await self._process_file(message, search_info)
+        
+        if hasattr(message, 'file') and message.file:
+            logger.info(f"📁 Found file attribute in message")
+            return await self._process_file(message, search_info)
+        
+        if message.document:
+            logger.info(f"📁 Found document in message")
+            return await self._process_file(message, search_info)
+        
+        return None
+    
+    async def _process_search_response(self, search_id: str, search_info: Dict, message):
+        """Process a search response message"""
+        try:
+            text = message.text or message.raw_text or ""
+            logger.info(f"📨 Processing message in {search_info['group']['name']}: {text[:100]}...")
+            
+            file_result = await self._check_and_process_file(message, search_info)
+            if file_result is not None:
+                logger.info(f"✅ Processing file from message")
+                if search_id in self.active_searches:
+                    future = self.active_searches[search_id]["future"]
+                    if not future.done():
+                        future.set_result(file_result)
+                    del self.active_searches[search_id]
+                return
+            
+            if TextProcessor.is_file_generated_message(text):
+                logger.info(f"📄 File generation message detected in {search_info['group']['name']}")
+                
+                if message.reply_to:
+                    logger.info(f"🔗 File message is a reply, checking replied message...")
+                    try:
+                        replied_msg = await message.get_reply_message()
+                        if replied_msg:
+                            replied_file_result = await self._check_and_process_file(replied_msg, search_info)
+                            if replied_file_result:
+                                logger.info(f"✅ Found file in replied message")
+                                if search_id in self.active_searches:
+                                    future = self.active_searches[search_id]["future"]
+                                    if not future.done():
+                                        future.set_result(replied_file_result)
+                                    del self.active_searches[search_id]
+                                return
+                    except Exception as e:
+                        logger.error(f"❌ Error checking replied message: {e}")
+                
+                search_info["expecting_file"] = True
+                search_info["file_wait_start"] = time.time()
+                logger.info(f"⏳ Waiting for file to arrive...")
+                return
+            
+            if TextProcessor.is_processing_message(text):
+                logger.info(f"⏳ Processing message, waiting...")
+                return
+            
+            if TextProcessor.is_no_info_message(text):
+                logger.info(f"🚫 No-info message")
+                result = {"success": False}
+            elif text and len(text.strip()) > 10:
+                logger.info(f"📝 Processing text response")
+                result = await self._process_text(text, search_info)
+            else:
+                logger.info(f"⚠️ Empty or short message, ignoring")
+                return
+            
+            if search_id in self.active_searches:
+                future = self.active_searches[search_id]["future"]
+                if not future.done():
+                    future.set_result(result)
+                del self.active_searches[search_id]
+                
+        except Exception as e:
+            logger.error(f"❌ Error processing search response: {e}")
+    
+    async def _process_file(self, message, search_info: Dict) -> Dict:
+        """Process file message"""
+        try:
+            if hasattr(message.file, 'size') and message.file.size > config.MAX_FILE_SIZE_MB * 1024 * 1024:
+                logger.warning(f"📁 File too large: {message.file.size} bytes")
+                return {"success": False}
+            
+            logger.info(f"⬇️ Downloading file from {search_info['group']['name']}")
+            file_bytes = await message.download_media(bytes)
+            
+            if not file_bytes:
+                logger.error("❌ Failed to download file")
+                return {"success": False}
+            
+            content = None
+            encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1']
+            
+            for encoding in encodings:
+                try:
+                    content = file_bytes.decode(encoding)
+                    logger.info(f"✅ Decoded with {encoding}")
+                    break
+                except UnicodeDecodeError:
+                    continue
+            
+            if not content:
+                logger.error("❌ Could not decode file with any encoding")
+                return {"success": False}
+            
+            cleaned_content = TextProcessor.clean_content(content, search_info["search_type"])
+            
+            if len(cleaned_content.strip()) < 30:
+                logger.warning(f"⚠️ Cleaned content too short: {len(cleaned_content)} chars")
+                lines = content.split('\n')
+                meaningful_lines = []
+                for line in lines:
+                    line = line.strip()
+                    if len(line) > 10:
+                        if not any(word in line.lower() for word in ['powered', 'developed', 'created', 'join', 'subscribe', 'channel', 'admin', '@']):
+                            meaningful_lines.append(line)
+                
+                if meaningful_lines:
+                    cleaned_content = '\n'.join(meaningful_lines)
+                    cleaned_content = TextProcessor.clean_content(cleaned_content, search_info["search_type"])
+                else:
+                    return {"success": False}
+            
+            formatted_result = PremiumFormatter.format_result(
+                cleaned_content,
+                search_info["search_type"],
+                search_info["query"],
+                search_info["group"]["name"]
+            )
+            
+            logger.info(f"✅ Processed file with {len(cleaned_content)} characters")
+            return {
+                "success": True,
+                "result": formatted_result,
+                "has_file": True
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error processing file: {e}")
+            return {"success": False}
+    
+    async def _process_text(self, text: str, search_info: Dict) -> Dict:
+        """Process text message"""
+        cleaned = TextProcessor.clean_content(text, search_info["search_type"])
+        
+        if len(cleaned) < 20:
+            return {"success": False}
+        
+        formatted = PremiumFormatter.format_result(
+            cleaned,
+            search_info["search_type"],
+            search_info["query"],
+            search_info["group"]["name"]
+        )
+        
+        return {
+            "success": True,
+            "result": formatted,
+            "has_file": False
+        }
+    
+    async def _notify_admin(self, user_id: int, search_type: str, query: str):
+        """Notify admin about failed search"""
+        try:
+            user_info = await self.user_manager.get_user(user_id)
+            username = user_info.get('username', 'N/A') if user_info else 'N/A'
+            first_name = user_info.get('first_name', 'N/A') if user_info else 'N/A'
+            
+            admin_msg = (
+                f"🚨 **FAILED SEARCH ALERT**\n\n"
+                f"👤 User: {first_name} (@{username})\n"
+                f"🆔 ID: `{user_id}`\n"
+                f"🔍 Type: {search_type}\n"
+                f"📝 Query: `{query}`\n"
+                f"⏰ Time: {datetime.now().strftime('%H:%M:%S')}\n\n"
+                f"💡 Use `/reply {user_id} [message]` to send result"
+            )
+            
+            await bot_client.send_message(config.ADMIN_USER_ID, admin_msg, parse_mode="md")
+            logger.info(f"📋 Notified admin about {search_type}={query}")
+            
+        except Exception as e:
+            logger.error(f"❌ Error notifying admin: {e}")
 
-# ================== PREMIUM KEYBOARD BUILDER ==================
+# ================== CLEANUP TASK ==================
 
-class PremiumKeyboard:
-    @staticmethod
-    def main_menu(is_admin: bool = False) -> List[List[Button]]:
-        """Build premium main menu"""
-        # Top row - Most used services
-        top_services = ["phone", "vehicle", "aadhar", "telegram"]
-        top_row = []
-        for service in top_services:
-            if service in SEARCH_COMMANDS:
-                cmd = SEARCH_COMMANDS[service]
-                top_row.append(Button.inline(f"{cmd['icon']}", f"search_{service}"))
-        
-        if top_row:
-            # Create single row with all buttons
-            return [top_row]
-        
-        return [[Button.inline("📱 Phone", "search_phone"), Button.inline("🚗 Vehicle", "search_vehicle")]]
-    
-    @staticmethod
-    def services_menu() -> List[List[Button]]:
-        """All services in organized layout"""
-        buttons = []
-        
-        # Identity Services
-        identity_services = [k for k, v in SEARCH_COMMANDS.items() if v.get("category") == "identity"]
-        row = []
-        for service in identity_services[:4]:  # First 4 identity services
-            cmd = SEARCH_COMMANDS[service]
-            row.append(Button.inline(cmd["icon"], f"search_{service}"))
-        if row:
-            buttons.append(row)
-        
-        # Financial Services
-        finance_services = [k for k, v in SEARCH_COMMANDS.items() if v.get("category") == "finance"]
-        row = []
-        for service in finance_services[:4]:
-            cmd = SEARCH_COMMANDS[service]
-            row.append(Button.inline(cmd["icon"], f"search_{service}"))
-        if row:
-            buttons.append(row)
-        
-        # Digital Services
-        digital_services = [k for k, v in SEARCH_COMMANDS.items() if v.get("category") in ["digital", "social"]]
-        row = []
-        for service in digital_services[:4]:
-            cmd = SEARCH_COMMANDS[service]
-            row.append(Button.inline(cmd["icon"], f"search_{service}"))
-        if row:
-            buttons.append(row)
-        
-        # Action Buttons
-        buttons.append([
-            Button.inline("👤 Profile", "profile"),
-            Button.inline("💎 Premium", "premium"),
-            Button.inline("📊 Referral", "referrals")
-        ])
-        
-        buttons.append([
-            Button.inline("🔄 Refresh", "main_menu"),
-            Button.inline("🆘 Support", "support")
-        ])
-        
-        return buttons
-    
-    @staticmethod
-    def search_type_menu(search_type: str) -> List[List[Button]]:
-        """Menu for specific search type"""
-        cmd = SEARCH_COMMANDS.get(search_type, {})
-        return [
-            [Button.inline(f"{cmd.get('icon', '🔍')} {cmd.get('name', 'Search')}", f"info_{search_type}")],
-            [Button.inline("« Back to Services", "services")]
-        ]
-    
-    @staticmethod
-    def subscription_plans() -> List[List[Button]]:
-        """Premium subscription plans"""
-        buttons = []
-        
-        for plan_id, plan in SUBSCRIPTION_PLANS.items():
-            label = f"{plan['icon']} {plan['name']} - ₹{plan['price']}"
-            buttons.append([Button.inline(label, f"buy_{plan_id}")])
-        
-        buttons.append([Button.inline("« Back to Menu", "main_menu")])
-        return buttons
-    
-    @staticmethod
-    def cancel_button() -> List[List[Button]]:
-        """Cancel button"""
-        return [[Button.inline("❌ Cancel", "main_menu")]]
-    
-    @staticmethod
-    def payment_buttons(plan_id: str) -> List[List[Button]]:
-        """Payment confirmation buttons"""
-        return [
-            [Button.inline("✅ Payment Done", f"confirm_{plan_id}")],
-            [Button.inline("❌ Cancel", "premium")]
-        ]
-    
-    @staticmethod
-    def admin_controls() -> List[List[Button]]:
-        """Admin control panel"""
-        return [
-            [Button.inline("📊 Statistics", "admin_stats"), Button.inline("📢 Broadcast", "admin_broadcast")],
-            [Button.inline("⚙️ Settings", "admin_settings"), Button.inline("👥 Users", "admin_users")],
-            [Button.inline("« Main Menu", "main_menu")]
-        ]
+async def cleanup_expired_searches():
+    """Clean up expired searches"""
+    while True:
+        try:
+            await asyncio.sleep(30)
+            
+            current_time = time.time()
+            expired = []
+            
+            for search_id, search_info in list(search_engine.active_searches.items()):
+                timeout = search_info["group"]["timeout"]
+                
+                if search_info.get("expecting_file") and search_info.get("file_wait_start"):
+                    file_wait_time = current_time - search_info["file_wait_start"]
+                    if file_wait_time < 20:
+                        continue
+                    else:
+                        logger.info(f"⏱️ File wait timeout in {search_info['group']['name']}")
+                
+                if current_time - search_info["start_time"] > timeout:
+                    expired.append(search_id)
+            
+            for search_id in expired:
+                search_info = search_engine.active_searches.pop(search_id, None)
+                if search_info:
+                    future = search_info["future"]
+                    if not future.done():
+                        try:
+                            future.set_result({"success": False})
+                        except:
+                            pass
+                    logger.info(f"🧹 Cleaned expired search: {search_id}")
+            
+            if expired:
+                logger.info(f"🧹 Cleaned {len(expired)} expired searches")
+                
+        except Exception as e:
+            logger.error(f"❌ Error in cleanup: {e}")
 
-# ================== ENHANCED EVENT HANDLERS ==================
+# ================== WEB SERVER ==================
 
+async def start_web_server():
+    """Start web server"""
+    app = web.Application()
+    
+    async def health_check(request):
+        return web.Response(text="OK")
+    
+    app.router.add_get('/health', health_check)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', config.PORT)
+    
+    try:
+        await site.start()
+        logger.info(f"🌐 Web server running on port {config.PORT}")
+    except Exception as e:
+        logger.error(f"❌ Web server failed: {e}")
+
+# ================== EVENT HANDLERS ==================
+
+# Initialize clients first
+bot_client = TelegramClient(config.BOT_SESSION_FILE, config.BOT_API_ID, config.BOT_API_HASH)
+user_client = (
+    TelegramClient(config.USER_SESSION_FILE, config.USER_API_ID, config.USER_API_HASH)
+    if USE_USER_ACCOUNT
+    else bot_client
+)
+
+# Initialize managers
+db_manager = DatabaseManager()
+search_engine = None
+user_states = {}
+
+# Now define event handlers
 @bot_client.on(events.NewMessage(pattern=r'/start(?: (.+))?'))
 async def start_handler(event):
     """Premium start handler"""
@@ -685,7 +1214,7 @@ async def start_handler(event):
         )
         
     except Exception as e:
-        logger.error(f"Error in start_handler: {e}")
+        logger.error(f"❌ Error in start_handler: {e}")
 
 @bot_client.on(events.CallbackQuery(pattern='^services$'))
 async def services_menu_callback(event):
@@ -693,19 +1222,19 @@ async def services_menu_callback(event):
     try:
         await event.edit(
             "🛠️ **INTELLIGENCE SERVICES**\n\n"
-            "Select a service category:\n\n"
+            "Select a service:\n\n"
             "🔍 **Identity Services**\n"
-            "📱 Phone • 👨‍👩‍👧‍👦 Family • 🆔 Aadhar\n\n"
+            "📱 Phone • 👨‍👩‍👧‍👦 Family • 🆔 Aadhar • 🚗 Vehicle\n\n"
             "💰 **Financial Services**\n"
             "💳 UPI • 🏢 GST • 🏦 Banking\n\n"
             "🌐 **Digital Services**\n"
-            "📲 Telegram • 📸 Instagram • 📧 Email\n\n"
+            "📲 Telegram • 📸 Instagram • 📧 Email • 📱 Device\n\n"
             "Select service:",
             buttons=PremiumKeyboard.services_menu(),
             parse_mode="md"
         )
     except Exception as e:
-        logger.error(f"Error in services_menu_callback: {e}")
+        logger.error(f"❌ Error in services_menu_callback: {e}")
 
 @bot_client.on(events.CallbackQuery(pattern=r'^search_(.+)$'))
 async def search_callback(event):
@@ -779,8 +1308,203 @@ async def search_callback(event):
         user_states[user_id] = {"action": "search", "type": search_type}
         
     except Exception as e:
-        logger.error(f"Error in search_callback: {e}")
+        logger.error(f"❌ Error in search_callback: {e}")
         await event.answer("❌ Error", alert=True)
+
+@bot_client.on(events.CallbackQuery(pattern='^main_menu$'))
+async def main_menu_callback(event):
+    """Return to main menu"""
+    try:
+        user_id = event.sender_id
+        user_states.pop(user_id, None)
+        
+        user_doc = await db_manager.get_user(user_id)
+        is_admin = user_id == config.ADMIN_USER_ID
+        
+        message = (
+            f"🎭 **DARK BOXES INTELLIGENCE**\n\n"
+            f"📊 **ACCOUNT STATUS**\n"
+            f"├─ Credits: {user_doc.get('searches_remaining', 0)}\n"
+            f"├─ Total Searches: {user_doc.get('total_searches', 0)}\n"
+            f"└─ Subscription: {user_doc.get('subscription', 'None')}\n\n"
+            f"🛠️ **SELECT SERVICE**"
+        )
+        
+        await event.edit(message, buttons=PremiumKeyboard.main_menu(is_admin), parse_mode="md")
+        
+    except Exception as e:
+        logger.error(f"❌ Error in main_menu_callback: {e}")
+
+@bot_client.on(events.CallbackQuery(pattern='^premium$'))
+async def premium_callback(event):
+    """Show premium plans"""
+    try:
+        plans_text = "💎 **PREMIUM SUBSCRIPTION PLANS**\n\n"
+        
+        for plan_id, plan in SUBSCRIPTION_PLANS.items():
+            plans_text += f"{plan['icon']} **{plan['name']}** - ₹{plan['price']}\n"
+            plans_text += f"├─ Searches: {plan['searches']}\n"
+            plans_text += f"├─ Validity: {plan['validity']}\n"
+            for feature in plan['features']:
+                plans_text += f"├─ {feature}\n"
+            plans_text += "\n"
+        
+        plans_text += "💰 **PAYMENT INSTRUCTIONS**\n"
+        plans_text += f"1. Send ₹[Plan Price] to UPI: `{config.UPI_ID}`\n"
+        plans_text += "2. Take screenshot of payment\n"
+        plans_text += "3. Click 'Payment Done' for your plan\n"
+        plans_text += "4. Send screenshot to @darkboxesAdmin\n\n"
+        plans_text += "⚡ Activation within 5 minutes of verification."
+        
+        await event.edit(plans_text, buttons=PremiumKeyboard.subscription_plans(), parse_mode="md")
+        
+    except Exception as e:
+        logger.error(f"❌ Error in premium_callback: {e}")
+
+@bot_client.on(events.CallbackQuery(pattern=r'^buy_(.+)$'))
+async def buy_plan_callback(event):
+    """Handle plan purchase"""
+    try:
+        plan_id = event.data.decode().split('_', 1)[1]
+        
+        if plan_id not in SUBSCRIPTION_PLANS:
+            await event.answer("❌ Invalid plan", alert=True)
+            return
+        
+        plan = SUBSCRIPTION_PLANS[plan_id]
+        
+        payment_msg = (
+            f"💰 **PURCHASE CONFIRMATION: {plan['name']}**\n\n"
+            f"**Price:** ₹{plan['price']}\n"
+            f"**UPI ID:** `{config.UPI_ID}`\n"
+            f"**Plan Details:**\n"
+        )
+        
+        for feature in plan['features']:
+            payment_msg += f"• {feature}\n"
+        
+        payment_msg += "\n**📋 PAYMENT PROCESS**\n"
+        payment_msg += "1. Send exact amount to above UPI\n"
+        payment_msg += "2. Take screenshot of successful payment\n"
+        payment_msg += "3. Click 'Payment Done' below\n"
+        payment_msg += "4. Send screenshot to @darkboxesAdmin for verification\n\n"
+        payment_msg += "⚡ Subscription activated within 5 minutes of verification."
+        
+        await event.edit(payment_msg, buttons=PremiumKeyboard.payment_buttons(plan_id), parse_mode="md")
+        
+    except Exception as e:
+        logger.error(f"❌ Error in buy_plan_callback: {e}")
+
+@bot_client.on(events.CallbackQuery(pattern=r'^confirm_(.+)$'))
+async def confirm_payment_callback(event):
+    """Handle payment confirmation"""
+    try:
+        plan_id = event.data.decode().split('_', 1)[1]
+        user_id = event.sender_id
+        
+        if plan_id not in SUBSCRIPTION_PLANS:
+            await event.answer("❌ Invalid plan", alert=True)
+            return
+        
+        plan = SUBSCRIPTION_PLANS[plan_id]
+        
+        # Notify admin
+        user_doc = await db_manager.get_user(user_id)
+        admin_msg = (
+            f"💰 **PAYMENT CONFIRMATION REQUEST**\n\n"
+            f"👤 User: {user_doc['first_name']} (@{user_doc['username']})\n"
+            f"🆔 ID: `{user_id}`\n"
+            f"📋 Plan: {plan['name']}\n"
+            f"💰 Amount: ₹{plan['price']}\n"
+            f"⏰ Time: {datetime.now().strftime('%H:%M:%S')}\n\n"
+            f"⚡ Use `/activate {user_id} {plan_id}` to activate subscription."
+        )
+        
+        await bot_client.send_message(config.ADMIN_USER_ID, admin_msg, parse_mode="md")
+        
+        await event.edit(
+            f"✅ **PAYMENT CONFIRMATION RECEIVED**\n\n"
+            f"Thank you for your payment confirmation.\n"
+            f"📋 Plan: {plan['name']}\n"
+            f"💰 Amount: ₹{plan['price']}\n\n"
+            f"📸 Please send payment screenshot to @darkboxesAdmin for verification.\n"
+            f"⚡ Your subscription will be activated within 5 minutes of verification.",
+            buttons=PremiumKeyboard.cancel_button(),
+            parse_mode="md"
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Error in confirm_payment_callback: {e}")
+
+@bot_client.on(events.CallbackQuery(pattern='^referrals$'))
+async def referrals_callback(event):
+    """Show referrals information"""
+    try:
+        user_id = event.sender_id
+        user_doc = await db_manager.get_user(user_id)
+        
+        referrals_text = (
+            f"📊 **REFER & EARN PROGRAM**\n\n"
+            f"**📈 YOUR REFERRAL STATS**\n"
+            f"├─ Referral Code: `{user_doc.get('referral_code', 'N/A')}`\n"
+            f"├─ Total Referrals: {user_doc.get('referrals', 0)}\n"
+            f"└─ Earned Credits: {user_doc.get('referral_credits', 0)}\n\n"
+            f"**🔄 HOW IT WORKS**\n"
+            f"1. Share your referral link:\n"
+            f"`https://t.me/{bot_info.username}?start={user_id}`\n\n"
+            f"2. When someone joins using your link:\n"
+            f"• They get {config.NEW_USER_CREDITS} free credits\n"
+            f"• You get {config.REFERRAL_REWARD} search credits\n\n"
+            f"3. No limits - refer unlimited users\n\n"
+            f"**🎁 BENEFITS**\n"
+            f"• Free credits for both parties\n"
+            f"• Priority support for top referrers\n"
+            f"• Special discounts for active referrers"
+        )
+        
+        await event.edit(referrals_text, buttons=PremiumKeyboard.cancel_button(), parse_mode="md")
+        
+    except Exception as e:
+        logger.error(f"❌ Error in referrals_callback: {e}")
+
+@bot_client.on(events.CallbackQuery(pattern='^profile$'))
+async def profile_callback(event):
+    """Show user profile"""
+    try:
+        user_id = event.sender_id
+        user_doc = await db_manager.get_user(user_id)
+        
+        # Calculate subscription status
+        subscription_status = "None"
+        if user_doc.get('subscription') and user_doc.get('subscription_expiry'):
+            expiry_date = datetime.fromisoformat(user_doc['subscription_expiry'])
+            if expiry_date > datetime.now(timezone.utc):
+                days_left = (expiry_date - datetime.now(timezone.utc)).days
+                subscription_status = f"{user_doc['subscription']} ({days_left} days remaining)"
+        
+        profile_text = (
+            f"👤 **USER PROFILE**\n\n"
+            f"**📋 BASIC INFORMATION**\n"
+            f"├─ Name: {user_doc.get('first_name', 'N/A')}\n"
+            f"├─ Username: @{user_doc.get('username', 'N/A')}\n"
+            f"├─ User ID: `{user_id}`\n"
+            f"└─ Member Since: {user_doc.get('joined_at', 'N/A')[:10]}\n\n"
+            f"**📊 ACCOUNT STATUS**\n"
+            f"├─ Available Credits: {user_doc.get('searches_remaining', 0)}\n"
+            f"├─ Total Searches: {user_doc.get('total_searches', 0)}\n"
+            f"├─ Active Subscription: {subscription_status}\n"
+            f"└─ Wallet Balance: ₹{user_doc.get('wallet_balance', 0)}\n\n"
+            f"**📈 REFERRAL INFORMATION**\n"
+            f"├─ Referral Code: `{user_doc.get('referral_code', 'N/A')}`\n"
+            f"├─ Total Referrals: {user_doc.get('referrals', 0)}\n"
+            f"└─ Earned Credits: {user_doc.get('referral_credits', 0)}\n\n"
+            f"**⏰ LAST ACTIVITY:** {user_doc.get('last_seen', 'N/A')[:19]}"
+        )
+        
+        await event.edit(profile_text, buttons=PremiumKeyboard.cancel_button(), parse_mode="md")
+        
+    except Exception as e:
+        logger.error(f"❌ Error in profile_callback: {e}")
 
 @bot_client.on(events.NewMessage(func=lambda e: e.is_private and not e.text.startswith('/')))
 async def query_handler(event):
@@ -856,10 +1580,111 @@ async def query_handler(event):
         user_states.pop(user_id, None)
         
     except Exception as e:
-        logger.error(f"Error in query_handler: {e}")
+        logger.error(f"❌ Error in query_handler: {e}")
         await event.respond("❌ An error occurred during processing.")
 
-# ================== ADMIN COMMANDS FOR GROUP MANAGEMENT ==================
+@user_client.on(events.NewMessage())
+async def handle_all_messages(event):
+    """Handle all incoming messages for search responses"""
+    try:
+        await search_engine.handle_incoming_message(event)
+    except Exception as e:
+        pass
+
+@bot_client.on(events.NewMessage(pattern=r'/activate (\d+) (\w+)'))
+async def activate_subscription_handler(event):
+    """Admin command to activate subscription"""
+    try:
+        if event.sender_id != config.ADMIN_USER_ID:
+            return
+        
+        user_id = int(event.pattern_match.group(1))
+        plan_id = event.pattern_match.group(2)
+        
+        if plan_id not in SUBSCRIPTION_PLANS:
+            await event.respond("❌ Invalid plan ID")
+            return
+        
+        plan = SUBSCRIPTION_PLANS[plan_id]
+        days = 7 if plan_id in ["basic", "standard", "premium"] else 30
+        
+        success = await db_manager.add_subscription(user_id, plan_id, days)
+        
+        if success:
+            user_doc = await db_manager.get_user(user_id)
+            await bot_client.send_message(
+                user_id,
+                f"✅ **SUBSCRIPTION ACTIVATED**\n\n"
+                f"Your {plan['name']} has been activated.\n\n"
+                f"📋 **PLAN DETAILS**\n"
+                f"├─ Plan: {plan['name']}\n"
+                f"├─ Validity: {plan['validity']}\n"
+                f"└─ Features: {', '.join(plan['features'][:3])}\n\n"
+                f"⚡ You now have unlimited searches until {(datetime.now(timezone.utc) + timedelta(days=days)).strftime('%Y-%m-%d')}.\n\n"
+                f"🔗 For support: @darkboxesAdmin"
+            )
+            
+            await event.respond(f"✅ Subscription activated for user {user_id}")
+        else:
+            await event.respond(f"❌ Failed to activate subscription")
+        
+    except Exception as e:
+        logger.error(f"❌ Error in activate_subscription_handler: {e}")
+
+@bot_client.on(events.NewMessage(pattern=r'/broadcast (.+)'))
+async def broadcast_handler(event):
+    """Admin broadcast command"""
+    try:
+        if event.sender_id != config.ADMIN_USER_ID:
+            return
+        
+        message = event.pattern_match.group(1)
+        
+        # Get all users
+        users = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: list(db_manager.db.users.find({}, {"user_id": 1}))
+        )
+        
+        sent = 0
+        failed = 0
+        
+        await event.respond(f"📢 Starting broadcast to {len(users)} users...")
+        
+        for user in users:
+            try:
+                await bot_client.send_message(
+                    user["user_id"],
+                    f"📢 **ANNOUNCEMENT**\n\n{message}\n\n— DarkBoxes Administration"
+                )
+                sent += 1
+                await asyncio.sleep(0.1)
+            except Exception as e:
+                failed += 1
+        
+        await event.respond(f"✅ Broadcast complete\n📤 Sent: {sent}\n❌ Failed: {failed}")
+        
+    except Exception as e:
+        logger.error(f"❌ Error in broadcast_handler: {e}")
+
+@bot_client.on(events.NewMessage(pattern=r'/reply (\d+) (.+)'))
+async def admin_reply_handler(event):
+    """Handle admin reply command"""
+    try:
+        if event.sender_id != config.ADMIN_USER_ID:
+            return
+        
+        user_id = int(event.pattern_match.group(1))
+        message = event.pattern_match.group(2)
+        
+        await bot_client.send_message(
+            user_id,
+            f"👤 **ADMINISTRATOR RESPONSE**\n\n{message}\n\n— DarkBoxes Support Team"
+        )
+        
+        await event.respond(f"✅ Reply sent to user {user_id}")
+        
+    except Exception as e:
+        logger.error(f"❌ Error in admin_reply_handler: {e}")
 
 @bot_client.on(events.NewMessage(pattern=r'/priority (\w+) (\w+)'))
 async def set_priority_handler(event):
@@ -883,7 +1708,7 @@ async def set_priority_handler(event):
         await event.respond(f"✅ Set {search_type} priority to {priority}")
         
     except Exception as e:
-        logger.error(f"Error in set_priority_handler: {e}")
+        logger.error(f"❌ Error in set_priority_handler: {e}")
 
 @bot_client.on(events.NewMessage(pattern=r'/groupstats'))
 async def group_stats_handler(event):
@@ -893,7 +1718,7 @@ async def group_stats_handler(event):
             return
         
         if not hasattr(search_engine, 'group_performance'):
-            await event.respond("No group statistics available")
+            await event.respond("❌ No group statistics available")
             return
         
         stats_text = "📊 **GROUP PERFORMANCE STATISTICS**\n\n"
@@ -907,29 +1732,14 @@ async def group_stats_handler(event):
             stats_text += f"├─ Total Requests: {total}\n"
             stats_text += f"├─ Success: {success}\n"
             stats_text += f"├─ Success Rate: {success_rate:.1f}%\n"
-            stats_text += f"└─ Current Priority: {performance.get('weight', 'N/A')}\n\n"
+            stats_text += f"└─ Current Weight: {performance.get('weight', 'N/A')}\n\n"
         
         await event.respond(stats_text, parse_mode="md")
         
     except Exception as e:
-        logger.error(f"Error in group_stats_handler: {e}")
+        logger.error(f"❌ Error in group_stats_handler: {e}")
 
-# ================== REST OF THE CODE (DatabaseManager, TextProcessor, etc.) ==================
-# (Keep the DatabaseManager, TextProcessor, and other classes from previous code)
-# Just update the imports and ensure they work with new structure
-
-# Initialize
-bot_client = TelegramClient(config.BOT_SESSION_FILE, config.BOT_API_ID, config.BOT_API_HASH)
-user_client = (
-    TelegramClient(config.USER_SESSION_FILE, config.USER_API_ID, config.USER_API_HASH)
-    if config.USER_API_ID and config.USER_API_HASH and config.USER_PHONE
-    else bot_client
-)
-
-db_manager = DatabaseManager()
-search_engine = None
-user_states = {}
-bot_info = None
+# ================== MAIN FUNCTION ==================
 
 async def main():
     """Main function"""
@@ -938,23 +1748,30 @@ async def main():
     try:
         logger.info("🚀 Starting DarkBoxes Intelligence System...")
         
+        # Start bot client
         await bot_client.start(bot_token=config.BOT_TOKEN)
         bot_info = await bot_client.get_me()
         logger.info(f"✅ Bot: @{bot_info.username}")
         
-        if user_client != bot_client:
+        # Start user client if configured
+        if USE_USER_ACCOUNT:
             await user_client.connect()
             if not await user_client.is_user_authorized():
                 logger.error("❌ User client not authorized")
                 return
             logger.info("✅ User client ready")
+        else:
+            logger.info("ℹ️ Using bot client for all operations")
         
+        # Connect to database
         if not await db_manager.connect():
-            logger.error("❌ DB connection failed")
+            logger.error("❌ Database connection failed")
             return
         
+        # Initialize search engine
         search_engine = SearchEngine(db_manager, db_manager)
         
+        # Resolve groups
         logger.info("📡 Connecting to intelligence networks...")
         for group_name, group_data in GROUP_PRIORITIES.items():
             if group_data["enabled"]:
@@ -964,6 +1781,7 @@ async def main():
                 except Exception as e:
                     logger.warning(f"⚠️ Failed: {group_data['name']} - {e}")
         
+        # Start background tasks
         asyncio.create_task(cleanup_expired_searches())
         asyncio.create_task(start_web_server())
         
@@ -971,16 +1789,18 @@ async def main():
         logger.info("🎭 DARK BOXES INTELLIGENCE SYSTEM - OPERATIONAL")
         logger.info("=" * 60)
         
-        await asyncio.Event().wait()
+        # Keep the bot running
+        await bot_client.run_until_disconnected()
         
     except KeyboardInterrupt:
         logger.info("🛑 Shutting down...")
     except Exception as e:
         logger.error(f"💀 Fatal error: {e}")
     finally:
+        # Clean shutdown
         try:
             await bot_client.disconnect()
-            if user_client != bot_client:
+            if USE_USER_ACCOUNT:
                 await user_client.disconnect()
             if db_manager.client:
                 db_manager.client.close()
@@ -988,4 +1808,9 @@ async def main():
             pass
 
 if __name__ == "__main__":
+    # Set event loop policy for Windows if needed
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    
+    # Run the bot
     asyncio.run(main())
