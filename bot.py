@@ -1,18 +1,4 @@
-"""
-Premium Information Bot - Advanced Edition - FIXED VERSION
-Features:
-- Smart cascading search across multiple groups
-- Advanced .txt/.json file processing
-- Interactive button handling for Telegram/Movie bots
-- Referral system with rewards
-- Admin panel with statistics
-- Payment processing system
-- Robust error handling and logging
-- Clean architecture with modular design
-"""
-
 import os
-import sys
 import re
 import json
 import time
@@ -20,1398 +6,1142 @@ import uuid
 import logging
 import asyncio
 import secrets
-import hashlib
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Union, Any
-from dataclasses import dataclass
-from enum import Enum
 
-# Third-party imports
-try:
-    from aiohttp import web, ClientSession
-    from telethon import TelegramClient, events, Button
-    from telethon.tl.types import User, MessageMediaDocument
-    from telethon.tl.functions.channels import GetParticipantRequest
-    from pymongo import MongoClient
-    from pymongo.errors import ServerSelectionTimeoutError
-except ImportError as e:
-    print(f"❌ Missing required dependency: {e}")
-    print("Install with: pip install telethon aiohttp pymongo")
-    sys.exit(1)
+from aiohttp import web, ClientSession
+from telethon import TelegramClient, events, Button
+from telethon.tl.types import User
+from telethon.tl.functions.channels import GetParticipantRequest
+from pymongo import MongoClient
 
-# ================== CONFIGURATION ==================
+# ============ Config ============
 
-@dataclass
-class BotConfig:
-    # Server
-    PORT: int = int(os.getenv("PORT", "10000"))
-    
-    # Bot credentials
-    BOT_API_ID: int = int(os.getenv("API_ID", "0"))
-    BOT_API_HASH: str = os.getenv("API_HASH", "").strip()
-    BOT_TOKEN: str = os.getenv("BOT_TOKEN", "").strip()
-    BOT_SESSION_FILE: str = "bot_session.session"
-    
-    # User account (for relaying)
-    USER_API_ID: int = int(os.getenv("USER_API_ID", "0"))
-    USER_API_HASH: str = os.getenv("USER_API_HASH", "").strip()
-    USER_PHONE: str = os.getenv("USER_PHONE", "").strip()
-    USER_SESSION_FILE: str = "relay_session.session"
-    
-    # Admin and mandatory channel
-    ADMIN_USER_ID: int = int(os.getenv("ADMIN_USER_ID", "0"))
-    MANDATORY_CHANNEL: str = os.getenv("MANDATORY_CHANNEL", "darkboxesv1")
-    
-    # Database
-    MONGODB_URI: str = os.getenv("MONGODB_URI", "").strip()
-    MONGODB_DBNAME: str = "advanced_bot_db"
-    
-    # Payment
-    PAYMENT_QR_CODE: str = os.getenv("PAYMENT_QR_CODE", "https://example.com/payment-qr.png")
-    
-    # Timeouts and limits
-    GROUP_TIMEOUT: int = int(os.getenv("GROUP_TIMEOUT", "25"))
-    FETCH_WAIT_TIME: int = int(os.getenv("FETCH_WAIT_TIME", "2"))
-    MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "20"))
-    
-    # Credits and rewards
-    NEW_USER_CREDITS: int = int(os.getenv("NEW_USER_CREDITS", "3"))
-    REFERRAL_REWARD: int = int(os.getenv("REFERRAL_REWARD", "2"))
-    
-    # External APIs
-    PHONE_API_URL: str = os.getenv("PHONE_API_URL", "")
-    PHONE_API_KEY: str = os.getenv("PHONE_API_KEY", "")
-    VEHICLE_API_URL: str = os.getenv("VEHICLE_API_URL", "")
-    VEHICLE_API_KEY: str = os.getenv("VEHICLE_API_KEY", "")
+PORT = int(os.getenv("PORT", "10000"))
 
-config = BotConfig()
+# Bot credentials
+BOT_SESSION_FILE = os.getenv("BOT_SESSION_FILE", "bot_session.session")
+BOT_API_ID = int(os.getenv("API_ID", "0"))
+BOT_API_HASH = os.getenv("API_HASH", "").strip()
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 
-# ================== LOGGING SETUP ==================
+# User account credentials (for forwarding)
+USER_SESSION_FILE = os.getenv("USER_SESSION_FILE", "relay_session.session")
+USER_API_ID = int(os.getenv("USER_API_ID", "0"))
+USER_API_HASH = os.getenv("USER_API_HASH", "").strip()
+USER_PHONE = os.getenv("USER_PHONE", "").strip()
 
-class ColoredFormatter(logging.Formatter):
-    """Colored logging formatter"""
-    
-    COLORS = {
-        'DEBUG': '\033[36m',    # Cyan
-        'INFO': '\033[32m',     # Green
-        'WARNING': '\033[33m',  # Yellow
-        'ERROR': '\033[31m',    # Red
-        'CRITICAL': '\033[35m', # Magenta
-    }
-    RESET = '\033[0m'
-    
-    def format(self, record):
-        color = self.COLORS.get(record.levelname, self.RESET)
-        record.levelname = f"{color}{record.levelname}{self.RESET}"
-        return super().format(record)
+ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
+MANDATORY_CHANNEL = os.getenv("MANDATORY_CHANNEL", "darkboxesv1")
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s [%(name)s]: %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler("bot.log", encoding="utf-8")
-    ]
-)
+MONGODB_URI = os.getenv("MONGODB_URI", "mongodb+srv://prarthanaray147_db_user:fMuTkgFsaHa5NRIy@cluster0.txn8bv3.mongodb.net/tg_bot_db?retryWrites=true&w=majority")
+MONGODB_DBNAME = os.getenv("MONGODB_DBNAME", "tg_bot_db")
 
-# Apply colored formatter to console handler
-console_handler = logging.getLogger().handlers[0]
-console_handler.setFormatter(ColoredFormatter("%(asctime)s %(levelname)s [%(name)s]: %(message)s"))
+PAYMENT_QR_CODE = os.getenv("PAYMENT_QR_CODE", "https://example.com/payment-qr.png")
 
-logger = logging.getLogger("AdvancedBot")
+FETCH_WAIT_TIME = int(os.getenv("FETCH_WAIT_TIME", "2"))
+GROUP_TIMEOUT = int(os.getenv("GROUP_TIMEOUT", "500"))
+REPLY_TIMEOUT = int(os.getenv("REPLY_TIMEOUT", "660"))
+PROCESSING_WAIT_EXTRA = 8
 
-# ================== CONFIGURATION VALIDATION ==================
+# API endpoints
+PHONE_API_URL = "https://daily-binny-ryuioggv-391a9381.koyeb.app/api/lookup"
+PHONE_API_KEY = "616bd0f26e364c89"
+VEHICLE_API_URL = "https://vehicle-6bh6.onrender.com/vehicle_info"
+VEHICLE_API_KEY = "URSLASH123"
 
-def validate_config() -> bool:
-    """Validate all required configuration"""
-    errors = []
-    
-    # Required configs
-    required_configs = [
-        ("BOT_API_ID", config.BOT_API_ID, lambda x: x != 0),
-        ("BOT_API_HASH", config.BOT_API_HASH, lambda x: len(x) > 0),
-        ("BOT_TOKEN", config.BOT_TOKEN, lambda x: len(x) > 0),
-        ("ADMIN_USER_ID", config.ADMIN_USER_ID, lambda x: x != 0),
-        ("MONGODB_URI", config.MONGODB_URI, lambda x: len(x) > 0),
-    ]
-    
-    for name, value, validator in required_configs:
-        if not validator(value):
-            errors.append(f"❌ {name} is not properly configured")
-    
-    if errors:
-        logger.error("Configuration validation failed:")
-        for error in errors:
-            logger.error(f"  {error}")
-        return False
-    
-    return True
+# Referral settings
+REFERRAL_REWARD = 2
+NEW_USER_CREDITS = 2
 
-if not validate_config():
-    sys.exit(1)
+# ============ Logging ============
 
-USE_USER_ACCOUNT = config.USER_API_ID != 0 and config.USER_API_HASH and config.USER_PHONE
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+logger = logging.getLogger("premium_bot")
 
-# ================== ENUMS AND CONSTANTS ==================
+# ============ Validate Config ============
 
-class SearchStatus(Enum):
-    PENDING = "pending"
-    PROCESSING = "processing"
-    SUCCESS = "success"
-    FAILED = "failed"
-    NO_INFO = "no_info"
+if BOT_API_ID == 0 or not BOT_API_HASH:
+    logger.error("API_ID and API_HASH must be set!")
+    raise ValueError("Missing API_ID or API_HASH")
 
-class UserRole(Enum):
-    USER = "user"
-    PREMIUM = "premium"
-    ADMIN = "admin"
-    BANNED = "banned"
+if not BOT_TOKEN:
+    logger.error("BOT_TOKEN must be set!")
+    raise ValueError("Missing BOT_TOKEN")
 
-# ================== DESTINATION GROUPS ==================
+USE_USER_ACCOUNT = USER_API_ID != 0 and USER_API_HASH and USER_PHONE
+
+logger.info("=" * 60)
+logger.info("Configuration Check:")
+logger.info("BOT API_ID: %s", BOT_API_ID)
+logger.info("BOT API_HASH: %s", BOT_API_HASH[:10] + "...")
+logger.info("BOT_TOKEN: %s", BOT_TOKEN[:20] + "...")
+logger.info("ADMIN_USER_ID: %s", ADMIN_USER_ID)
+if USE_USER_ACCOUNT:
+    logger.info("USER ACCOUNT: Enabled (Phone: %s)", USER_PHONE)
+else:
+    logger.info("USER ACCOUNT: Disabled (will use bot to forward)")
+logger.info("=" * 60)
+
+# ============ Destination Groups Configuration ============
 
 DESTINATION_GROUPS = [
     {
         "name": "Main Group",
         "identifier": -1003596998816,
-        "timeout": config.GROUP_TIMEOUT,
-        "entity": None,
-        "priority": 1
+        "timeout": GROUP_TIMEOUT,
+        "entity": None
     },
     {
         "name": "Backup Group 2",
         "identifier": "darkboxesv3",
-        "timeout": config.GROUP_TIMEOUT,
-        "entity": None,
-        "priority": 2
+        "timeout": GROUP_TIMEOUT,
+        "entity": None
     },
     {
         "name": "Backup Group 3",
         "identifier": "nex_chats",
-        "timeout": config.GROUP_TIMEOUT,
-        "entity": None,
-        "priority": 3
+        "timeout": GROUP_TIMEOUT,
+        "entity": None
     }
 ]
 
-SPECIAL_BOTS = {
-    "family": {
-        "name": "Family Info Group",
-        "identifier": -1003596998816,
-        "timeout": config.GROUP_TIMEOUT,
-        "entity": None
-    },
-    "telegram": {
-        "name": "Telegram Lookup Bot",
-        "identifier": "@Dirgeshrai8090_bot",
-        "timeout": 30,
-        "entity": None
-    },
-    "telegram_username": {
-        "name": "Telegram Username Group",
-        "identifier": "darkboxesv3",
-        "timeout": config.GROUP_TIMEOUT,
-        "entity": None
-    },
-    "vehicle": {
-        "name": "Vehicle Group",
-        "identifier": "IntelXGroup",
-        "timeout": config.GROUP_TIMEOUT,
-        "entity": None
-    },
-    "movie": {
-        "name": "Movie Bot",
-        "identifier": "@iPapkornD2bot",
-        "timeout": 45,
-        "entity": None
-    }
+FAMILY_GROUP = {
+    "name": "Family Info Group",
+    "identifier": -1003596998816,
+    "timeout": GROUP_TIMEOUT,
+    "entity": None
 }
 
-# ================== SEARCH COMMANDS ==================
+TELEGRAM_BOT = {
+    "name": "Telegram Lookup Bot",
+    "identifier": "@Dirgeshrai8090_bot",
+    "timeout": GROUP_TIMEOUT,
+    "entity": None
+}
+
+TELEGRAM_USERNAME_GROUP = {
+    "name": "Telegram Username Group",
+    "identifier": "darkboxesv3",
+    "timeout": GROUP_TIMEOUT,
+    "entity": None
+}
+
+MOVIE_BOT = {
+    "name": "Movie/Series Bot",
+    "identifier": "@iPapkornD2bot",
+    "timeout": 60,
+    "entity": None
+}
+
+VEHICLE_GROUP = {
+    "name": "Vehicle Group",
+    "identifier": "IntelXGroup",
+    "timeout": GROUP_TIMEOUT,
+    "entity": None
+}
+
+# ============ Command Mapping ============
 
 SEARCH_COMMANDS = {
     "phone": {
-        "name": "📱 Phone Number Info",
-        "description": "Get detailed information from phone number",
-        "commands": ["/num", "/phone", "/mobile"],
-        "destination": "groups",
-        "example": "9876543210",
-        "validation": r"^\d{10,15}$"
+        "name": "ðŸ“± Phone Number Info",
+        "type": "group",
+        "commands": {
+            0: "/num",
+            1: "/num",
+            2: "/num"
+        }
     },
     "family": {
-        "name": "👨‍👩‍👧‍👦 Family Info",
-        "description": "Get family member details from phone",
-        "commands": ["/familyinfo", "/family"],
-        "destination": "family",
-        "example": "9876543210",
-        "validation": r"^\d{10,15}$"
+        "name": "ðŸ‘¨â€ðŸ‘©â€ðŸ‘§â€ðŸ‘¦ Family Info",
+        "type": "family_group",
+        "commands": {
+            0: "/familyinfo"
+        }
     },
     "aadhar": {
-        "name": "🆔 Aadhar Card Info",
-        "description": "Get information from Aadhar number",
-        "commands": ["/aadhar", "/adh", "/aadhaar"],
-        "destination": "groups",
-        "example": "123456789012",
-        "validation": r"^\d{12}$"
+        "name": "ðŸ†” Aadhar Info",
+        "type": "group",
+        "commands": {
+            0: "/aadhar",
+            1: "/adh",
+            2: "/aadhar"
+        }
     },
     "vehicle": {
-        "name": "🚗 Vehicle Info",
-        "description": "Get vehicle and owner details",
-        "commands": ["/vehicle", "/vnum", "/car"],
-        "destination": "vehicle",
-        "example": "UP16BH1234",
-        "validation": r"^[A-Z]{2}\d{2}[A-Z]{1,2}\d{4}$"
+        "name": "ðŸš— Vehicle to Phone",
+        "type": "vehicle_group",
+        "commands": {
+            0: "/vnum"
+        }
+    },
+    "vehicle_detail": {
+        "name": "ðŸš™ Vehicle Details",
+        "type": "group",
+        "commands": {
+            0: "/vehicle",
+            1: "/vehicle",
+            2: "/vnum"
+        }
     },
     "upi": {
-        "name": "💳 UPI ID Info",
-        "description": "Get UPI account information",
-        "commands": ["/upiinfo", "/upi"],
-        "destination": "groups",
-        "example": "username@paytm",
-        "validation": r"^[\w\.-]+@[\w\.-]+$"
+        "name": "ðŸ’³ UPI Info",
+        "type": "group",
+        "commands": {
+            0: "/upiinfo",
+            1: "/upiinfo",
+            2: "/upiinfo"
+        }
+    },
+    "fampay": {
+        "name": "ðŸ’° Fampay Info",
+        "type": "group",
+        "commands": {
+            0: "/fam",
+            1: "/fam",
+            2: "/fam"
+        }
     },
     "email": {
-        "name": "📧 Email Info",
-        "description": "Search email address details",
-        "commands": ["/email", "/mail"],
-        "destination": "groups",
-        "example": "user@example.com",
-        "validation": r"^[\w\.-]+@[\w\.-]+\.\w+$"
+        "name": "ðŸ“§ Email Info",
+        "type": "group",
+        "commands": {
+            0: "/email",
+            1: "/email",
+            2: "/email"
+        }
     },
     "telegram": {
-        "name": "📲 Telegram to Phone",
-        "description": "Get phone from Telegram username",
-        "commands": ["/tg", "/telegram"],
-        "destination": "telegram",
-        "example": "@username",
-        "validation": r"^@?\w{5,32}$",
-        "daily_limit": 1
+        "name": "ðŸ“² Telegram to Phone",
+        "type": "telegram_bot",
+        "commands": {
+            0: "/tg"
+        }
+    },
+    "telegram_username": {
+        "name": "ðŸ‘¤ Telegram Username Info",
+        "type": "telegram_username_group",
+        "commands": {
+            0: "/tg"
+        }
     },
     "imei": {
-        "name": "📱 IMEI Info",
-        "description": "Get device info from IMEI",
-        "commands": ["/imei", "/device"],
-        "destination": "groups",
-        "example": "123456789012345",
-        "validation": r"^\d{15}$"
+        "name": "ðŸ“± IMEI Info",
+        "type": "group",
+        "commands": {
+            0: "/imei",
+            1: "/imei",
+            2: "/imei"
+        }
+    },
+    "pak": {
+        "name": "ðŸ‡µðŸ‡° Pakistan Info",
+        "type": "group",
+        "commands": {
+            0: "/cnic",
+            1: "/cnic",
+            2: "/cnic"
+        }
     },
     "gst": {
-        "name": "🏢 GST Info",
-        "description": "Get business info from GST number",
-        "commands": ["/gst", "/gstin"],
-        "destination": "groups",
-        "example": "29ABCDE1234F1Z5",
-        "validation": r"^\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}[Z]{1}[A-Z\d]{1}$"
+        "name": "ðŸ¢ GST Info",
+        "type": "group",
+        "commands": {
+            0: "/gst",
+            1: "/gst",
+            2: "/gst"
+        }
     },
     "insta": {
-        "name": "📷 Instagram Info",
-        "description": "Search Instagram profile details",
-        "commands": ["/insta", "/instagram"],
-        "destination": "groups",
-        "example": "username",
-        "validation": r"^[a-zA-Z0-9_.]{1,30}$"
+        "name": "ðŸ“· Instagram Info",
+        "type": "group",
+        "commands": {
+            0: "/insta",
+            1: "/insta",
+            2: "/insta"
+        }
     },
     "movies": {
-        "name": "🎬 Movies/Series",
-        "description": "Search movies and web series",
-        "commands": [""],
-        "destination": "movie",
-        "example": "Avengers",
-        "validation": r"^.{2,50}$"
+        "name": "ðŸŽ¬ Movies/Web Series",
+        "type": "movie_bot",
+        "commands": {
+            0: ""
+        }
     }
 }
-
-# ================== PRICING PLANS ==================
 
 PLANS = {
-    "trial": {
-        "name": "🆓 Trial Pack",
-        "searches": 5,
-        "price": 50,
-        "days": None,
-        "description": "Perfect for testing our services",
-        "features": ["5 searches", "Basic support", "All search types"]
-    },
-    "basic": {
-        "name": "🔥 Basic Pack",
-        "searches": 15,
-        "price": 100,
-        "days": None,
-        "description": "Most popular choice for regular users",
-        "features": ["15 searches", "Priority support", "All search types"]
-    },
-    "premium": {
-        "name": "⭐ Premium Pack",
-        "searches": 50,
-        "price": 250,
-        "days": None,
-        "description": "Great value for power users",
-        "features": ["50 searches", "Premium support", "All search types"]
-    },
-    "unlimited": {
-        "name": "💎 Unlimited Pack",
-        "searches": -1,
-        "price": 500,
-        "days": 30,
-        "description": "Unlimited searches for 30 days",
-        "features": ["Unlimited searches", "24/7 support", "Priority processing"]
-    }
+    "plan_5": {"searches": 5, "price": 100, "name": "5 Searches", "days": None},
+    "plan_15": {"searches": 15, "price": 200, "name": "15 Searches", "days": None},
+    "plan_week": {"searches": -1, "price": 500, "name": "Unlimited (7 Days)", "days": 7}
 }
 
-# ================== DATABASE MANAGER ==================
+# ============ MongoDB ============
 
-class DatabaseManager:
-    def __init__(self):
-        self.client = None
-        self.db = None
-        self.collections = {}
-    
-    async def connect(self) -> bool:
-        """Connect to MongoDB"""
+mongo_client = None
+db = None
+users_col = None
+payments_col = None
+searches_col = None
+api_keys_col = None
+referrals_col = None
+
+def init_mongo():
+    global mongo_client, db, users_col, payments_col, searches_col, api_keys_col, referrals_col
+    try:
+        mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
+        mongo_client.server_info()
+        db = mongo_client[MONGODB_DBNAME]
+        users_col = db["users"]
+        payments_col = db["payments"]
+        searches_col = db["searches"]
+        api_keys_col = db["api_keys"]
+        referrals_col = db["referrals"]
+        
         try:
-            logger.info("🔌 Connecting to MongoDB...")
-            self.client = MongoClient(config.MONGODB_URI, serverSelectionTimeoutMS=5000)
-            
-            # Test connection
-            self.client.server_info()
-            self.db = self.client[config.MONGODB_DBNAME]
-            
-            # Initialize collections
-            self.collections = {
-                'users': self.db['users'],
-                'searches': self.db['searches'],
-                'payments': self.db['payments'],
-                'referrals': self.db['referrals']
-            }
-            
-            # Create indexes
-            await self._create_indexes()
-            
-            logger.info("✅ MongoDB connected successfully")
-            return True
-            
+            users_col.create_index([("user_id", 1)], unique=True)
         except Exception as e:
-            logger.error(f"❌ MongoDB connection failed: {e}")
-            return False
-    
-    async def _create_indexes(self):
-        """Create database indexes for better performance - FIXED VERSION"""
+            if "already exists" not in str(e).lower():
+                raise
+            logger.info("user_id index already exists")
+        
         try:
-            # User indexes - handle existing indexes
-            try:
-                self.collections['users'].create_index([("user_id", 1)], unique=True)
-            except Exception as e:
-                if "already exists" not in str(e).lower():
-                    logger.warning(f"User ID index issue: {e}")
-            
-            try:
-                self.collections['users'].create_index([("referral_code", 1)], unique=True, sparse=True)
-            except Exception as e:
-                if "already exists" not in str(e).lower():
-                    logger.warning(f"Referral code index issue: {e}")
-            
-            # Other indexes
-            try:
-                self.collections['searches'].create_index([("user_id", 1)])
-                self.collections['searches'].create_index([("timestamp", -1)])
-                self.collections['payments'].create_index([("user_id", 1)])
-                self.collections['payments'].create_index([("payment_id", 1)], unique=True)
-                self.collections['referrals'].create_index([("referrer_id", 1)])
-                self.collections['referrals'].create_index([("referred_id", 1)])
-            except Exception as e:
-                logger.warning(f"Index creation warning: {e}")
-            
-            logger.info("✅ Database indexes processed")
+            users_col.drop_index("referral_code_1")
+            logger.info("Dropped old referral_code index")
         except Exception as e:
-            logger.warning(f"⚠️ Index setup warning: {e}")
-    
-    def get_collection(self, name: str):
-        """Get collection by name"""
-        return self.collections.get(name)
-
-# ================== USER MANAGER ==================
-
-class UserManager:
-    def __init__(self, db: DatabaseManager):
-        self.db = db
-        self.users_col = db.get_collection('users')
-        self.referrals_col = db.get_collection('referrals')
-    
-    async def get_user(self, user_id: int) -> Optional[Dict]:
-        """Get user by ID"""
+            logger.info("No old referral_code index to drop")
+        
         try:
-            return await asyncio.get_running_loop().run_in_executor(
-                None, self.users_col.find_one, {"user_id": user_id}
+            users_col.create_index(
+                [("referral_code", 1)], 
+                unique=True, 
+                partialFilterExpression={"referral_code": {"\$type": "string"}}
             )
+            logger.info("Created partial unique index for referral_code")
         except Exception as e:
-            logger.error(f"Error getting user {user_id}: {e}")
-            return None
-    
-    async def create_user(self, user_id: int, username: str = None, first_name: str = None, referral_code: str = None) -> bool:
-        """Create new user - FIXED VERSION"""
+            if "already exists" not in str(e).lower():
+                logger.warning(f"Could not create referral_code index: {e}")
+        
+        for col, field in [(payments_col, "user_id"), (searches_col, "user_id"), 
+                           (api_keys_col, "user_id"), (referrals_col, "referrer_id"), 
+                           (referrals_col, "referred_id")]:
+            try:
+                col.create_index([(field, 1)])
+            except:
+                pass
+        
         try:
-            # Generate unique referral code
-            user_referral_code = await self._generate_referral_code()
-            
-            user_doc = {
-                "user_id": user_id,
-                "username": username,
-                "first_name": first_name,
-                "joined_at": datetime.now(timezone.utc).isoformat(),
-                "plan": "free",
-                "searches_remaining": config.NEW_USER_CREDITS,
-                "plan_expiry": None,
-                "total_searches": 0,
-                "channel_joined": False,
-                "referral_code": user_referral_code,
-                "referred_by": None,
-                "role": UserRole.USER.value,
-                "banned": False,
-                "last_seen": datetime.now(timezone.utc).isoformat(),
-                "telegram_limits": {}
-            }
-            
-            # FIX: Use proper upsert syntax
-            await asyncio.get_running_loop().run_in_executor(
-                None, lambda: self.users_col.update_one(
-                    {"user_id": user_id},
-                    {"\$setOnInsert": user_doc},  # This is correct
-                    upsert=True
-                )
-            )
-            
-            # Apply referral if provided
-            if referral_code:
-                await self.apply_referral(user_id, referral_code)
-            
-            logger.info(f"✅ Created user {user_id}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error creating user {user_id}: {e}")
-            return False
-    
-    async def _generate_referral_code(self) -> str:
-        """Generate unique referral code"""
-        for _ in range(10):  # Try 10 times
-            code = secrets.token_urlsafe(6).upper()
+            api_keys_col.create_index([("api_key", 1)], unique=True)
+        except:
+            pass
+        
+        logger.info("MongoDB connected successfully")
+    except Exception as e:
+        logger.exception("MongoDB connection failed: %s", e)
+        raise
+
+# ============ Referral System ============
+
+def generate_referral_code():
+    return secrets.token_urlsafe(6).upper()
+
+async def get_or_create_referral_code(user_id: int):
+    try:
+        user = await get_user(user_id)
+        if user and user.get('referral_code'):
+            return user['referral_code']
+        
+        while True:
+            code = generate_referral_code()
             existing = await asyncio.get_running_loop().run_in_executor(
-                None, self.users_col.find_one, {"referral_code": code}
+                None, users_col.find_one, {"referral_code": code}
             )
             if not existing:
+                await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: users_col.update_one(
+                        {"user_id": user_id},
+                        {"\$set": {"referral_code": code}}
+                    )
+                )
                 return code
-        
-        # Fallback with timestamp
-        return f"REF{int(time.time())}"[-8:]
-    
-    async def apply_referral(self, referred_id: int, referral_code: str) -> bool:
-        """Apply referral code for new user"""
-        try:
-            # Find referrer
-            referrer = await asyncio.get_running_loop().run_in_executor(
-                None, self.users_col.find_one, {"referral_code": referral_code.upper()}
-            )
-            
-            if not referrer or referrer['user_id'] == referred_id:
-                return False
-            
-            # Check if user already has a referrer
-            user = await self.get_user(referred_id)
-            if user and user.get('referred_by'):
-                return False
-            
-            # Record referral
-            referral_doc = {
-                "referrer_id": referrer['user_id'],
-                "referred_id": referred_id,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "reward_given": False
-            }
-            
-            await asyncio.get_running_loop().run_in_executor(
-                None, self.referrals_col.insert_one, referral_doc
-            )
-            
-            # Update referred user
-            await asyncio.get_running_loop().run_in_executor(
-                None, lambda: self.users_col.update_one(
-                    {"user_id": referred_id},
-                    {"\$set": {"referred_by": referrer['user_id']}}
-                )
-            )
-            
-            logger.info(f"✅ Applied referral: {referrer['user_id']} -> {referred_id}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error applying referral: {e}")
-            return False
-    
-    async def reward_referrer(self, referred_id: int) -> bool:
-        """Reward referrer when referred user makes first search"""
-        try:
-            # Find unrewarded referral
-            referral = await asyncio.get_running_loop().run_in_executor(
-                None, self.referrals_col.find_one,
-                {"referred_id": referred_id, "reward_given": False}
-            )
-            
-            if not referral:
-                return False
-            
-            # Give reward to referrer
-            await asyncio.get_running_loop().run_in_executor(
-                None, lambda: self.users_col.update_one(
-                    {"user_id": referral['referrer_id']},
-                    {"\$inc": {"searches_remaining": config.REFERRAL_REWARD}}
-                )
-            )
-            
-            # Mark as rewarded
-            await asyncio.get_running_loop().run_in_executor(
-                None, lambda: self.referrals_col.update_one(
-                    {"_id": referral['_id']},
-                    {
-                        "\$set": {
-                            "reward_given": True,
-                            "rewarded_at": datetime.now(timezone.utc).isoformat()
-                        }
-                    }
-                )
-            )
-            
-            logger.info(f"✅ Rewarded referrer {referral['referrer_id']} for {referred_id}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error rewarding referrer: {e}")
-            return False
-    
-    async def update_searches(self, user_id: int, increment: int = -1) -> bool:
-        """Update user search count"""
-        try:
-            await asyncio.get_running_loop().run_in_executor(
-                None, lambda: self.users_col.update_one(
-                    {"user_id": user_id},
-                    {
-                        "\$inc": {
-                            "searches_remaining": increment,
-                            "total_searches": abs(increment)
-                        },
-                        "\$set": {"last_seen": datetime.now(timezone.utc).isoformat()}
-                    }
-                )
-            )
-            return True
-        except Exception as e:
-            logger.error(f"Error updating searches for {user_id}: {e}")
-            return False
-    
-    async def check_daily_limit(self, user_id: int, search_type: str) -> bool:
-        """Check if user has exceeded daily limit for specific search type"""
-        try:
-            if search_type not in SEARCH_COMMANDS:
-                return False
-            
-            daily_limit = SEARCH_COMMANDS[search_type].get('daily_limit')
-            if not daily_limit:
-                return False  # No daily limit
-            
-            today = datetime.now(timezone.utc).date().isoformat()
-            
-            # Get user's limits for today
-            user = await self.get_user(user_id)
-            if not user:
-                return True  # Block if user not found
-            
-            telegram_limits = user.get('telegram_limits', {})
-            today_count = telegram_limits.get(today, {}).get(search_type, 0)
-            
-            return today_count >= daily_limit
-            
-        except Exception as e:
-            logger.error(f"Error checking daily limit: {e}")
-            return True  # Block on error
-    
-    async def update_daily_limit(self, user_id: int, search_type: str):
-        """Update daily limit counter"""
-        try:
-            if search_type not in SEARCH_COMMANDS:
-                return
-            
-            today = datetime.now(timezone.utc).date().isoformat()
-            
-            await asyncio.get_running_loop().run_in_executor(
-                None, lambda: self.users_col.update_one(
-                    {"user_id": user_id},
-                    {"\$inc": {f"telegram_limits.{today}.{search_type}": 1}}
-                )
-            )
-            
-        except Exception as e:
-            logger.error(f"Error updating daily limit: {e}")
+    except Exception as e:
+        logger.exception("Error generating referral code: %s", e)
+        return None
 
-# ================== TEXT PROCESSING UTILITIES ==================
-
-class TextProcessor:
-    @staticmethod
-    def is_processing_message(text: str) -> bool:
-        """Check if message indicates processing"""
-        if not text or len(text.strip()) < 10:
-            return True
+async def apply_referral(referred_user_id: int, referral_code: str):
+    try:
+        referrer = await asyncio.get_running_loop().run_in_executor(
+            None, users_col.find_one, {"referral_code": referral_code.upper()}
+        )
         
-        processing_keywords = [
-            'processing', 'please wait', 'fetching', 'loading', 'searching',
-            'retrieving', 'hold on', 'wait a moment', 'in progress',
-            'gathering data', 'working on it', '⏳', '🔍', 'searching for'
-        ]
-        
-        text_lower = text.lower()
-        return any(keyword in text_lower for keyword in processing_keywords)
-    
-    @staticmethod
-    def is_no_info_message(text: str) -> bool:
-        """Check if message indicates no information found"""
-        if not text:
+        if not referrer:
             return False
         
-        no_info_keywords = [
-            'no info', 'no information', 'not found', 'no data', 'no result',
-            'no record', 'invalid', 'doesn\'t exist', 'does not exist',
-            'not available', 'no details', 'unable to find', 'could not find',
-            'couldn\'t find', 'no match', 'not exist', 'no information found',
-            'to reduce spam', 'must have joined', 'join all channels',
-            'verify your account', 'admin to verify', 'subscription required'
-        ]
+        referrer_id = referrer['user_id']
         
-        text_lower = text.lower()
-        return any(keyword in text_lower for keyword in no_info_keywords)
-    
-    @staticmethod
-    def clean_result_text(text: str) -> str:
-        """Clean and format result text"""
-        if not text:
-            return ""
+        if referrer_id == referred_user_id:
+            return False
         
-        # Remove URLs and mentions
-        patterns = [
-            r'https?://[^\s]+',
-            r'www\.[^\s]+', 
-            r't\.me/[^\s]+',
-            r'@[a-zA-Z0-9_]{3,32}',
-            r'tg://[^\s]+',
-        ]
+        user = await get_user(referred_user_id)
+        if user.get('referred_by'):
+            return False
         
-        for pattern in patterns:
-            text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+        referral_doc = {
+            "referrer_id": referrer_id,
+            "referred_id": referred_user_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "reward_given": False
+        }
         
-        # Remove promotional content
-        promotional_patterns = [
-            r'(?i)(powered by|developed by|designed by).*',
-            r'(?i)(follow|subscribe|join|visit|contact).*',
-            r'(?i)admin.*',
-            r'(?i)creator.*'
-        ]
+        await asyncio.get_running_loop().run_in_executor(
+            None, referrals_col.insert_one, referral_doc
+        )
         
-        for pattern in promotional_patterns:
-            text = re.sub(pattern, '', text)
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: users_col.update_one(
+                {"user_id": referred_user_id},
+                {"\$set": {"referred_by": referrer_id}}
+            )
+        )
         
-        # Clean whitespace
-        text = re.sub(r'\n{3,}', '\n\n', text)
-        text = re.sub(r' {2,}', ' ', text)
-        
-        return text.strip()
-    
-    @staticmethod
-    def validate_query(query: str, search_type: str) -> tuple[bool, str]:
-        """Validate query against search type requirements"""
-        if search_type not in SEARCH_COMMANDS:
-            return False, "Invalid search type"
-        
-        command_info = SEARCH_COMMANDS[search_type]
-        validation_pattern = command_info.get('validation')
-        
-        if not validation_pattern:
-            return True, query  # No validation required
-        
-        # Clean the query
-        query = query.strip()
-        
-        # Special handling for different types
-        if search_type == "phone":
-            query = re.sub(r'[^\d]', '', query)
-            if len(query) < 10 or len(query) > 15:
-                return False, "Phone number must be 10-15 digits"
-        
-        elif search_type == "aadhar":
-            query = re.sub(r'[^\d]', '', query)
-            if len(query) != 12:
-                return False, "Aadhar number must be 12 digits"
-        
-        elif search_type == "vehicle":
-            query = query.upper().replace(' ', '')
-            if not re.match(validation_pattern, query):
-                return False, "Invalid vehicle number format (e.g., UP16BH1234)"
-        
-        elif search_type in ["telegram", "telegram_username"]:
-            query = query.replace('@', '').strip()
-            if len(query) < 5 or len(query) > 32:
-                return False, "Username must be 5-32 characters"
-        
-        elif search_type == "email":
-            if not re.match(validation_pattern, query):
-                return False, "Invalid email format"
-        
-        elif search_type == "gst":
-            query = query.upper().replace(' ', '')
-            if not re.match(validation_pattern, query):
-                return False, "Invalid GST number format"
-        
-        # Default regex validation
-        if not re.match(validation_pattern, query):
-            return False, f"Invalid format for {search_type}"
-        
-        return True, query
+        return True
+    except Exception as e:
+        logger.exception("Error applying referral: %s", e)
+        return False
 
-# ================== SEARCH ENGINE ==================
+async def reward_referrer(referred_user_id: int):
+    try:
+        referral = await asyncio.get_running_loop().run_in_executor(
+            None, referrals_col.find_one, {"referred_id": referred_user_id, "reward_given": False}
+        )
+        
+        if not referral:
+            return False
+        
+        referrer_id = referral['referrer_id']
+        
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: users_col.update_one(
+                {"user_id": referrer_id},
+                {"\$inc": {"searches_remaining": REFERRAL_REWARD}}
+            )
+        )
+        
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: referrals_col.update_one(
+                {"_id": referral['_id']},
+                {"\$set": {"reward_given": True, "rewarded_at": datetime.now(timezone.utc).isoformat()}}
+            )
+        )
+        
+        try:
+            await bot_client.send_message(
+                referrer_id,
+                f"ðŸŽ‰ Congratulations!\n\n"
+                f"You earned {REFERRAL_REWARD} credits because someone used your referral link!\n\n"
+                f"Keep sharing to earn more credits! ðŸ’°"
+            )
+        except Exception as e:
+            logger.error(f"Could not notify referrer {referrer_id}: {e}")
+        
+        return True
+    except Exception as e:
+        logger.exception("Error rewarding referrer: %s", e)
+        return False
 
-class SearchEngine:
-    def __init__(self, db: DatabaseManager, user_manager: UserManager):
-        self.db = db
-        self.user_manager = user_manager
-        self.searches_col = db.get_collection('searches')
-        self.pending_searches: Dict[str, Dict] = {}
-        self.interactive_sessions: Dict[int, Dict] = {}
-    
-    async def perform_search(self, search_type: str, query: str, user_id: int) -> Dict:
-        """Main search function with cascading logic"""
-        if search_type not in SEARCH_COMMANDS:
-            return {"success": False, "error": "❌ Invalid search type"}
+async def get_referral_stats(user_id: int):
+    try:
+        total_referrals = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: referrals_col.count_documents({"referrer_id": user_id})
+        )
         
-        # Validate query
-        is_valid, cleaned_query = TextProcessor.validate_query(query, search_type)
-        if not is_valid:
-            return {"success": False, "error": f"❌ {cleaned_query}"}
-        
-        query = cleaned_query
-        
-        # Check daily limits for specific search types
-        if await self.user_manager.check_daily_limit(user_id, search_type):
-            reset_time = await self._get_reset_time()
-            return {
-                "success": False, 
-                "error": f"⏰ Daily limit reached for {search_type}.\nReset in: {reset_time}"
-            }
-        
-        command_info = SEARCH_COMMANDS[search_type]
-        destination = command_info["destination"]
-        
-        logger.info(f"🔍 Starting search: {search_type} = {query} for user {user_id}")
-        
-        # Route to appropriate handler
-        if destination == "groups":
-            result = await self._search_in_groups(search_type, query, user_id)
-        elif destination in SPECIAL_BOTS:
-            result = await self._search_in_special_bot(destination, search_type, query, user_id)
-        else:
-            result = {"success": False, "error": "❌ Search destination not configured"}
-        
-        # Log search attempt
-        await self._log_search(user_id, search_type, query, result.get("success", False))
-        
-        # Update daily limit if applicable
-        if result.get("success") and command_info.get("daily_limit"):
-            await self.user_manager.update_daily_limit(user_id, search_type)
-        
-        return result
-    
-    async def _search_in_groups(self, search_type: str, query: str, user_id: int) -> Dict:
-        """Search in cascading groups"""
-        command_info = SEARCH_COMMANDS[search_type]
-        commands = command_info["commands"]
-        
-        # Sort groups by priority
-        groups = sorted(DESTINATION_GROUPS, key=lambda x: x["priority"])
-        
-        for idx, group in enumerate(groups):
-            if not group.get("entity"):
-                logger.warning(f"Group {group['name']} not resolved, skipping")
-                continue
-            
-            command = commands[idx % len(commands)]  # Cycle through commands
-            message = f"{command} {query}"
-            
-            try:
-                # Send message to group
-                sent_msg = await user_client.send_message(group["entity"], message)
-                logger.info(f"📤 [{idx+1}/{len(groups)}] Sent to {group['name']}: {message}")
-                
-                # Create search tracking
-                search_id = f"{sent_msg.id}_{int(time.time()*1000)}_{idx}"
-                future = asyncio.get_running_loop().create_future()
-                
-                self.pending_searches[search_id] = {
-                    "future": future,
-                    "user_id": user_id,
-                    "query": query,
-                    "search_type": search_type,
-                    "timestamp": time.time(),
-                    "message_id": sent_msg.id,
-                    "chat_entity": group["entity"],
-                    "group_name": group["name"],
-                    "group_index": idx
-                }
-                
-                try:
-                    # Wait for result
-                    result_text = await asyncio.wait_for(future, timeout=group["timeout"])
-                    
-                    if isinstance(result_text, str) and result_text.strip():
-                        # Validate result
-                        if not TextProcessor.is_no_info_message(result_text):
-                            cleaned = TextProcessor.clean_result_text(result_text)
-                            if len(cleaned) > 20:  # Minimum content check
-                                self.pending_searches.pop(search_id, None)
-                                return {
-                                    "success": True,
-                                    "result": self._format_result(cleaned, search_type),
-                                    "source": group["name"]
-                                }
-                    
-                    # Result not useful, try next group
-                    self.pending_searches.pop(search_id, None)
-                    logger.info(f"⚠️ Result from {group['name']} not useful, trying next")
-                    continue
-                    
-                except asyncio.TimeoutError:
-                    self.pending_searches.pop(search_id, None)
-                    logger.info(f"⏱️ Timeout from {group['name']} ({group['timeout']}s)")
-                    continue
-                    
-            except Exception as e:
-                logger.error(f"❌ Error searching in {group['name']}: {e}")
-                continue
+        rewarded_referrals = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: referrals_col.count_documents({"referrer_id": user_id, "reward_given": True})
+        )
         
         return {
-            "success": False,
-            "error": "❌ No results found from any source.\n\nPlease try a different query or format."
+            "total": total_referrals,
+            "rewarded": rewarded_referrals,
+            "pending": total_referrals - rewarded_referrals
         }
-    
-    async def _search_in_special_bot(self, destination: str, search_type: str, query: str, user_id: int) -> Dict:
-        """Search in special bots (telegram, movie, etc.)"""
-        bot_config = SPECIAL_BOTS.get(destination)
-        if not bot_config or not bot_config.get("entity"):
-            return {"success": False, "error": f"❌ {destination} bot not configured"}
-        
-        # Handle interactive bots
-        if destination in ["telegram", "movie"]:
-            return await self._handle_interactive_bot(destination, search_type, query, user_id)
-        
-        # Handle regular special bots
-        command_info = SEARCH_COMMANDS[search_type]
-        command = command_info["commands"][0] if command_info["commands"][0] else ""
-        message = f"{command} {query}".strip()
-        
-        try:
-            sent_msg = await user_client.send_message(bot_config["entity"], message)
-            logger.info(f"📤 Sent to {bot_config['name']}: {message}")
-            
-            # Wait for response
-            await asyncio.sleep(3)
-            
-            # Get recent messages
-            messages = await user_client.get_messages(bot_config["entity"], limit=10)
-            
-            for msg in messages:
-                if msg.id == sent_msg.id:
-                    continue
-                
-                # Check if it's a response to our message
-                msg_time = msg.date.timestamp() if msg.date else 0
-                sent_time = sent_msg.date.timestamp() if sent_msg.date else 0
-                
-                if msg_time > sent_time:
-                    text = msg.text or msg.raw_text
-                    if text and not TextProcessor.is_processing_message(text):
-                        if not TextProcessor.is_no_info_message(text):
-                            cleaned = TextProcessor.clean_result_text(text)
-                            return {
-                                "success": True,
-                                "result": self._format_result(cleaned, search_type),
-                                "source": bot_config["name"]
-                            }
-            
-            return {"success": False, "error": f"❌ No response from {bot_config['name']}"}
-            
-        except Exception as e:
-            logger.error(f"Error with {destination} bot: {e}")
-            return {"success": False, "error": f"❌ Error contacting {destination} bot"}
-    
-    async def _handle_interactive_bot(self, destination: str, search_type: str, query: str, user_id: int) -> Dict:
-        """Handle bots that require interactive button selection"""
-        bot_config = SPECIAL_BOTS[destination]
-        
-        try:
-            command_info = SEARCH_COMMANDS[search_type]
-            command = command_info["commands"][0] if command_info["commands"] else ""
-            message = f"{command} {query}".strip()
-            
-            sent_msg = await user_client.send_message(bot_config["entity"], message)
-            logger.info(f"📤 Sent to interactive {bot_config['name']}: {message}")
-            
-            # Wait for response with buttons
-            await asyncio.sleep(5)
-            
-            messages = await user_client.get_messages(bot_config["entity"], limit=15)
-            
-            for msg in messages:
-                if msg.id == sent_msg.id:
-                    continue
-                
-                msg_time = msg.date.timestamp() if msg.date else 0
-                sent_time = sent_msg.date.timestamp() if sent_msg.date else 0
-                
-                if msg_time > sent_time:
-                    # Check for inline buttons
-                    if msg.buttons:
-                        logger.info(f"🔘 Found interactive buttons in {bot_config['name']}")
-                        
-                        # Store interactive session
-                        self.interactive_sessions[user_id] = {
-                            "dest_message": msg,
-                            "dest_entity": bot_config["entity"],
-                            "type": destination,
-                            "query": query,
-                            "search_type": search_type,
-                            "original_msg_id": sent_msg.id,
-                            "user_id": user_id
-                        }
-                        
-                        # Convert buttons for user
-                        user_buttons = []
-                        for row_idx, row in enumerate(msg.buttons):
-                            button_row = []
-                            for col_idx, button in enumerate(row):
-                                if hasattr(button, 'text'):
-                                    button_row.append(Button.inline(
-                                        button.text,
-                                        f"interactive_{destination}_{row_idx}_{col_idx}"
-                                    ))
-                            if button_row:
-                                user_buttons.append(button_row)
-                        
-                        return {
-                            "success": False,
-                            "needs_interaction": True,
-                            "message": msg.text or msg.raw_text or f"🔍 Select an option for {search_type}:",
-                            "buttons": user_buttons
-                        }
-                    
-                    # Direct result
-                    elif msg.text or msg.file:
-                        text = msg.text or msg.raw_text or "File received"
-                        if msg.file:
-                            return {
-                                "success": True,
-                                "result": self._format_result(text, search_type),
-                                "source": bot_config["name"],
-                                "file": msg
-                            }
-                        else:
-                            cleaned = TextProcessor.clean_result_text(text)
-                            return {
-                                "success": True,
-                                "result": self._format_result(cleaned, search_type),
-                                "source": bot_config["name"]
-                            }
-            
-            return {"success": False, "error": f"❌ No response from {bot_config['name']}"}
-            
-        except Exception as e:
-            logger.error(f"Error with interactive {destination}: {e}")
-            return {"success": False, "error": f"❌ Error with interactive {destination}"}
-    
-    def _format_result(self, content: str, search_type: str) -> str:
-        """Format final result with header and footer"""
-        if not content:
-            return "❌ No information found"
-        
-        command_info = SEARCH_COMMANDS.get(search_type, {})
-        search_name = command_info.get("name", "Search Result")
-        
-        header = f"✅ {search_name}\n\n"
-        footer = f"\n\n{'─'*35}\n💎 Premium Info Bot\n🔗 @darkboxesAdmin"
-        
-        return header + content + footer
-    
-    async def _log_search(self, user_id: int, search_type: str, query: str, success: bool):
-        """Log search to database"""
-        try:
-            doc = {
-                "user_id": user_id,
-                "search_type": search_type,
-                "query": query[:100],  # Limit query length
-                "success": success,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
-            await asyncio.get_running_loop().run_in_executor(
-                None, self.searches_col.insert_one, doc
-            )
-        except Exception as e:
-            logger.error(f"Error logging search: {e}")
-    
-    async def _get_reset_time(self) -> str:
-        """Get time until daily limit reset"""
-        try:
-            tomorrow = datetime.now(timezone.utc).date() + timedelta(days=1)
-            tomorrow_start = datetime.combine(tomorrow, datetime.min.time()).replace(tzinfo=timezone.utc)
-            time_diff = tomorrow_start - datetime.now(timezone.utc)
-            hours = int(time_diff.total_seconds() // 3600)
-            minutes = int((time_diff.total_seconds() % 3600) // 60)
-            return f"{hours}h {minutes}m"
-        except Exception:
-            return "24h"
+    except Exception as e:
+        logger.exception("Error getting referral stats: %s", e)
+        return {"total": 0, "rewarded": 0, "pending": 0}
 
-# ================== PAYMENT SYSTEM ==================
+# ============ API Key Management ============
 
-class PaymentManager:
-    def __init__(self, db: DatabaseManager):
-        self.db = db
-        self.payments_col = db.get_collection('payments')
-        self.users_col = db.get_collection('users')
-    
-    async def create_payment_request(self, user_id: int, plan_key: str) -> Optional[str]:
-        """Create a new payment request - FIXED VERSION"""
-        try:
-            if plan_key not in PLANS:
-                return None
-
-            plan = PLANS[plan_key]
-            payment_id = uuid.uuid4().hex
-
-            doc = {
-                "payment_id": payment_id,
-                "user_id": user_id,
-                "plan": plan_key,
-                "amount": plan["price"],
-                "status": "pending",
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "screenshot_file_id": None,
-                "approved_at": None,
-                "rejected_at": None
-            }
-
-            await asyncio.get_running_loop().run_in_executor(
-                None, self.payments_col.insert_one, doc
-            )
-
-            logger.info(f"💳 Created payment request {payment_id} for user {user_id}")
-            return payment_id
-
-        except Exception as e:
-            logger.error(f"Error creating payment request: {e}")
-            return None
-    
-    async def update_payment_screenshot(self, payment_id: str, file_id: str) -> bool:
-        """Update payment with screenshot"""
-        try:
-            await asyncio.get_running_loop().run_in_executor(
-                None, lambda: self.payments_col.update_one(
-                    {"payment_id": payment_id},
-                    {
-                        "\$set": {
-                            "screenshot_file_id": file_id,
-                            "screenshot_at": datetime.now(timezone.utc).isoformat()
-                        }
-                    }
-                )
-            )
-            return True
-        except Exception as e:
-            logger.error(f"Error updating payment screenshot: {e}")
-            return False
-    
-    async def approve_payment(self, payment_id: str) -> bool:
-        """Approve payment and update user plan"""
-        try:
-            # Get payment details
-            payment = await asyncio.get_running_loop().run_in_executor(
-                None, self.payments_col.find_one, {"payment_id": payment_id}
-            )
-            
-            if not payment or payment["status"] != "pending":
-                return False
-            
-            plan_key = payment["plan"]
-            plan = PLANS[plan_key]
-            user_id = payment["user_id"]
-            
-            # Update user plan
-            if plan["searches"] == -1:  # Unlimited plan
-                await asyncio.get_running_loop().run_in_executor(
-                    None, lambda: self.users_col.update_one(
-                        {"user_id": user_id},
-                        {
-                            "\$set": {
-                                "plan": "unlimited",
-                                "searches_remaining": 999999,
-                                "plan_expiry": (datetime.now(timezone.utc) + timedelta(days=plan["days"])).isoformat()
-                            }
-                        }
-                    )
-                )
-            else:  # Limited searches plan
-                user = await asyncio.get_running_loop().run_in_executor(
-                    None, self.users_col.find_one, {"user_id": user_id}
-                )
-                current_searches = user.get("searches_remaining", 0)
-                
-                await asyncio.get_running_loop().run_in_executor(
-                    None, lambda: self.users_col.update_one(
-                        {"user_id": user_id},
-                        {
-                            "\$set": {
-                                "plan": "premium",
-                                "searches_remaining": current_searches + plan["searches"]
-                            }
-                        }
-                    )
-                )
-            
-            # Mark payment as approved
-            await asyncio.get_running_loop().run_in_executor(
-                None, lambda: self.payments_col.update_one(
-                    {"payment_id": payment_id},
-                    {
-                        "\$set": {
-                            "status": "approved",
-                            "approved_at": datetime.now(timezone.utc).isoformat()
-                        }
-                    }
-                )
-            )
-            
-            logger.info(f"✅ Approved payment {payment_id} for user {user_id}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error approving payment: {e}")
-            return False
-    
-    async def reject_payment(self, payment_id: str) -> bool:
-        """Reject payment"""
-        try:
-            await asyncio.get_running_loop().run_in_executor(
-                None, lambda: self.payments_col.update_one(
-                    {"payment_id": payment_id},
-                    {
-                        "\$set": {
-                            "status": "rejected",
-                            "rejected_at": datetime.now(timezone.utc).isoformat()
-                        }
-                    }
-                )
-            )
-            return True
-        except Exception as e:
-            logger.error(f"Error rejecting payment: {e}")
-            return False
-    
-    async def get_pending_payments(self, limit: int = 10) -> List[Dict]:
-        """Get pending payments for admin review"""
-        try:
-            cursor = self.payments_col.find({"status": "pending"}).limit(limit).sort("created_at", -1)
-            return await asyncio.get_running_loop().run_in_executor(None, list, cursor)
-        except Exception as e:
-            logger.error(f"Error getting pending payments: {e}")
-            return []
-
-# ================== ADMIN PANEL ==================
-
-class AdminPanel:
-    def __init__(self, db: DatabaseManager, user_manager: UserManager):
-        self.db = db
-        self.user_manager = user_manager
-        self.users_col = db.get_collection('users')
-        self.searches_col = db.get_collection('searches')
-        self.payments_col = db.get_collection('payments')
-    
-    async def is_admin(self, user_id: int) -> bool:
-        """Check if user is admin"""
-        return user_id == config.ADMIN_USER_ID
-    
-    async def get_bot_statistics(self) -> Dict:
-        """Get comprehensive bot statistics"""
-        try:
-            loop = asyncio.get_running_loop()
-            
-            # Basic counts
-            total_users = await loop.run_in_executor(None, self.users_col.count_documents, {})
-            premium_users = await loop.run_in_executor(
-                None, self.users_col.count_documents, {"plan": {"\$in": ["premium", "unlimited"]}}
-            )
-            total_searches = await loop.run_in_executor(None, self.searches_col.count_documents, {})
-            successful_searches = await loop.run_in_executor(
-                None, self.searches_col.count_documents, {"success": True}
-            )
-            
-            # Payment statistics
-            total_payments = await loop.run_in_executor(None, self.payments_col.count_documents, {})
-            approved_payments = await loop.run_in_executor(
-                None, self.payments_col.count_documents, {"status": "approved"}
-            )
-            pending_payments = await loop.run_in_executor(
-                None, self.payments_col.count_documents, {"status": "pending"}
-            )
-            
-            # Revenue calculation
-            approved_payment_docs = await loop.run_in_executor(
-                None, lambda: list(self.payments_col.find({"status": "approved"}, {"amount": 1}))
-            )
-            total_revenue = sum(p.get("amount", 0) for p in approved_payment_docs)
-            
-            # Today's statistics
-            today = datetime.now(timezone.utc).date()
-            today_start = datetime.combine(today, datetime.min.time()).replace(tzinfo=timezone.utc)
-            
-            today_users = await loop.run_in_executor(
-                None, self.users_col.count_documents, 
-                {"joined_at": {"\$gte": today_start.isoformat()}}
-            )
-            today_searches = await loop.run_in_executor(
-                None, self.searches_col.count_documents,
-                {"timestamp": {"\$gte": today_start.isoformat()}}
-            )
-            today_payments = await loop.run_in_executor(
-                None, self.payments_col.count_documents,
-                {"created_at": {"\$gte": today_start.isoformat()}}
-            )
-            
-            return {
-                "total_users": total_users,
-                "premium_users": premium_users,
-                "total_searches": total_searches,
-                "successful_searches": successful_searches,
-                "success_rate": round((successful_searches / max(total_searches, 1)) * 100, 1),
-                "total_payments": total_payments,
-                "approved_payments": approved_payments,
-                "pending_payments": pending_payments,
-                "total_revenue": total_revenue,
-                "today_users": today_users,
-                "today_searches": today_searches,
-                "today_payments": today_payments,
-            }
-            
-        except Exception as e:
-            logger.error(f"Error getting bot statistics: {e}")
-            return {}
-
-# ================== KEYBOARD BUILDERS ==================
-
-class KeyboardBuilder:
-    @staticmethod
-    def main_menu(user_role: str = "user") -> List[List[Button]]:
-        """Build main menu keyboard"""
-        buttons = []
-        
-        # Search type buttons (2 per row)
-        search_buttons = []
-        for key, cmd in SEARCH_COMMANDS.items():
-            search_buttons.append(Button.inline(cmd["name"], f"search_{key}"))
-            
-            if len(search_buttons) == 2:
-                buttons.append(search_buttons)
-                search_buttons = []
-        
-        # Add remaining button
-        if search_buttons:
-            buttons.append(search_buttons)
-        
-        # User menu options
-        buttons.extend([
-            [Button.inline("👤 My Profile", "profile"), Button.inline("🎁 Referrals", "referrals")],
-            [Button.inline("💎 Premium Plans", "plans"), Button.inline("🆘 Support", "support")]
-        ])
-        
-        # Admin options
-        if user_role == "admin":
-            buttons.append([Button.inline("⚙️ Admin Panel", "admin_panel")])
-        
-        return buttons
-    
-    @staticmethod
-    def plans_menu() -> List[List[Button]]:
-        """Build plans menu keyboard"""
-        buttons = []
-        
-        for key, plan in PLANS.items():
-            if plan["searches"] == -1:
-                searches_text = f"Unlimited ({plan['days']} days)"
-            else:
-                searches_text = f"{plan['searches']} searches"
-            
-            button_text = f"{plan['name']}\n₹{plan['price']} • {searches_text}"
-            buttons.append([Button.inline(button_text, f"buy_{key}")])
-        
-        buttons.append([Button.inline("🔙 Back to Main", "main_menu")])
-        return buttons
-    
-    @staticmethod
-    def admin_menu() -> List[List[Button]]:
-        """Build admin menu keyboard"""
-        return [
-            [Button.inline("📊 Statistics", "admin_stats"), Button.inline("💳 Payments", "admin_payments")],
-            [Button.inline("🔙 Back to Main", "main_menu")]
-        ]
-    
-    @staticmethod
-    def referral_menu() -> List[List[Button]]:
-        """Build referral menu keyboard"""
-        return [
-            [Button.inline("🔗 My Referral Link", "referral_link")],
-            [Button.inline("📊 Referral Stats", "referral_stats")],
-            [Button.inline("🔙 Back to Main", "main_menu")]
-        ]
-    
-    @staticmethod
-    def payment_approval_buttons(payment_id: str, user_id: int) -> List[List[Button]]:
-        """Build payment approval buttons for admin"""
-        return [
-            [
-                Button.inline("✅ Approve", f"approve_payment_{payment_id}_{user_id}"),
-                Button.inline("❌ Reject", f"reject_payment_{payment_id}_{user_id}")
-            ]
-        ]
-
-# ================== TELEGRAM CLIENTS ==================
-
-bot_client = TelegramClient(config.BOT_SESSION_FILE, config.BOT_API_ID, config.BOT_API_HASH)
-user_client = (
-    TelegramClient(config.USER_SESSION_FILE, config.USER_API_ID, config.USER_API_HASH)
-    if USE_USER_ACCOUNT
-    else bot_client
-)
-
-# ================== GLOBAL MANAGERS ==================
-
-db_manager = DatabaseManager()
-user_manager = None
-search_engine = None
-payment_manager = None
-admin_panel = None
-
-# State tracking
-user_states: Dict[int, Dict] = {}
-
-# ================== CHANNEL MEMBERSHIP CHECK ==================
-
-async def check_channel_membership(user_id: int) -> bool:
-    """Check if user is member of mandatory channel"""
+async def create_api_key(user_id: int, name: str = "Default Key"):
     try:
-        channel = await bot_client.get_entity(config.MANDATORY_CHANNEL)
+        api_key = f"sk_{secrets.token_urlsafe(32)}"
+        doc = {
+            "api_key": api_key,
+            "user_id": user_id,
+            "name": name,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "searches_used": 0,
+            "active": True,
+            "last_used": None
+        }
+        await asyncio.get_running_loop().run_in_executor(
+            None, api_keys_col.insert_one, doc
+        )
+        return api_key
+    except Exception as e:
+        logger.exception("Error creating API key: %s", e)
+        return None
+
+async def get_api_key_info(api_key: str):
+    try:
+        return await asyncio.get_running_loop().run_in_executor(
+            None, api_keys_col.find_one, {"api_key": api_key}
+        )
+    except Exception as e:
+        logger.exception("Error fetching API key: %s", e)
+        return None
+
+async def list_user_api_keys(user_id: int):
+    try:
+        cursor = api_keys_col.find({"user_id": user_id})
+        return await asyncio.get_running_loop().run_in_executor(
+            None, list, cursor
+        )
+    except Exception as e:
+        logger.exception("Error listing API keys: %s", e)
+        return []
+
+async def delete_api_key(api_key: str, user_id: int):
+    try:
+        result = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: api_keys_col.delete_one(
+                {"api_key": api_key, "user_id": user_id}
+            )
+        )
+        return result.deleted_count > 0
+    except Exception as e:
+        logger.exception("Error deleting API key: %s", e)
+        return False
+
+async def increment_api_key_usage(api_key: str):
+    try:
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: api_keys_col.update_one(
+                {"api_key": api_key},
+                {
+                    "\$inc": {"searches_used": 1},
+                    "\$set": {"last_used": datetime.now(timezone.utc).isoformat()}
+                }
+            )
+        )
+        return True
+    except Exception as e:
+        logger.exception("Error incrementing API usage: %s", e)
+        return False
+
+# ============ User Management ============
+
+async def get_user(user_id: int):
+    try:
+        return await asyncio.get_running_loop().run_in_executor(
+            None, users_col.find_one, {"user_id": user_id}
+        )
+    except Exception as e:
+        logger.exception("Error fetching user: %s", e)
+        return None
+
+async def create_or_update_user(user_id: int, username: str = None, first_name: str = None):
+    try:
+        doc = {
+            "user_id": user_id,
+            "username": username,
+            "first_name": first_name,
+            "joined_at": datetime.now(timezone.utc).isoformat(),
+            "plan": "free",
+            "searches_remaining": NEW_USER_CREDITS,
+            "plan_expiry": None,
+            "total_searches": 0,
+            "channel_joined": False,
+            "referral_code": None,
+            "referred_by": None
+        }
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: users_col.update_one(
+                {"user_id": user_id},
+                {"\$setOnInsert": doc},
+                upsert=True
+            )
+        )
+        return await get_user(user_id)
+    except Exception as e:
+        logger.exception("Error creating user: %s", e)
+        return None
+
+async def update_user_plan(user_id: int, plan: str, searches: int, days: int = None):
+    try:
+        update_doc = {
+            "plan": plan,
+            "searches_remaining": searches
+        }
+        if days:
+            update_doc["plan_expiry"] = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+        else:
+            update_doc["plan_expiry"] = None
+            
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: users_col.update_one(
+                {"user_id": user_id},
+                {"\$set": update_doc}
+            )
+        )
+        return True
+    except Exception as e:
+        logger.exception("Error updating user plan: %s", e)
+        return False
+
+async def decrement_search(user_id: int):
+    try:
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: users_col.update_one(
+                {"user_id": user_id},
+                {"\$inc": {"searches_remaining": -1, "total_searches": 1}}
+            )
+        )
+        return True
+    except Exception as e:
+        logger.exception("Error decrementing search: %s", e)
+        return False
+
+async def log_search(user_id: int, search_type: str, query: str, result: str):
+    try:
+        doc = {
+            "user_id": user_id,
+            "search_type": search_type,
+            "query": query,
+            "result": result[:500],
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        await asyncio.get_running_loop().run_in_executor(
+            None, searches_col.insert_one, doc
+        )
+    except Exception as e:
+        logger.exception("Error logging search: %s", e)
+
+async def create_payment_request(user_id: int, plan: str, amount: int):
+    try:
+        doc = {
+            "payment_id": uuid.uuid4().hex,
+            "user_id": user_id,
+            "plan": plan,
+            "amount": amount,
+            "status": "pending",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "screenshot_file_id": None,
+            "approved_at": None
+        }
+        result = await asyncio.get_running_loop().run_in_executor(
+            None, payments_col.insert_one, doc
+        )
+        return doc["payment_id"]
+    except Exception as e:
+        logger.exception("Error creating payment: %s", e)
+        return None
+
+async def update_payment_screenshot(payment_id: str, file_id: str):
+    try:
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: payments_col.update_one(
+                {"payment_id": payment_id},
+                {"\$set": {"screenshot_file_id": file_id, "screenshot_at": datetime.now(timezone.utc).isoformat()}}
+            )
+        )
+        return True
+    except Exception as e:
+        logger.exception("Error updating payment screenshot: %s", e)
+        return False
+
+async def check_telegram_daily_limit(user_id: int) -> bool:
+    """Check if user has exceeded daily telegram search limit (1 per day)"""
+    try:
+        today = datetime.now(timezone.utc).date()
+        today_start = datetime.combine(today, datetime.min.time()).replace(tzinfo=timezone.utc)
+        
+        count = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: searches_col.count_documents({
+                "user_id": user_id,
+                "search_type": {"\$in": ["telegram", "telegram_username"]},
+                "timestamp": {"\$gte": today_start.isoformat()}
+            })
+        )
+        return count >= 1
+    except Exception as e:
+        logger.exception("Error checking telegram daily limit: %s", e)
+        return False
+
+async def get_telegram_search_reset_time(user_id: int) -> str:
+    """Get when the user can search telegram again"""
+    try:
+        tomorrow = datetime.now(timezone.utc).date() + timedelta(days=1)
+        tomorrow_start = datetime.combine(tomorrow, datetime.min.time()).replace(tzinfo=timezone.utc)
+        time_diff = tomorrow_start - datetime.now(timezone.utc)
+        hours = int(time_diff.total_seconds() // 3600)
+        minutes = int((time_diff.total_seconds() % 3600) // 60)
+        return f"{hours}h {minutes}m"
+    except Exception:
+        return "24h"
+
+# ============ Response Detection Helpers ============
+
+def is_processing_message(text: str) -> bool:
+    if not text:
+        return False
+    
+    text_lower = text.lower()
+    processing_keywords = [
+        'processing',
+        'please wait',
+        'fetching',
+        'loading',
+        'searching',
+        'retrieving',
+        'hold on',
+        'wait a moment',
+        'in progress',
+        'gathering data',
+        'working on it',
+        'â³',
+        'ðŸ”',
+        'searching for',
+        'processing your request'
+    ]
+    
+    if len(text.strip()) < 30:
+        return True
+    
+    for keyword in processing_keywords:
+        if keyword in text_lower:
+            return True
+    
+    if text.strip().startswith('/'):
+        return True
+    
+    return False
+
+def is_no_info_message(text: str) -> bool:
+    if not text:
+        return False
+    
+    text_lower = text.lower()
+    no_info_keywords = [
+        'no info',
+        'no information',
+        'not found',
+        'no data',
+        'no result',
+        'no record',
+        'invalid',
+        'doesn\'t exist',
+        'does not exist',
+        'not available',
+        'no details',
+        'unable to find',
+        'could not find',
+        'couldn\'t find',
+        'no match',
+        'not exist',
+        'no information found',
+        'no result found',
+        'no records found',
+        'to reduce spam',
+        'must have joined',
+        'must join',
+        'join all channels',
+        'join our channel',
+        'verify your account',
+        'admin to verify',
+        'need to join',
+        'required to join',
+        'subscription required',
+        'access denied'
+    ]
+    
+    return any(keyword in text_lower for keyword in no_info_keywords)
+
+def is_valid_result(text: str, search_type: str) -> bool:
+    if not text:
+        return False
+    
+    if is_processing_message(text):
+        return False
+    
+    if is_no_info_message(text):
+        return False
+    
+    if len(text.strip()) < 30:
+        return False
+    
+    data_indicators = [
+        'name', 'mobile', 'address', 'email', 'father',
+        'owner', 'vehicle', 'registration', 'chassis',
+        'model', 'manufacturer', 'policy', 'insurance',
+        'aadhar', 'upi', 'telegram', 'instagram', 'gst',
+        'status', 'found', 'count', 'records', 'data'
+    ]
+    
+    text_lower = text.lower()
+    has_data = any(indicator in text_lower for indicator in data_indicators)
+    
+    if '"status"' in text and '"found"' in text_lower:
+        return True
+    
+    indicator_count = sum(1 for indicator in data_indicators if indicator in text_lower)
+    if indicator_count >= 2:
+        return True
+    
+    return has_data
+
+# ============ Text Cleaning ============
+
+def filter_links_and_usernames(text: str):
+    """Remove links, usernames, and promotional content from text"""
+    if not text:
+        return text
+
+    patterns = [
+        r'https?://[^\s]+',
+        r'www\.[^\s]+',
+        r't\.me/[^\s]+',
+        r'@[a-zA-Z0-9_]{3,32}',
+        r'\bfrappeash\.?\b',
+        r'\bzerocyph\.?\b',
+        r'telegram\.me/[^\s]+',
+        r'tg://[^\s]+',
+    ]
+
+    cleaned = text
+    for p in patterns:
+        cleaned = re.sub(p, '', cleaned, flags=re.IGNORECASE)
+
+    promotional = [
+        'use these commands',
+        'join our',
+        'visit our',
+        'contact us',
+        'follow us',
+        'subscribe',
+        'click here',
+        'check out',
+        'telegram channel',
+        'telegram group',
+        'powered by',
+        'developed by',
+        'design',
+        'admin',
+        'creator',
+        '@'
+    ]
+
+    lines = cleaned.splitlines()
+    safe_lines = []
+
+    for line in lines:
+        l = line.strip()
+        if not l:
+            continue
+        if any(k in l.lower() for k in promotional):
+            continue
+        safe_lines.append(line)
+
+    cleaned = "\n".join(safe_lines)
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+    cleaned = re.sub(r' {2,}', ' ', cleaned).strip()
+
+    return cleaned
+
+def clean_file_content(text: str) -> str:
+    """Deep clean file content - remove all links, usernames, promotional content"""
+    if not text:
+        return text
+    
+    # Remove all URLs and telegram links
+    text = re.sub(r'https?://\S+', '', text)
+    text = re.sub(r'www\.\S+', '', text)
+    text = re.sub(r't\.me/\S+', '', text)
+    text = re.sub(r'tg://\S+', '', text)
+    text = re.sub(r'telegram\.me/\S+', '', text)
+    
+    # Remove all @ mentions and usernames
+    text = re.sub(r'@\w+', '', text)
+    
+    # Remove common promotional patterns
+    text = re.sub(r'(?i)(powered by|developed by|designed by|created by|made by).*', '', text)
+    text = re.sub(r'(?i)(follow|subscribe|join|visit|contact).*', '', text)
+    text = re.sub(r'(?i)(admin|creator|owner).*', '', text)
+    text = re.sub(r'(?i)(for more info|click|tap|get).*', '', text)
+    
+    # Remove emoji and special characters that are typically promotional
+    text = re.sub(r'[âš¡Â©â„¢Â®].*', '', text)
+    
+    # Clean up whitespace
+    lines = text.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        line = line.strip()
+        if line and not line.startswith('=') and not line.startswith('--'):
+            cleaned_lines.append(line)
+    
+    text = '\n'.join(cleaned_lines)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = re.sub(r' {2,}', ' ', text)
+    
+    return text.strip()
+
+def extract_family_members(text: str) -> str:
+    """Extract only family member lines from family info text"""
+    if not text:
+        return text
+    
+    lines = text.splitlines()
+    family_members = []
+    
+    for line in lines:
+        stripped = line.strip()
+        
+        if not stripped or stripped.startswith('=') or stripped.startswith('--'):
+            continue
+        
+        header_keywords = [
+            'family report', 'head:', 'rc no:', 'designed', 'powered by',
+            'developed by', 'telegram', 'Â©', 'copyright'
+        ]
+        
+        if any(keyword in stripped.lower() for keyword in header_keywords):
+            continue
+        
+        if stripped.startswith('â€¢') or stripped.startswith('-') or stripped.startswith('*'):
+            family_members.append(stripped)
+    
+    if family_members:
+        return '\n'.join(family_members)
+    
+    return text
+
+def format_phone_api_response(data, phone_number: str):
+    try:
+        result = f"ðŸ“± Phone Number Information\n\nNumber: {phone_number}\n\n"
+
+        if isinstance(data, dict):
+            data.pop('Developer', None)
+            data.pop('Powered_By', None)
+            data.pop('developer', None)
+            data.pop('powered_by', None)
+
+            if 'Result' in data and isinstance(data['Result'], list):
+                records = data['Result']
+                if records:
+                    result += f"Found {len(records)} record(s):\n\n"
+
+                    for idx, record in enumerate(records, 1):
+                        if len(records) > 1:
+                            result += f"â”â”â” Record {idx} â”â”â”\n"
+
+                        if record.get('name'):
+                            result += f"ðŸ‘¤ Name: {record['name'].strip()}\n"
+                        if record.get('mobile'):
+                            result += f"ðŸ“± Mobile: {record['mobile']}\n"
+                        if record.get('alt_mobile'):
+                            result += f"ðŸ“ž Alt Mobile: {record['alt_mobile']}\n"
+                        if record.get('circle'):
+                            result += f"ðŸ“¡ Circle: {record['circle']}\n"
+                        if record.get('father_name'):
+                            result += f"ðŸ‘¨ Father: {record['father_name']}\n"
+                        if record.get('address'):
+                            addr = record['address'].replace('!', ', ').strip(', ')
+                            result += f"ðŸ  Address: {addr}\n"
+                        if record.get('email'):
+                            result += f"ðŸ“§ Email: {record['email']}\n"
+                        if record.get('id_number'):
+                            result += f"ðŸ†” ID: {record['id_number']}\n"
+
+                        if idx < len(records):
+                            result += "\n"
+                else:
+                    result += "No records found.\n"
+            else:
+                for key, value in data.items():
+                    if key.lower() not in ['status', 'success', 'developer', 'powered_by']:
+                        result += f"{key.replace('_', ' ').title()}: {value}\n"
+        else:
+            result += str(data)
+
+        return filter_links_and_usernames(result)
+
+    except Exception as e:
+        logger.exception(f"Error formatting phone API response: {e}")
+        return f"ðŸ“± Phone Number: {phone_number}\n\nFormatting failed."
+
+def format_vehicle_api_response(data, vehicle_no: str):
+    try:
+        result = (
+            "â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—\n"
+            f"â•‘  ðŸš— VEHICLE DETAILS: {vehicle_no} â•‘\n"
+            "â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•\n\n"
+        )
+
+        if not isinstance(data, dict):
+            return "âŒ Invalid vehicle data received."
+
+        for k in ('Developer', 'Powered_By', 'developer', 'powered_by', 'success', 'status'):
+            data.pop(k, None)
+
+        owner = data.get('owner_name') or data.get('owner')
+        father = data.get('father_name')
+        mobile = data.get('mobile_number') or data.get('mobile')
+
+        if owner or father or mobile:
+            result += "â”Œâ”€ ðŸ‘¤ OWNER INFORMATION â”€â”\n"
+            if owner:
+                result += f" Owner Name: {owner}\n"
+            if father:
+                result += f" Father's Name: {father}\n"
+            if mobile:
+                result += f" Mobile Number: {mobile}\n"
+            result += "â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜\n\n"
+
+        address = data.get('address')
+        state = data.get('state')
+
+        if address or state:
+            result += "â”Œâ”€ ðŸ  ADDRESS DETAILS â”€â”\n"
+            if address:
+                addr = address.replace('!', ', ').strip(', ')
+                result += f" Address: {addr}\n"
+            if state:
+                result += f" State: {state}\n"
+            result += "â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜\n\n"
+
+        manufacturer = data.get('manufacturer') or data.get('maker')
+        model = data.get('model') or data.get('maker_model')
+        body = data.get('body_type')
+        fuel = data.get('fuel_type')
+        color = data.get('color')
+        mfg = data.get('manufacturing_date')
+
+        if any([manufacturer, model, body, fuel, color, mfg]):
+            result += "â”Œâ”€ ðŸ”§ VEHICLE SPECIFICATIONS â”€â”\n"
+            if manufacturer:
+                result += f" Manufacturer: {manufacturer}\n"
+            if model:
+                result += f" Model: {model}\n"
+            if body:
+                result += f" Body Type: {body}\n"
+            if fuel:
+                result += f" Fuel Type: {fuel}\n"
+            if color:
+                result += f" Color: {color}\n"
+            if mfg:
+                result += f" Manufacturing Date: {mfg}\n"
+            result += "â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜\n\n"
+
+        chassis = data.get('chassis_number')
+        engine = data.get('engine_number')
+
+        if chassis or engine:
+            result += "â”Œâ”€ ðŸ†” TECHNICAL IDENTIFIERS â”€â”\n"
+            if chassis:
+                result += f" Chassis Number: {chassis}\n"
+            if engine:
+                result += f" Engine Number: {engine}\n"
+            result += "â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜\n\n"
+
+        reg_date = data.get('registration_date')
+        reg_valid = data.get('registration_valid_till')
+        rto = data.get('registered_at')
+        fitness = data.get('fitness_valid_till')
+        status = data.get('vehicle_status')
+
+        if any([reg_date, reg_valid, rto, fitness, status]):
+            result += "â”Œâ”€ ðŸ“‹ REGISTRATION & VALIDITY â”€â”\n"
+            if reg_date:
+                result += f" Registration Date: {reg_date}\n"
+            if reg_valid:
+                result += f" Registration Valid Till: {reg_valid}\n"
+            if rto:
+                result += f" Registered At: {rto}\n"
+            if fitness:
+                result += f" Fitness Valid Till: {fitness}\n"
+            if status:
+                result += f" Status: {status}\n"
+            result += "â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜\n\n"
+
+        insurer = data.get('insurance_company')
+        ins_valid = data.get('insurance_valid_till')
+        policy = data.get('policy_number')
+        puc_no = data.get('puc_number')
+        puc_valid = data.get('puc_valid_till')
+
+        if any([insurer, ins_valid, policy, puc_no, puc_valid]):
+            result += "â”Œâ”€ ðŸ›¡ï¸ INSURANCE & PUC â”€â”\n"
+            if insurer:
+                result += f" Insurance Company: {insurer}\n"
+            if ins_valid:
+                result += f" Insurance Valid Till: {ins_valid}\n"
+            if policy:
+                result += f" Policy Number: {policy}\n"
+            if puc_no:
+                result += f" PUC Certificate No: {puc_no}\n"
+            if puc_valid:
+                result += f" PUC Valid Till: {puc_valid}\n"
+            result += "â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜\n\n"
+
+        value = data.get('resale_value')
+        age = data.get('vehicle_age')
+        norms = data.get('fuel_norms')
+        category = data.get('vehicle_category')
+        rto_code = data.get('rto_code')
+
+        if any([value, age, norms, category, rto_code]):
+            result += "â”Œâ”€ â„¹ï¸ ADDITIONAL INFORMATION â”€â”\n"
+            if value:
+                result += f" Resale Value: {value}\n"
+            if age:
+                result += f" Vehicle Age: {age}\n"
+            if norms:
+                result += f" Fuel Norms: {norms}\n"
+            if category:
+                result += f" Vehicle Category: {category}\n"
+            if rto_code:
+                result += f" RTO Code: {rto_code}\n"
+            result += "â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜\n"
+
+        return filter_links_and_usernames(result)
+
+    except Exception as e:
+        logger.exception("Vehicle formatter error")
+        return f"ðŸš— Vehicle Number: {vehicle_no}\n\nFormatting failed."
+
+# ============ Bot State ============
+
+user_states = {}
+pending_searches = {}
+interactive_sessions = {}
+
+# ============ Telethon Clients ============
+
+bot_client = TelegramClient(BOT_SESSION_FILE, BOT_API_ID, BOT_API_HASH)
+
+if USE_USER_ACCOUNT:
+    user_client = TelegramClient(USER_SESSION_FILE, USER_API_ID, USER_API_HASH)
+else:
+    user_client = bot_client
+
+async def check_channel_membership(user_id: int):
+    """Check if user is a member of the mandatory channel"""
+    try:
+        channel = await bot_client.get_entity(MANDATORY_CHANNEL)
         
         try:
-            participant = await bot_client(GetParticipantRequest(channel, user_id))
+            participant = await bot_client(
+                GetParticipantRequest(channel, user_id)
+            )
             from telethon.tl.types import ChannelParticipantBanned, ChannelParticipantLeft
             
             if isinstance(participant.participant, (ChannelParticipantBanned, ChannelParticipantLeft)):
@@ -1419,1133 +1149,1862 @@ async def check_channel_membership(user_id: int) -> bool:
             
             return True
             
-        except Exception:
+        except Exception as get_participant_error:
+            logger.info(f"User {user_id} is not in channel: {get_participant_error}")
             return False
         
     except Exception as e:
-        logger.error(f"Error checking channel membership: {e}")
+        logger.error(f"Error checking channel membership for {user_id}: {e}")
         return False
 
-# ================== BOT EVENT HANDLERS ==================
+# ============ Interactive Bot Search Functions ============
+
+async def perform_interactive_telegram_search(query: str, user_id: int):
+    """Perform interactive telegram search with button selection"""
+    # Check daily limit
+    if await check_telegram_daily_limit(user_id):
+        reset_time = await get_telegram_search_reset_time(user_id)
+        return {
+            "success": False,
+            "error": f"â° Daily telegram search limit reached (1 per day).\n\nðŸ”„ Reset in: {reset_time}"
+        }
+    
+    bot_entity = TELEGRAM_BOT.get('entity')
+    if not bot_entity:
+        return {"success": False, "error": "Telegram bot not configured"}
+    
+    try:
+        command_prefix = SEARCH_COMMANDS['telegram']['commands'].get(0, '/tg')
+        command = f"{command_prefix} {query}"
+        
+        send_timestamp = time.time()
+        forwarded = await user_client.send_message(bot_entity, command)
+        logger.info(f"ðŸ“¤ Sent to Telegram Bot: {command}")
+        
+        await asyncio.sleep(3)
+        
+        messages = await user_client.get_messages(bot_entity, limit=15)
+        for msg in messages:
+            if msg.id == forwarded.id:
+                continue
+            
+            msg_timestamp = msg.date.timestamp() if msg.date else 0
+            if msg_timestamp < send_timestamp - 2:
+                continue
+            
+            if msg.buttons:
+                logger.info(f"ðŸ”˜ Found inline keyboard with {len(msg.buttons)} rows")
+                
+                interactive_sessions[user_id] = {
+                    "dest_message": msg,
+                    "dest_entity": bot_entity,
+                    "type": "telegram",
+                    "query": query,
+                    "original_msg_id": forwarded.id,
+                    "user_id": user_id
+                }
+                
+                user_buttons = []
+                for row_idx, row in enumerate(msg.buttons):
+                    button_row = []
+                    for col_idx, button in enumerate(row):
+                        if hasattr(button, 'text'):
+                            button_row.append(Button.inline(
+                                button.text, 
+                                f"relay_tg_{row_idx}_{col_idx}"
+                            ))
+                    if button_row:
+                        user_buttons.append(button_row)
+                
+                return {
+                    "success": False,
+                    "needs_interaction": True,
+                    "message": msg.text or msg.raw_text or "ðŸ” Please select a platform:",
+                    "buttons": user_buttons
+                }
+            
+            if msg.text or msg.raw_text:
+                return {
+                    "success": True,
+                    "result": msg.text or msg.raw_text
+                }
+        
+        return {"success": False, "error": "No response from Telegram bot"}
+        
+    except Exception as e:
+        logger.exception(f"Error in interactive telegram search: {e}")
+        return {"success": False, "error": str(e)}
+
+async def perform_interactive_movie_search(query: str, user_id: int):
+    """Perform interactive movie search with file selection"""
+    bot_entity = MOVIE_BOT.get('entity')
+    if not bot_entity:
+        return {"success": False, "error": "Movie bot not configured"}
+    
+    try:
+        send_timestamp = time.time()
+        forwarded = await user_client.send_message(bot_entity, query)
+        logger.info(f"ðŸŽ¬ Sent to Movie Bot: {query}")
+        
+        await asyncio.sleep(5)
+        
+        messages = await user_client.get_messages(bot_entity, limit=20)
+        
+        for msg in messages:
+            if msg.id == forwarded.id:
+                continue
+            
+            msg_timestamp = msg.date.timestamp() if msg.date else 0
+            if msg_timestamp < send_timestamp - 2:
+                continue
+            
+            if msg.buttons:
+                logger.info(f"ðŸŽ¬ Found movie options with {len(msg.buttons)} rows")
+                
+                interactive_sessions[user_id] = {
+                    "dest_message": msg,
+                    "dest_entity": bot_entity,
+                    "type": "movie",
+                    "query": query,
+                    "original_msg_id": forwarded.id,
+                    "user_id": user_id
+                }
+                
+                user_buttons = []
+                for row_idx, row in enumerate(msg.buttons):
+                    button_row = []
+                    for col_idx, button in enumerate(row):
+                        if hasattr(button, 'text'):
+                            button_row.append(Button.inline(
+                                button.text,
+                                f"relay_movie_{row_idx}_{col_idx}"
+                            ))
+                    if button_row:
+                        user_buttons.append(button_row)
+                
+                return {
+                    "success": False,
+                    "needs_interaction": True,
+                    "message": msg.text or msg.raw_text or "ðŸŽ¬ Select a file:",
+                    "buttons": user_buttons
+                }
+            
+            if msg.text or msg.file:
+                return {
+                    "success": True,
+                    "result": msg.text or msg.raw_text or "File received",
+                    "file": msg if msg.file else None
+                }
+        
+        return {"success": False, "error": "No response from Movie bot"}
+        
+    except Exception as e:
+        logger.exception(f"Error in interactive movie search: {e}")
+        return {"success": False, "error": str(e)}
+
+# ============ Core Search Function ============
+
+async def perform_search(search_type: str, query: str, user_id: int = None):
+    if search_type not in SEARCH_COMMANDS:
+        return {"success": False, "error": "Invalid search type"}
+    
+    command_info = SEARCH_COMMANDS[search_type]
+    search_dest_type = command_info.get('type', 'group')
+    
+    if search_dest_type == 'telegram_bot':
+        if user_id:
+            return await perform_interactive_telegram_search(query, user_id)
+        else:
+            return await perform_telegram_bot_search(query, user_id)
+    elif search_dest_type == 'movie_bot':
+        return await perform_interactive_movie_search(query, user_id)
+    elif search_dest_type == 'telegram_username_group':
+        return await perform_telegram_username_search(query, user_id)
+    elif search_dest_type == 'family_group':
+        destinations = [FAMILY_GROUP]
+        logger.info(f"ðŸŽ¯ Routing to FAMILY_GROUP for family search")
+    elif search_dest_type == 'vehicle_group':
+        destinations = [VEHICLE_GROUP]
+        logger.info(f"ðŸŽ¯ Routing to VEHICLE_GROUP for vehicle search")
+    else:
+        destinations = DESTINATION_GROUPS
+        logger.info(f"ðŸŽ¯ Routing to DESTINATION_GROUPS ({len(destinations)} groups)")
+    
+    for idx, dest_config in enumerate(destinations):
+        dest_entity = dest_config.get('entity')
+        
+        if not dest_entity:
+            logger.warning(f"Destination {idx} ({dest_config['name']}) not resolved, skipping")
+            continue
+        
+        command_prefix = command_info['commands'].get(idx)
+        if not command_prefix:
+            logger.warning(f"No command configured for {search_type} in group {idx}")
+            continue
+        
+        command = f"{command_prefix} {query}"
+        base_timeout = dest_config.get('timeout', GROUP_TIMEOUT)
+        
+        try:
+            forwarded = await user_client.send_message(dest_entity, command)
+            logger.info(f"ðŸ“¤ Sent to {dest_config['name']} (Group {idx}): {command}")
+            
+            future = asyncio.get_running_loop().create_future()
+            search_id = f"{forwarded.id}_{int(time.time() * 1000)}_{idx}"
+            
+            pending_searches[search_id] = {
+                "future": future,
+                "user_id": user_id,
+                "query": query,
+                "search_type": search_type,
+                "timestamp": time.time(),
+                "group_index": idx,
+                "group_name": dest_config['name'],
+                "message_id": forwarded.id,
+                "chat_entity": dest_entity
+            }
+            
+            logger.info(f"ðŸ“ Registered search {search_id} in {dest_config['name']}")
+            
+            try:
+                result_text = await asyncio.wait_for(future, timeout=base_timeout)
+                
+                logger.info(f"ðŸ“© Received response from {dest_config['name']}: {result_text[:100] if isinstance(result_text, str) else 'FILE'}...")
+                
+                if isinstance(result_text, str):
+                    # Double check: don't accept processing messages
+                    if is_processing_message(result_text):
+                        logger.warning(f"âš ï¸ Got processing message from {dest_config['name']}, treating as no result")
+                        pending_searches.pop(search_id, None)
+                        
+                        if idx < len(destinations) - 1:
+                            logger.info(f"âž¡ï¸ Cascading to next group: {destinations[idx + 1]['name']}")
+                            continue
+                        else:
+                            logger.info(f"ðŸ”„ All groups failed, trying API fallback")
+                            api_result = await try_api_fallback(search_type, query, user_id)
+                            if api_result['success']:
+                                return api_result
+                            else:
+                                return {
+                                    "success": False, 
+                                    "error": "No result found for this input. Please try another."
+                                }
+                    
+                    # Check for no-info
+                    if is_no_info_message(result_text):
+                        logger.warning(f"âš ï¸ No info found in {dest_config['name']}")
+                        pending_searches.pop(search_id, None)
+                        
+                        if idx < len(destinations) - 1:
+                            logger.info(f"âž¡ï¸ Cascading to next group: {destinations[idx + 1]['name']}")
+                            continue
+                        else:
+                            api_result = await try_api_fallback(search_type, query, user_id)
+                            if api_result['success']:
+                                return api_result
+                            else:
+                                return {
+                                    "success": False, 
+                                    "error": "No result found for this input. Please try another."
+                                }
+                    
+                    logger.info(f"ðŸ” Validating result from {dest_config['name']}")
+                    
+                    if not is_valid_result(result_text, search_type):
+                        logger.warning(f"âš ï¸ Invalid result format from {dest_config['name']}")
+                        pending_searches.pop(search_id, None)
+                        
+                        if idx < len(destinations) - 1:
+                            logger.info(f"âž¡ï¸ Moving to next group: {destinations[idx + 1]['name']}")
+                            continue
+                        else:
+                            api_result = await try_api_fallback(search_type, query, user_id)
+                            if api_result['success']:
+                                return api_result
+                            else:
+                                return {
+                                    "success": False,
+                                    "error": "No result found for this input. Please try another."
+                                }
+                    
+                    cleaned = filter_links_and_usernames(result_text)
+                    
+                    if user_id:
+                        await log_search(user_id, search_type, query, cleaned)
+                    
+                    logger.info(f"âœ… Valid result from {dest_config['name']}")
+                    pending_searches.pop(search_id, None)
+                    
+                    return {
+                        "success": True, 
+                        "result": cleaned, 
+                        "search_type": search_type, 
+                        "source": dest_config['name'],
+                        "group_index": idx
+                    }
+                
+            except asyncio.TimeoutError:
+                pending_searches.pop(search_id, None)
+                logger.warning(f"â±ï¸ Timeout in {dest_config['name']} after {base_timeout}s")
+                
+                if idx == len(destinations) - 1:
+                    logger.info(f"ðŸ”„ All groups timed out, trying API fallback")
+                    api_result = await try_api_fallback(search_type, query, user_id)
+                    if api_result['success']:
+                        return api_result
+                    else:
+                        return {
+                            "success": False, 
+                            "error": "Request timed out. Please try again."
+                        }
+                else:
+                    logger.info(f"âž¡ï¸ Moving to next group: {destinations[idx + 1]['name']}")
+                    continue
+            except Exception as search_error:
+                pending_searches.pop(search_id, None)
+                logger.exception(f"âŒ Error waiting for result in {dest_config['name']}: {search_error}")
+                
+                if idx == len(destinations) - 1:
+                    return {
+                        "success": False,
+                        "error": "An error occurred. Please try again."
+                    }
+                else:
+                    logger.info(f"âž¡ï¸ Moving to next group due to error")
+                    continue
+                
+        except Exception as e:
+            logger.exception(f"Error in {dest_config['name']}: %s", e)
+            if idx == len(destinations) - 1:
+                return {"success": False, "error": "All groups failed. Please try again."}
+            continue
+    
+    return {
+        "success": False, 
+        "error": "No result found for this input. Please try another."
+    }
+                        
+                        
+                    
+async def try_api_fallback(search_type: str, query: str, user_id: int = None):
+    if search_type in ['phone', 'telegram']:
+        api_result = await fetch_phone_api(query)
+        if api_result:
+            if user_id:
+                await log_search(user_id, search_type, query, api_result)
+            return {
+                "success": True, 
+                "result": api_result, 
+                "search_type": search_type, 
+                "source": "Phone API (Backup)"
+            }
+    
+    elif search_type in ['vehicle', 'vehicle_detail']:
+        api_result = await fetch_vehicle_api(query)
+        if api_result:
+            if user_id:
+                await log_search(user_id, search_type, query, api_result)
+            return {
+                "success": True, 
+                "result": api_result, 
+                "search_type": search_type, 
+                "source": "Vehicle API (Backup)"
+            }
+    
+    return {"success": False, "error": "All groups failed and no API backup available"}
+
+async def perform_telegram_bot_search(query: str, user_id: int = None):
+    """Perform telegram to phone search"""
+    
+    if user_id and await check_telegram_daily_limit(user_id):
+        reset_time = await get_telegram_search_reset_time(user_id)
+        return {
+            "success": False, 
+            "error": f"â° Daily telegram search limit reached (1 per day).\n\nðŸ”„ Reset in: {reset_time}"
+        }
+    
+    bot_entity = TELEGRAM_BOT.get('entity')
+    
+    if not bot_entity:
+        return {"success": False, "error": "Telegram bot not configured"}
+    
+    try:
+        command_prefix = SEARCH_COMMANDS['telegram']['commands'].get(0, '/tg')
+        command = f"{command_prefix} {query}"
+        base_timeout = TELEGRAM_BOT.get('timeout', G_TIMEOUT)
+        
+        forwrded = await user_client.send_message(bot_entity, command)
+        logger.info(f"ðŸ“¤ Sent to Telegram Bot: {command}")
+        
+        future = asyncio.get_running_loop().create_future()
+        search_id = f"tgbot_{forwarded.id}_{int(time.time() * 1000)}"
+        
+        pending_searches[search_id] = {
+            "future": future,
+            "user_id": user_id,
+            "query": query,
+            "search_type": "telegram",
+            "timestamp": time.time(),
+            "message_id": forwarded.id,
+            "chat_entity": bot_entity
+                        }
+        
+        try:
+            result_text = await asyncio.wait_for(future, timeout=base_timeout)
+            
+            if is_processing_message(result_text):
+                logger.info(f"â³ Processing in Telegram Bot, waiting {PROCESSING_WAIT_EXTRA}s...")
+                await asyncio.sleep(PROCESSING_WAIT_EXTRA)
+                
+                try:
+                    messages = await user_client.get_messages(bot_entity, limit=20)
+                    for msg in messages:
+                        if msg.reply_to and msg.reply_to.reply_to_msg_id == forwarded.id:
+                            potential_text = msg.text or msg.raw_text
+                            if potential_text and not is_processing_message(potential_text):
+                                result_text = potential_text
+                                break
+                except Exception as e:
+                    logger.error(f"Error getting updated bot message: {e}")
+            
+            if is_no_info_message(result_text) or not is_valid_result(result_text, 'telegram'):
+                logger.warning(f"âš ï¸ No valid info from Telegram Bot")
+                pending_searches.pop(search_id, None)
+                return await try_api_fallback('telegram', query, user_id)
+            
+            cleaned = filter_links_and_usernames(result_text)
+            
+            if user_id:
+                await log_search(user_id, "telegram", query, cleaned)
+            
+            pending_searches.pop(search_id, None)
+            
+            return {
+                "success": True, 
+                "result": cleaned, 
+                "search_type": "telegram", 
+                "source": "Telegram Bot"
+            }
+            
+        except asyncio.TimeoutError:
+            pending_searches.pop(search_id, None)
+            logger.warning(f"â±ï¸ Timeout from Telegram Bot")
+            return await try_api_fallback('telegram', query, user_id)
+            
+    except Exception as e:
+        logger.exception(f"Error with Telegram Bot: %s", e)
+        return {"success": False, "error": str(e)}
+
+async def perform_telegram_username_search(query: str, user_id: int = None):
+    """Perform telegram username search"""
+    
+    if user_id and await check_telegram_daily_limit(user_id):
+        reset_time = await get_telegram_search_reset_time(user_id)
+        return {
+            "success": False, 
+            "error": f"â° Daily telegram search limit reached (1 per day).\n\nðŸ”„ Reset in: {reset_time}"
+        }
+    
+    group_entity = TELEGRAM_USERNAME_GROUP.get('entity')
+    
+    if not group_entity:
+        return {"success": False, "error": "Telegram username group not configured"}
+    
+    try:
+        command_prefix = SEARCH_COMMANDS['telegram_username']['commands'].get(0, '/tguser')
+        command = f"{command_prefix} {query}"
+        base_timeout = TELEGRAM_USERNAME_GROUP.get('timeout', GROUP_TIMEOUT)
+        
+        forwarded = await user_client.send_message(group_entity, command)
+        logger.info(f"ðŸ“¤ Sent to Telegram Username Group: {command}")
+        
+        future = asyncio.get_running_loop().create_future()
+        search_id = f"tguser_{forwarded.id}_{int(time.time() * 1000)}"
+        
+        pending_searches[search_id] = {
+            "future": future,
+            "user_id": user_id,
+            "query": query,
+            "search_type": "telegram_username",
+            "timestamp": time.time(),
+            "message_id": forwarded.id,
+            "chat_entity": group_entity
+        }
+        
+        try:
+            result_text = await asyncio.wait_for(future, timeout=base_timeout)
+            
+            if is_processing_message(result_text):
+                logger.info(f"â³ Processing message, waiting {PROCESSING_WAIT_EXTRA}s...")
+                await asyncio.sleep(PROCESSING_WAIT_EXTRA)
+                
+                try:
+                    messages = await user_client.get_messages(group_entity, limit=20)
+                    for msg in messages:
+                        if msg.reply_to and msg.reply_to.reply_to_msg_id == forwarded.id:
+                            potential_text = msg.text or msg.raw_text
+                            if potential_text and not is_processing_message(potential_text):
+                                result_text = potential_text
+                                break
+                except Exception as e:
+                    logger.error(f"Error getting updated message: {e}")
+            
+            if is_no_info_message(result_text):
+                logger.info(f"ðŸš« Spam/no-info message detected, waiting for valid data...")
+                await asyncio.sleep(PROCESSING_WAIT_EXTRA)
+                
+                try:
+                    messages = await user_client.get_messages(group_entity, limit=20)
+                    for msg in messages:
+                        if msg.reply_to and msg.reply_to.reply_to_msg_id == forwarded.id:
+                            potential_text = msg.text or msg.raw_text
+                            if (potential_text and 
+                                not is_no_info_message(potential_text) and 
+                                not is_processing_message(potential_text) and
+                                is_valid_result(potential_text, 'telegram_username')):
+                                result_text = potential_text
+                                logger.info(f"âœ… Found valid data after spam!")
+                                break
+                except Exception as e:
+                    logger.error(f"Error getting updated message: {e}")
+            
+            if is_no_info_message(result_text) or not is_valid_result(result_text, 'telegram_username'):
+                logger.warning(f"âš ï¸ No valid info from Telegram Username Group")
+                pending_searches.pop(search_id, None)
+                return {"success": False, "error": "No information found for this username"}
+            
+            cleaned = filter_links_and_usernames(result_text)
+            
+            if user_id:
+                await log_search(user_id, "telegram_username", query, cleaned)
+            
+            pending_searches.pop(search_id, None)
+            
+            return {
+                "success": True, 
+                "result": cleaned, 
+                "search_type": "telegram_username", 
+                "source": "Telegram Username Group"
+            }
+            
+        except asyncio.TimeoutError:
+            pending_searches.pop(search_id, None)
+            logger.warning(f"â±ï¸ Timeout from Telegram Username Group")
+            return {"success": False, "error": "Search timed out. Please try again."}
+            
+    except Exception as e:
+        logger.exception(f"Error with Telegram Username search: %s", e)
+        return {"success": False, "error": str(e)}
+
+async def fetch_phone_api(phone_number: str):
+    try:
+        async with ClientSession() as session:
+            headers = {"X-API-Key": PHONE_API_KEY}
+            params = {"phone": phone_number}
+            
+            async with session.get(PHONE_API_URL, headers=headers, params=params, timeout=10) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return format_phone_api_response(data, phone_number)
+    except Exception as e:
+        logger.exception(f"Phone API error: {e}")
+    return None
+
+async def fetch_vehicle_api(vehicle_no: str):
+    try:
+        async with ClientSession() as session:
+            headers = {"X-API-Key": VEHICLE_API_KEY}
+            params = {"vehicle_number": vehicle_no}
+            
+            async with session.get(VEHICLE_API_URL, headers=headers, params=params, timeout=10) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return format_vehicle_api_response(data, vehicle_no)
+    except Exception as e:
+        logger.exception(f"Vehicle API error: {e}")
+    return None
+
+# ============ Keyboard Menus ============
+
+def get_main_menu():
+    buttons = []
+    row = []
+    for key, info in SEARCH_COMMANDS.items():
+        row.append(Button.inline(info["name"], f"search_{key}"))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    buttons.append([Button.inline("ðŸ”‘ API Keys", "api_menu"), Button.inline("ðŸ‘¥ Referrals", "referral_menu")])
+    return buttons
+
+def get_api_menu():
+    return [
+        [Button.inline("âž• Create API Key", "api_create")],
+        [Button.inline("ðŸ“‹ List API Keys", "api_list")],
+        [Button.inline("ðŸ”™ Back to Main Menu", "back_main")]
+    ]
+
+def get_referral_menu():
+    return [
+        [Button.inline("ðŸ“Š My Stats", "referral_stats")],
+        [Button.inline("ðŸ”— Get Referral Link", "referral_link")],
+        [Button.inline("ðŸ”™ Back to Main Menu", "back_main")]
+    ]
+
+def get_plans_menu():
+    buttons = []
+    for plan_key, plan_info in PLANS.items():
+        buttons.append([Button.inline(
+            f"{plan_info['name']} - â‚¹{plan_info['price']}", 
+            f"buy_{plan_key}"
+        )])
+    buttons.append([Button.inline("âŒ Cancel", "cancel")])
+    return buttons
+
+def get_payment_approval_buttons(payment_id: str, user_id: int):
+    return [
+        [
+            Button.inline("âœ… Approve", f"approve_{payment_id}_{user_id}"),
+            Button.inline("âŒ Reject", f"reject_{payment_id}_{user_id}")
+        ]
+    ]
+
+# ============ Bot Event Handlers ============
 
 @bot_client.on(events.NewMessage(pattern=r'/start( (.+))?'))
 async def start_handler(event):
-    """Handle /start command - FIXED VERSION"""
-    try:
-        user = await event.get_sender()
-        user_id = user.id
-        
-        # Extract referral code if present
-        referral_code = None
-        if event.pattern_match.group(2):
-            referral_code = event.pattern_match.group(2).strip()
-        
-        # Get or create user
-        user_doc = await user_manager.get_user(user_id)
-        if not user_doc:
-            success = await user_manager.create_user(user_id, user.username, user.first_name, referral_code)
+    user = await event.get_sender()
+    user_id = user.id
+    
+    referral_code = None
+    if event.pattern_match.group(2):
+        referral_code = event.pattern_match.group(2).strip()
+    
+    user_doc = await get_user(user_id)
+    if not user_doc:
+        await create_or_update_user(user_id, user.username, user.first_name)
+        if referral_code:
+            success = await apply_referral(user_id, referral_code)
             if success:
-                user_doc = await user_manager.get_user(user_id)
-            else:
-                # FIX: Handle failed user creation
                 await event.respond(
-                    "❌ **Error Creating Account**\n\n"
-                    "There was an issue setting up your account. Please try again in a few moments.\n\n"
-                    "If the problem persists, contact @darkboxesAdmin"
+                    f"ðŸŽ‰ Welcome! You've successfully used a referral code!\n"
+                    f"You got {NEW_USER_CREDITS} free trial credits to start with."
                 )
-                return
-        
-        # FIX: Ensure user_doc exists before accessing
-        if not user_doc:
-            await event.respond(
-                "❌ **Account Access Error**\n\n"
-                "Unable to access your account. Please contact @darkboxesAdmin for assistance."
-            )
-            return
-            
-        # Welcome message for new users with referral
-        if referral_code and user_doc.get('total_searches', 0) == 0:
-            await event.respond(
-                f"🎉 Welcome {user.first_name}!\n\n"
-                f"Thanks for using a referral link!\n"
-                f"You got {config.NEW_USER_CREDITS} free credits to start with.\n\n"
-                "First, please join our channel to continue:"
-            )
-        
-        # Check if user is banned
-        if user_doc.get("banned"):
-            await event.respond(
-                "🚫 **Account Suspended**\n\n"
-                "Your account has been suspended.\n"
-                "Contact @darkboxesAdmin if you believe this is an error.",
-                parse_mode="md"
-            )
-            return
-        
-        # Admin welcome
-        if await admin_panel.is_admin(user_id):
-            stats = await admin_panel.get_bot_statistics()
-            await event.respond(
-                "👑 **Admin Dashboard**\n\n"
-                f"👥 Total Users: {stats.get('total_users', 0)}\n"
-                f"💎 Premium Users: {stats.get('premium_users', 0)}\n"
-                f"🔍 Total Searches: {stats.get('total_searches', 0)}\n"
-                f"💰 Total Revenue: ₹{stats.get('total_revenue', 0)}\n"
-                f"⏳ Pending Payments: {stats.get('pending_payments', 0)}\n\n"
-                "Welcome back, Admin!",
-                buttons=KeyboardBuilder.main_menu("admin"),
-                parse_mode="md"
-            )
-            return
-        
-        # Check channel membership
-        is_member = await check_channel_membership(user_id)
-        
-        if not is_member:
-            await event.respond(
-                f"👋 **Welcome to Premium Info Bot!**\n\n"
-                f"To use this bot, you must first join our channel:\n"
-                f"@{config.MANDATORY_CHANNEL}\n\n"
-                f"After joining, click the button below to verify.",
-                buttons=[
-                    [Button.url(f"📢 Join Channel", f"https://t.me/{config.MANDATORY_CHANNEL}")],
-                    [Button.inline("✅ I've Joined - Verify", "check_membership")]
-                ],
-                parse_mode="md"
-            )
-            return
-        
-        # Main welcome message
-        plan_expiry = ""
-        if user_doc.get("plan_expiry"):
-            try:
-                expiry = datetime.fromisoformat(user_doc["plan_expiry"])
-                days_left = (expiry - datetime.now(timezone.utc)).days
-                if days_left > 0:
-                    plan_expiry = f" ({days_left} days left)"
-            except Exception:
-                pass
-        
+    
+    user_doc = await get_user(user_id)
+    
+    if user_id == ADMIN_USER_ID:
         await event.respond(
-            f"👋 **Welcome {user.first_name}!**\n\n"
-            f"📊 Plan: {user_doc.get('plan', 'free').upper()}{plan_expiry}\n"
-            f"🔍 Credits: {user_doc.get('searches_remaining', 0)}\n"
-            f"📈 Total Searches: {user_doc.get('total_searches', 0)}\n\n"
-            f"Select a search type below:",
-            buttons=KeyboardBuilder.main_menu(),
-            parse_mode="md"
+            f"ðŸ‘‹ Welcome Admin!\n\n"
+            f"You have full access to all features.\n"
+            f"Use the menu below:",
+            buttons=get_main_menu()
         )
-        
-    except Exception as e:
-        logger.error(f"Error in start_handler: {e}")
-        await event.respond(
-            "❌ **System Error**\n\n"
-            "An unexpected error occurred. Please try again later or contact @darkboxesAdmin"
-        )
-
-@bot_client.on(events.CallbackQuery(pattern=r'^search_(.+)'))
-async def search_callback(event):
-    """Handle search type selection"""
-    user_id = event.sender_id
-    search_type = event.data.decode().split('_', 1)[1]
-    
-    if search_type not in SEARCH_COMMANDS:
-        await event.answer("❌ Invalid search type", alert=True)
         return
-    
-    # Check if user exists and is not banned
-    user_doc = await user_manager.get_user(user_id)
-    if not user_doc:
-        await event.answer("❌ User not found", alert=True)
-        return
-    
-    if user_doc.get("banned"):
-        await event.answer("❌ Account suspended", alert=True)
-        return
-    
-    # Check credits (skip for admin)
-    if not await admin_panel.is_admin(user_id):
-        searches_remaining = user_doc.get('searches_remaining', 0)
-        plan = user_doc.get('plan', 'free')
-        
-        # Check plan expiry
-        if plan == 'unlimited' and user_doc.get('plan_expiry'):
-            try:
-                expiry = datetime.fromisoformat(user_doc['plan_expiry'])
-                if expiry < datetime.now(timezone.utc):
-                    # Plan expired, reset to free
-                    await asyncio.get_running_loop().run_in_executor(
-                        None, lambda: user_manager.users_col.update_one(
-                            {"user_id": user_id},
-                            {"$set": {"plan": "free", "searches_remaining": 0, "plan_expiry": None}}
-                        )
-                    )
-                    searches_remaining = 0
-            except Exception:
-                pass
-        
-        if searches_remaining <= 0 and plan != 'unlimited':
-            await event.edit(
-                "❌ **No Credits Remaining**\n\n"
-                "You need to purchase a premium plan to continue using the bot.\n\n"
-                "Choose a plan below:",
-                buttons=KeyboardBuilder.plans_menu(),
-                parse_mode="md"
-            )
-            return
-    
-    # Set user state for input
-    command_info = SEARCH_COMMANDS[search_type]
-    user_states[user_id] = {"action": "awaiting_input", "type": search_type}
-    
-    credits_text = f"{user_doc.get('searches_remaining', 0)}" if user_doc.get('searches_remaining', 0) > 0 else "Unlimited"
-    
-    await event.edit(
-        f"🔍 **{command_info['name']}**\n\n"
-        f"📝 {command_info['description']}\n\n"
-        f"💳 Credits: {credits_text}\n\n"
-        f"📤 Example: `{command_info['example']}`\n"
-        f"Please send your query below:",
-        buttons=[[Button.inline("❌ Cancel", "cancel")]],
-        parse_mode="md"
-    )
-
-@bot_client.on(events.CallbackQuery(pattern='^buy_'))
-async def buy_plan_callback(event):
-    """Handle plan purchase"""
-    user_id = event.sender_id
-    plan_key = event.data.decode().split('_', 1)[1]
-    
-    if plan_key not in PLANS:
-        await event.answer("❌ Invalid plan", alert=True)
-        return
-    
-    plan = PLANS[plan_key]
-    
-    # Create payment request
-    payment_id = await payment_manager.create_payment_request(user_id, plan_key)
-    if not payment_id:
-        await event.answer("❌ Error creating payment request", alert=True)
-        return
-    
-    # Set user state
-    user_states[user_id] = {
-        "action": "awaiting_payment",
-        "payment_id": payment_id,
-        "plan": plan_key
-    }
-    
-    await event.edit(
-        f"💳 **Payment Required**\n\n"
-        f"📦 Plan: {plan['name']}\n"
-        f"💰 Amount: ₹{plan['price']}\n"
-        f"🔢 Payment ID: `{payment_id}`\n\n"
-        f"Please make the payment and send a screenshot here.\n"
-        f"Admin will verify and activate your plan.",
-        buttons=[[Button.inline("❌ Cancel", "cancel")]],
-        parse_mode="md"
-    )
-
-@bot_client.on(events.CallbackQuery(pattern='^approve_payment_'))
-async def approve_payment_callback(event):
-    """Handle payment approval by admin"""
-    if not await admin_panel.is_admin(event.sender_id):
-        await event.answer("❌ Unauthorized", alert=True)
-        return
-    
-    data_parts = event.data.decode().split('_')
-    if len(data_parts) < 4:
-        await event.answer("❌ Invalid data", alert=True)
-        return
-    
-    payment_id = data_parts[2]
-    target_user_id = int(data_parts[3])
-    
-    # Approve payment
-    success = await payment_manager.approve_payment(payment_id)
-    
-    if success:
-        await event.edit(
-            f"✅ **Payment Approved**\n\n"
-            f"Payment ID: {payment_id}\n"
-            f"User ID: {target_user_id}\n\n"
-            f"User has been notified and plan activated."
-        )
-        
-        # Notify user
-        try:
-            await bot_client.send_message(
-                target_user_id,
-                "🎉 **Payment Approved!**\n\n"
-                "Your premium plan has been activated!\n"
-                "You can now start using all search features.\n\n"
-                "Thank you for choosing our service! 💎",
-                buttons=[[Button.inline("🚀 Start Searching", "main_menu")]]
-            )
-        except Exception as e:
-            logger.error(f"Error notifying user: {e}")
-    else:
-        await event.answer("❌ Error approving payment", alert=True)
-
-@bot_client.on(events.CallbackQuery(pattern='^reject_payment_'))
-async def reject_payment_callback(event):
-    """Handle payment rejection by admin"""
-    if not await admin_panel.is_admin(event.sender_id):
-        await event.answer("❌ Unauthorized", alert=True)
-        return
-    
-    data_parts = event.data.decode().split('_')
-    if len(data_parts) < 4:
-        await event.answer("❌ Invalid data", alert=True)
-        return
-    
-    payment_id = data_parts[2]
-    target_user_id = int(data_parts[3])
-    
-    # Reject payment
-    success = await payment_manager.reject_payment(payment_id)
-    
-    if success:
-        await event.edit(
-            f"❌ **Payment Rejected**\n\n"
-            f"Payment ID: {payment_id}\n"
-            f"User ID: {target_user_id}"
-        )
-        
-        # Notify user
-        try:
-            await bot_client.send_message(
-                target_user_id,
-                "❌ **Payment Rejected**\n\n"
-                "Your payment screenshot was not approved.\n"
-                "Please contact support or try again with a clear screenshot.\n\n"
-                "Support: @darkboxesAdmin"
-            )
-        except Exception as e:
-            logger.error(f"Error notifying user: {e}")
-    else:
-        await event.answer("❌ Error rejecting payment", alert=True)
-
-@bot_client.on(events.CallbackQuery(pattern='^admin_'))
-async def admin_callback(event):
-    """Handle admin panel callbacks - FIXED VERSION"""
-    if not await admin_panel.is_admin(event.sender_id):
-        await event.answer("❌ Unauthorized", alert=True)
-        return
-    
-    action = event.data.decode().split('_', 1)[1]
-    
-    if action == "panel":
-        stats = await admin_panel.get_bot_statistics()
-        await event.edit(
-            "⚙️ **Admin Panel**\n\n"
-            f"📊 **Today's Stats:**\n"
-            f"• New Users: {stats.get('today_users', 0)}\n"
-            f"• Searches: {stats.get('today_searches', 0)}\n"
-            f"• Payments: {stats.get('today_payments', 0)}\n\n"
-            f"📈 **Overall Stats:**\n"
-            f"• Total Users: {stats.get('total_users', 0)}\n"
-            f"• Premium Users: {stats.get('premium_users', 0)}\n"
-            f"• Total Revenue: ₹{stats.get('total_revenue', 0)}",
-            buttons=KeyboardBuilder.admin_menu(),
-            parse_mode="md"
-        )
-    
-    elif action == "stats":
-        stats = await admin_panel.get_bot_statistics()
-        
-        await event.edit(
-            f"📊 **Detailed Statistics**\n\n"
-            f"👥 **Users:**\n"
-            f"• Total: {stats.get('total_users', 0)}\n"
-            f"• Premium: {stats.get('premium_users', 0)}\n"
-            f"• Today: {stats.get('today_users', 0)}\n\n"
-            f"🔍 **Searches:**\n"
-            f"• Total: {stats.get('total_searches', 0)}\n"
-            f"• Successful: {stats.get('successful_searches', 0)}\n"
-            f"• Success Rate: {stats.get('success_rate', 0)}%\n"
-            f"• Today: {stats.get('today_searches', 0)}\n\n"
-            f"💰 **Revenue:**\n"
-            f"• Total: ₹{stats.get('total_revenue', 0)}\n"
-            f"• Approved: {stats.get('approved_payments', 0)}\n"
-            f"• Pending: {stats.get('pending_payments', 0)}",
-            buttons=[[Button.inline("🔙 Back", "admin_panel")]],
-            parse_mode="md"
-        )
-    
-    elif action == "payments":
-        pending_payments = await payment_manager.get_pending_payments(5)
-        
-        if not pending_payments:
-            await event.edit(
-                "✅ **No Pending Payments**\n\n"
-                "All payments have been processed.",
-                buttons=[[Button.inline("🔙 Back", "admin_panel")]]
-            )
-            return
-        
-        message = "💳 **Pending Payment Requests**\n\n"
-        buttons = []
-        
-        for payment in pending_payments:
-            plan = PLANS.get(payment['plan'], {})
-            created = payment.get('created_at', '')[:10]  # Just date
-            
-            message += (
-                f"🔸 **Payment {payment['payment_id'][:8]}...**\n"
-                f"👤 User ID: {payment['user_id']}\n"
-                f"📦 Plan: {plan.get('name', 'Unknown')}\n"
-                f"💰 Amount: ₹{payment['amount']}\n"
-                f"📅 Date: {created}\n\n"
-            )
-            
-            buttons.append([
-                Button.inline("✅ Approve", f"approve_payment_{payment['payment_id']}_{payment['user_id']}"),
-                Button.inline("❌ Reject", f"reject_payment_{payment['payment_id']}_{payment['user_id']}")
-            ])
-        
-        buttons.append([Button.inline("🔙 Back", "admin_panel")])
-        await event.edit(message, buttons=buttons, parse_mode="md")
-
-@bot_client.on(events.CallbackQuery(pattern='^profile$'))
-async def profile_callback(event):
-    """Handle profile view"""
-    user_id = event.sender_id
-    user_doc = await user_manager.get_user(user_id)
-    
-    if not user_doc:
-        await event.answer("❌ User not found", alert=True)
-        return
-    
-    # Calculate plan details
-    plan_info = ""
-    if user_doc.get('plan_expiry'):
-        try:
-            expiry = datetime.fromisoformat(user_doc['plan_expiry'])
-            days_left = (expiry - datetime.now(timezone.utc)).days
-            if days_left > 0:
-                plan_info = f" (expires in {days_left} days)"
-            else:
-                plan_info = " (expired)"
-        except Exception:
-            pass
-    
-    # Get referral stats
-    referrals_given = await asyncio.get_running_loop().run_in_executor(
-        None, 
-        lambda: db_manager.get_collection('referrals').count_documents({"referrer_id": user_id})
-    )
-    
-    join_date = user_doc.get('joined_at', '')[:10] if user_doc.get('joined_at') else 'Unknown'
-    
-    await event.edit(
-        f"👤 **My Profile**\n\n"
-        f"🆔 User ID: `{user_id}`\n"
-        f"👤 Name: {user_doc.get('first_name', 'N/A')}\n"
-        f"📅 Joined: {join_date}\n\n"
-        f"📊 **Plan & Credits:**\n"
-        f"• Plan: {user_doc.get('plan', 'free').upper()}{plan_info}\n"
-        f"• Credits: {user_doc.get('searches_remaining', 0)}\n"
-        f"• Total Searches: {user_doc.get('total_searches', 0)}\n\n"
-        f"👥 **Referrals:**\n"
-        f"• Friends Referred: {referrals_given}\n"
-        f"• Referral Code: `{user_doc.get('referral_code', 'N/A')}`",
-        buttons=[[Button.inline("🔙 Back to Main", "main_menu")]],
-        parse_mode="md"
-    )
-
-@bot_client.on(events.CallbackQuery(pattern='^referrals$'))
-async def referrals_callback(event):
-    """Handle referrals menu"""
-    await event.edit(
-        f"👥 **Referral System**\n\n"
-        f"💰 Earn {config.REFERRAL_REWARD} credits for each friend!\n\n"
-        f"📝 **How it works:**\n"
-        f"1. Share your referral link\n"
-        f"2. Friend joins using your link\n"
-        f"3. When they make their first search, you get {config.REFERRAL_REWARD} credits!\n\n"
-        f"🎁 **Benefits:**\n"
-        f"• Unlimited referrals\n"
-        f"• Instant credit rewards\n"
-        f"• Help friends discover the bot",
-        buttons=KeyboardBuilder.referral_menu(),
-        parse_mode="md"
-    )
-
-@bot_client.on(events.CallbackQuery(pattern='^referral_'))
-async def referral_callback(event):
-    """Handle referral actions"""
-    user_id = event.sender_id
-    action = event.data.decode().split('_', 1)[1]
-    
-    if action == "link":
-        user_doc = await user_manager.get_user(user_id)
-        if not user_doc:
-            await event.answer("❌ User not found", alert=True)
-            return
-        
-        referral_code = user_doc.get('referral_code', 'N/A')
-        bot_info = await bot_client.get_me()
-        referral_link = f"https://t.me/{bot_info.username}?start={referral_code}"
-        
-        await event.edit(
-            f"🔗 **Your Referral Link**\n\n"
-            f"`{referral_link}`\n\n"
-            f"📋 **Copy and share this link!**\n\n"
-            f"💡 **Tips for sharing:**\n"
-            f"• Share in groups and channels\n"
-            f"• Send to friends directly\n"
-            f"• Post on social media\n"
-            f"• Add to your bio/status\n\n"
-            f"🎯 You earn {config.REFERRAL_REWARD} credits per successful referral!",
-            buttons=[[Button.inline("🔙 Back", "referrals")]],
-            parse_mode="md"
-        )
-    
-    elif action == "stats":
-        # Get referral statistics
-        referrals_given = await asyncio.get_running_loop().run_in_executor(
-            None, 
-            lambda: db_manager.get_collection('referrals').count_documents({"referrer_id": user_id})
-        )
-        
-        referrals_rewarded = await asyncio.get_running_loop().run_in_executor(
-            None,
-            lambda: db_manager.get_collection('referrals').count_documents({
-                "referrer_id": user_id, 
-                "reward_given": True
-            })
-        )
-        
-        total_earned = referrals_rewarded * config.REFERRAL_REWARD
-        pending_rewards = referrals_given - referrals_rewarded
-        
-        await event.edit(
-            f"📊 **Your Referral Statistics**\n\n"
-            f"👥 **Referrals:**\n"
-            f"• Total Sent: {referrals_given}\n"
-            f"• Successful: {referrals_rewarded}\n"
-            f"• Pending: {pending_rewards}\n\n"
-            f"💰 **Earnings:**\n"
-            f"• Credits Earned: {total_earned}\n"
-            f"• Per Referral: {config.REFERRAL_REWARD} credits\n\n"
-            f"⏳ Pending rewards will be given when your friends make their first search.",
-            buttons=[[Button.inline("🔙 Back", "referrals")]],
-            parse_mode="md"
-        )
-
-@bot_client.on(events.CallbackQuery(pattern='^plans$'))
-async def plans_callback(event):
-    """Handle plans menu"""
-    message = "💎 **Premium Plans**\n\n"
-    
-    for key, plan in PLANS.items():
-        searches_text = (
-            f"Unlimited searches for {plan['days']} days" 
-            if plan['searches'] == -1 
-            else f"{plan['searches']} searches"
-        )
-        
-        features = '\n'.join([f"  • {feature}" for feature in plan.get('features', [])])
-        
-        message += (
-            f"🔸 **{plan['name']}**\n"
-            f"💰 Price: ₹{plan['price']}\n"
-            f"🔍 Benefit: {searches_text}\n"
-            f"📝 {plan['description']}\n"
-            f"✨ Features:\n{features}\n\n"
-        )
-    
-    await event.edit(
-        message,
-        buttons=KeyboardBuilder.plans_menu(),
-        parse_mode="md"
-    )
-
-@bot_client.on(events.CallbackQuery(pattern='^support$'))
-async def support_callback(event):
-    """Handle support"""
-    await event.edit(
-        f"🆘 **Support & Help**\n\n"
-        f"📞 **Contact Admin:**\n"
-        f"• Telegram: @darkboxesAdmin\n"
-        f"• For payment issues, include your User ID: `{event.sender_id}`\n\n"
-        f"❓ **Common Issues:**\n"
-        f"• Payment not approved → Contact admin with screenshot\n"
-        f"• Search not working → Try different format\n"
-        f"• Credits not added → Contact with payment proof\n\n"
-        f"⏰ **Response Time:** Usually within 24 hours\n\n"
-        f"💡 **Tip:** Include your User ID in all support messages!",
-        buttons=[[Button.inline("🔙 Back to Main", "main_menu")]],
-        parse_mode="md"
-    )
-
-@bot_client.on(events.CallbackQuery(pattern='^check_membership$'))
-async def check_membership_callback(event):
-    """Handle channel membership verification"""
-    user_id = event.sender_id
     
     is_member = await check_channel_membership(user_id)
     
     if not is_member:
-        await event.answer(
-            "❌ You haven't joined the channel yet. Please join first and try again.",
-            alert=True
+        await event.respond(
+            f"ðŸ‘‹ Welcome to Premium Info Bot!\n\n"
+            f"To use this bot, you must first join our channel:\n"
+            f"@{MANDATORY_CHANNEL.replace('@', '')}\n\n"
+            f"After joining, click the button below to verify.",
+            buttons=[
+                [Button.url("ðŸ“¢ Join Channel", f"https://t.me/{MANDATORY_CHANNEL.replace('@', '')}")],
+                [Button.inline("âœ… I've Joined - Check Again", "check_membership")]
+            ]
         )
         return
     
-    # Update user as verified
     await asyncio.get_running_loop().run_in_executor(
-        None, lambda: user_manager.users_col.update_one(
+        None, lambda: users_col.update_one(
             {"user_id": user_id},
             {"$set": {"channel_joined": True}}
         )
     )
     
-    user_doc = await user_manager.get_user(user_id)
-    
-    await event.edit(
-        f"✅ **Verification Successful!**\n\n"
-        f"Welcome to the Premium Info Bot!\n\n"
-        f"📊 **Your Account:**\n"
-        f"• Plan: {user_doc.get('plan', 'free').upper()}\n"
-        f"• Credits: {user_doc.get('searches_remaining', 0)}\n\n"
-        f"🔍 Choose a search type below to get started:",
-        buttons=KeyboardBuilder.main_menu(),
-        parse_mode="md"
+    await event.respond(
+        f"ðŸ‘‹ Welcome {user.first_name}!\n\n"
+        f"ðŸ“Š Your Plan: {user_doc.get('plan', 'free').upper()}\n"
+        f"ðŸ” Searches Remaining: {user_doc.get('searches_remaining', 0)}\n\n"
+        f"Select an option below:",
+        buttons=get_main_menu()
     )
 
-@bot_client.on(events.CallbackQuery(pattern='^(main_menu|cancel)$'))
-async def main_menu_callback(event):
-    """Handle main menu and cancel actions"""
+
+@bot_client.on(events.CallbackQuery(pattern='^referral_menu'))
+async def referral_menu_callback(event):
+    await event.edit(
+        "ðŸ‘¥ Referral System\n\n"
+        f"Earn {REFERRAL_REWARD} credits for each friend who uses your link!\n\n"
+        "Share your referral link and when they perform their first search, you get rewarded.",
+        buttons=get_referral_menu()
+    )
+
+@bot_client.on(events.CallbackQuery(pattern='^referral_link'))
+async def referral_link_callback(event):
     user_id = event.sender_id
     
-    # Clear user state
-    user_states.pop(user_id, None)
+    referral_code = await get_or_create_referral_code(user_id)
     
-    user_doc = await user_manager.get_user(user_id)
-    if not user_doc:
-        await event.answer("❌ User not found", alert=True)
+    if not referral_code:
+        await event.answer("âŒ Error generating referral code", alert=True)
         return
     
-    # Check if admin
-    user_role = "admin" if await admin_panel.is_admin(user_id) else "user"
-    
-    plan_expiry = ""
-    if user_doc.get("plan_expiry"):
-        try:
-            expiry = datetime.fromisoformat(user_doc["plan_expiry"])
-            days_left = (expiry - datetime.now(timezone.utc)).days
-            if days_left > 0:
-                plan_expiry = f" ({days_left} days left)"
-        except Exception:
-            pass
+    bot_info = await bot_client.get_me()
+    bot_username = bot_info.username
+    referral_link = f"https://t.me/{bot_username}?start={referral_code}"
     
     await event.edit(
-        f"🏠 **Main Menu**\n\n"
-        f"📊 Plan: {user_doc.get('plan', 'free').upper()}{plan_expiry}\n"
-        f"🔍 Credits: {user_doc.get('searches_remaining', 0)}\n"
-        f"📈 Total Searches: {user_doc.get('total_searches', 0)}\n\n"
-        f"Select a search type below:",
-        buttons=KeyboardBuilder.main_menu(user_role),
-        parse_mode="md"
+        f"ðŸ”— Your Referral Link\n\n"
+        f"`{referral_link}`\n\n"
+        f"Share this link with friends!\n"
+        f"You'll earn {REFERRAL_REWARD} credits when they use the bot.\n\n"
+        f"ðŸ’¡ Tip: Share on social media, groups, or with friends!",
+        buttons=[[Button.inline("ðŸ”™ Back", "referral_menu")]]
     )
 
-# ================== PRIVATE MESSAGE HANDLER ==================
+@bot_client.on(events.CallbackQuery(pattern='^referral_stats'))
+async def referral_stats_callback(event):
+    user_id = event.sender_id
+    
+    stats = await get_referral_stats(user_id)
+    user_doc = await get_user(user_id)
+    
+    message = (
+        f"ðŸ“Š Your Referral Statistics\n\n"
+        f"ðŸ‘¥ Total Referrals: {stats['total']}\n"
+        f"âœ… Rewarded: {stats['rewarded']}\n"
+        f"â³ Pending: {stats['pending']}\n\n"
+        f"ðŸ’° Total Earned: {stats['rewarded'] * REFERRAL_REWARD} credits\n"
+        f"ðŸ” Current Balance: {user_doc.get('searches_remaining', 0)} credits"
+    )
+    
+    await event.edit(message, buttons=[[Button.inline("ðŸ”™ Back", "referral_menu")]])
 
-@bot_client.on(events.NewMessage(func=lambda e: e.is_private and not e.text.startswith('/') and e.text))
-async def private_message_handler(event):
-    """Handle private messages based on user state"""
+@bot_client.on(events.CallbackQuery(pattern='^api_menu'))
+async def api_menu_callback(event):
+    await event.edit(
+        "ðŸ”‘ API Key Management\n\n"
+        "Manage your API keys for programmatic access:",
+        buttons=get_api_menu()
+    )
+
+@bot_client.on(events.CallbackQuery(pattern='^api_create'))
+async def api_create_callback(event):
+    user_id = event.sender_id
+    user_states[user_id] = {"action": "awaiting_api_key_name"}
+    
+    await event.edit(
+        "âž• Create New API Key\n\n"
+        "Please send a name for this API key (e.g., 'My App', 'Production Server'):"
+    )
+
+@bot_client.on(events.CallbackQuery(pattern='^api_list'))
+async def api_list_callback(event):
+    user_id = event.sender_id
+    api_keys = await list_user_api_keys(user_id)
+    
+    if not api_keys:
+        await event.answer("You don't have any API keys yet.", alert=True)
+        return
+    
+    message = "ðŸ“‹ Your API Keys:\n\n"
+    buttons = []
+    
+    for key_doc in api_keys:
+        created = datetime.fromisoformat(key_doc['created_at']).strftime('%Y-%m-%d')
+        status = "ðŸŸ¢ Active" if key_doc.get('active', True) else "ðŸ”´ Inactive"
+        
+        message += f"**{key_doc['name']}**\n"
+        message += f"Key: `{key_doc['api_key'][:20]}...`\n"
+        message += f"Created: {created}\n"
+        message += f"Used: {key_doc.get('searches_used', 0)} times\n"
+        message += f"Status: {status}\n\n"
+        
+        buttons.append([Button.inline(
+            f"ðŸ—‘ï¸ Delete {key_doc['name']}", 
+            f"api_delete_{key_doc['api_key']}"
+        )])
+    
+    buttons.append([Button.inline("ðŸ”™ Back", "api_menu")])
+    
+    await event.edit(message, buttons=buttons)
+
+@bot_client.on(events.CallbackQuery(pattern=r'^api_delete_(.+)'))
+async def api_delete_callback(event):
+    user_id = event.sender_id
+    api_key = event.data.decode().split('_', 2)[2]
+    
+    success = await delete_api_key(api_key, user_id)
+    
+    if success:
+        await event.answer("âœ… API key deleted successfully", alert=True)
+        await api_list_callback(event)
+    else:
+        await event.answer("âŒ Failed to delete API key", alert=True)
+
+async def safe_edit_message(event, text, buttons=None):
+    """Safely edit a message"""
+    try:
+        if buttons:
+            await event.edit(text, buttons=buttons)
+        else:
+            await event.edit(text)
+    except Exception as e:
+        error_name = type(e).__name__
+        if 'MessageNotModified' in error_name or 'not modified' in str(e).lower():
+            logger.info(f"â„¹ï¸ Message not modified (content unchanged)")
+        else:
+            logger.error(f"Error editing message: {e}")
+
+@bot_client.on(events.CallbackQuery(pattern=r'^relay_'))
+async def relay_button_callback(event):
+    """Handle relay button clicks for telegram and movie bots"""
+    user_id = event.sender_id
+    
+    if user_id not in interactive_sessions:
+        await event.answer("âŒ Session expired. Please start a new search.", alert=True)
+        return
+    
+    session = interactive_sessions[user_id]
+    dest_message = session['dest_message']
+    dest_entity = session['dest_entity']
+    search_type = session['type']
+    
+    try:
+        callback_data = event.data.decode()
+        button_clicked = False
+        
+        # Parse relay data
+        if callback_data.startswith('relay_tg_'):
+            # Telegram button
+            parts = callback_data.split('_')
+            if len(parts) >= 4:
+                row_idx = int(parts[2])
+                col_idx = int(parts[3])
+                
+                if row_idx < len(dest_message.buttons) and col_idx < len(dest_message.buttons[row_idx]):
+                    logger.info(f"ðŸ”˜ Clicking Telegram button at position [{row_idx}][{col_idx}]")
+                    await event.answer("â³ Fetching result...")
+                    
+                    await dest_message.click(row_idx, col_idx)
+                    button_clicked = True
+        
+        elif callback_data.startswith('relay_movie_'):
+            # Movie button
+            parts = callback_data.split('_')
+            if len(parts) >= 4:
+                row_idx = int(parts[2])
+                col_idx = int(parts[3])
+                
+                if row_idx < len(dest_message.buttons) and col_idx < len(dest_message.buttons[row_idx]):
+                    logger.info(f"ðŸŽ¬ Clicking Movie button at position [{row_idx}][{col_idx}]")
+                    await event.answer("â³ Fetching file...")
+                    
+                    await dest_message.click(row_idx, col_idx)
+                    button_clicked = True
+        
+        if not button_clicked:
+            await event.answer("âŒ Button not found", alert=True)
+            return
+        
+        # Wait for response
+        logger.info(f"â³ Waiting for response after button click...")
+        
+        for attempt in range(4):
+            await asyncio.sleep(2 if attempt == 0 else 3)
+            
+            logger.info(f"ðŸ” Checking for response (attempt {attempt + 1}/4)...")
+            
+            try:
+                # Check if original message was edited
+                updated_msg = await user_client.get_messages(dest_entity, ids=dest_message.id)
+                
+                if updated_msg and updated_msg.edit_date:
+                    # Check if buttons disappeared (final result)
+                    if not updated_msg.buttons and dest_message.buttons:
+                        logger.info(f"âœ… Buttons removed - final result found")
+                        interactive_sessions.pop(user_id, None)
+                        user_states.pop(user_id, None)
+                        
+                        if updated_msg.file:
+                            await event.answer("âœ… File received!")
+                            if updated_msg.text:
+                                await bot_client.send_message(user_id, f"âœ… Result:\n\n{updated_msg.text}")
+                            await bot_client.forward_messages(user_id, updated_msg)
+                        elif updated_msg.text and len(updated_msg.text.strip()) >= 10:
+                            result = filter_links_and_usernames(updated_msg.text)
+                            await safe_edit_message(event, f"âœ… Result:\n\n{result}")
+                        
+                        # Deduct credit
+                        if user_id != ADMIN_USER_ID:
+                            user_doc = await get_user(user_id)
+                            if user_doc and user_doc.get('plan') != 'unlimited':
+                                await decrement_search(user_id)
+                        return
+            
+            except Exception as e:
+                logger.warning(f"Could not check edited message: {e}")
+            
+            # Check for new messages
+            try:
+                messages = await user_client.get_messages(dest_entity, limit=30)
+                
+                for msg in messages:
+                    if msg.id == dest_message.id:
+                        continue
+                    
+                    if msg.date and msg.date.timestamp() > (time.time() - 20):
+                        logger.info(f"ðŸ“¨ Found recent message (ID: {msg.id})")
+                        
+                        # Has pagination buttons
+                        if msg.buttons:
+                            logger.info(f"ðŸ”˜ Found pagination buttons")
+                            session['dest_message'] = msg
+                            
+                            user_buttons = []
+                            for r_idx, row in enumerate(msg.buttons):
+                                button_row = []
+                                for c_idx, button in enumerate(row):
+                                    if hasattr(button, 'text'):
+                                        prefix = "relay_tg_" if search_type == "telegram" else "relay_movie_"
+                                        button_row.append(Button.inline(
+                                            button.text,
+                                            f"{prefix}{r_idx}_{c_idx}"
+                                        ))
+                                if button_row:
+                                    user_buttons.append(button_row)
+                            
+                            await safe_edit_message(
+                                event,
+                                msg.text or msg.raw_text or "Select an option:",
+                                buttons=user_buttons
+                            )
+                            return
+                        
+                        # Has file or text - final result
+                        if msg.file or (msg.text and len(msg.text.strip()) >= 10):
+                            logger.info(f"âœ… Found final result")
+                            interactive_sessions.pop(user_id, None)
+                            user_states.pop(user_id, None)
+                            
+                            if msg.file:
+                                await event.answer("âœ… File received!")
+                                if msg.text:
+                                    await bot_client.send_message(user_id, f"âœ… Result:\n\n{msg.text}")
+                                await bot_client.forward_messages(user_id, msg)
+                            elif msg.text:
+                                result = filter_links_and_usernames(msg.text)
+                                await safe_edit_message(event, f"âœ… Result:\n\n{result}")
+                            
+                            # Deduct credit
+                            if user_id != ADMIN_USER_ID:
+                                user_doc = await get_user(user_id)
+                                if user_doc and user_doc.get('plan') != 'unlimited':
+                                    await decrement_search(user_id)
+                            return
+            
+            except Exception as e:
+                logger.warning(f"Could not check new messages: {e}")
+        
+        logger.warning(f"âŒ No response found after retries")
+        await event.answer("âŒ No response received. Please try again.", alert=True)
+        interactive_sessions.pop(user_id, None)
+    
+    except Exception as e:
+        logger.exception(f"Error in relay button callback: {e}")
+        await event.answer("âŒ An error occurred", alert=True)
+        interactive_sessions.pop(user_id, None)
+
+@bot_client.on(events.CallbackQuery(pattern='^back_main'))
+async def back_main_callback(event):
+    user = await event.get_sender()
+    user_id = user.id
+    user_doc = await get_user(user_id)
+    
+    if user_id == ADMIN_USER_ID:
+        await event.edit(
+            f"ðŸ‘‹ Welcome Admin!\n\n"
+            f"You have full access to all features.\n"
+            f"Use the menu below:",
+            buttons=get_main_menu()
+        )
+        return
+    
+    await event.edit(
+        f"ðŸ‘‹ Welcome {user.first_name}!\n\n"
+        f"ðŸ“Š Your Plan: {user_doc.get('plan', 'free').upper()}\n"
+        f"ðŸ” Searches Remaining: {user_doc.get('searches_remaining', 0)}\n\n"
+        f"Select an option below:",
+        buttons=get_main_menu()
+    )
+
+@bot_client.on(events.CallbackQuery(pattern=r'^search_(.+)'))
+async def search_callback(event):
+    user_id = event.sender_id
+    search_type = event.data.decode().split('_')[1]
+    
+    if user_id == ADMIN_USER_ID:
+        user_states[user_id] = {"action": "awaiting_input", "type": search_type}
+        try:
+            await event.edit(
+                f"ðŸ” {SEARCH_COMMANDS[search_type]['name']}\n\n"
+                f"Please send the {search_type} to search:"
+            )
+        except Exception:
+            await event.answer()
+            await bot_client.send_message(
+                user_id,
+                f"ðŸ” {SEARCH_COMMANDS[search_type]['name']}\n\n"
+                f"Please send the {search_type} to search:"
+            )
+        return
+    
+    user_doc = await get_user(user_id)
+    
+    if not user_doc:
+        await event.answer("âŒ Error: User not found", alert=True)
+        return
+    
+    searches_remaining = user_doc.get('searches_remaining', 0)
+    plan = user_doc.get('plan', 'free')
+    plan_expiry = user_doc.get('plan_expiry')
+    
+    if plan == 'unlimited' and plan_expiry:
+        expiry_dt = datetime.fromisoformat(plan_expiry)
+        if expiry_dt < datetime.now(timezone.utc):
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: users_col.update_one(
+                    {"user_id": user_id},
+                    {"$set": {"plan": "free", "searches_remaining": 0}}
+                )
+            )
+            searches_remaining = 0
+    
+    if searches_remaining <= 0 and plan != 'unlimited':
+        try:
+            await event.edit(
+                "âŒ Access Not Granted\n\n"
+                "You must buy a premium pack to use this bot.\n\n"
+                "Select a plan below:",
+                buttons=get_plans_menu()
+            )
+        except Exception:
+            await event.answer("âŒ Access Not Granted", alert=True)
+        return
+    
+    user_states[user_id] = {"action": "awaiting_input", "type": search_type}
+    try:
+        await event.edit(
+            f"ðŸ” {SEARCH_COMMANDS[search_type]['name']}\n\n"
+            f"Searches Remaining: {searches_remaining if searches_remaining > 0 else 'Unlimited'}\n\n"
+            f"Please send the {search_type} to search:"
+        )
+    except Exception:
+        await event.answer()
+        await bot_client.send_message(
+            user_id,
+            f"ðŸ” {SEARCH_COMMANDS[search_type]['name']}\n\n"
+            f"Searches Remaining: {searches_remaining if searches_remaining > 0 else 'Unlimited'}\n\n"
+            f"Please send the {search_type} to search:"
+        )
+
+@bot_client.on(events.CallbackQuery(pattern=r'^buy_(.+)'))
+async def buy_plan_callback(event):
+    user_id = event.sender_id
+    plan_key = event.data.decode().split('_', 1)[1]
+    
+    if plan_key not in PLANS:
+        await event.answer("âŒ Invalid plan", alert=True)
+        return
+    
+    plan_info = PLANS[plan_key]
+    payment_id = await create_payment_request(user_id, plan_key, plan_info['price'])
+    
+    if not payment_id:
+        await event.answer("âŒ Error creating payment request", alert=True)
+        return
+    
+    user_states[user_id] = {"action": "awaiting_payment", "payment_id": payment_id, "plan": plan_key}
+    
+    try:
+        user = await event.get_sender()
+        await bot_client.send_message(
+            ADMIN_USER_ID,
+            f"ðŸ’° New Payment Request\n\n"
+            f"User: {user.first_name} (@{user.username or 'N/A'})\n"
+            f"User ID: {user_id}\n"
+            f"Plan: {plan_info['name']}\n"
+            f"Amount: â‚¹{plan_info['price']}\n"
+            f"Payment ID: {payment_id}\n\n"
+            f"Waiting for payment screenshot..."
+        )
+    except Exception as e:
+        logger.exception("Error notifying admin: %s", e)
+    
+    await event.edit(
+        f"ðŸ’³ Payment Required\n\n"
+        f"Plan: {plan_info['name']}\n"
+        f"Amount: â‚¹{plan_info['price']}\n\n"
+        f"Please scan the QR code below and send the payment screenshot:\n\n"
+        f"Payment ID: `{payment_id}`",
+        buttons=[[Button.inline("âŒ Cancel", "cancel")]]
+    )
+    
+    try:
+        await bot_client.send_file(event.sender_id, PAYMENT_QR_CODE, caption="Scan to pay")
+    except Exception as e:
+        logger.exception("Error sending QR code: %s", e)
+        await event.respond("Please pay and send screenshot.")
+
+@bot_client.on(events.CallbackQuery(pattern=r'^approve_(.+)_(.+)'))
+async def approve_payment_callback(event):
+    if event.sender_id != ADMIN_USER_ID:
+        await event.answer("âŒ Unauthorized", alert=True)
+        return
+    
+    data_parts = event.data.decode().split('_')
+    payment_id = data_parts[1]
+    target_user_id = int(data_parts[2])
+    
+    payment = await asyncio.get_running_loop().run_in_executor(
+        None, payments_col.find_one, {"payment_id": payment_id}
+    )
+    
+    if not payment:
+        await event.answer("âŒ Payment not found", alert=True)
+        return
+    
+    plan_key = payment['plan']
+    plan_info = PLANS[plan_key]
+    
+    if plan_info['searches'] == -1:
+        await update_user_plan(target_user_id, "unlimited", 999999, plan_info['days'])
+    else:
+        user_doc = await get_user(target_user_id)
+        current_searches = user_doc.get('searches_remaining', 0)
+        await update_user_plan(target_user_id, "paid", current_searches + plan_info['searches'])
+    
+    await asyncio.get_running_loop().run_in_executor(
+        None, lambda: payments_col.update_one(
+            {"payment_id": payment_id},
+            {"$set": {"status": "approved", "approved_at": datetime.now(timezone.utc).isoformat()}}
+        )
+    )
+    
+    await event.edit(
+        f"âœ… Payment Approved\n\n"
+        f"Payment ID: {payment_id}\n"
+        f"User ID: {target_user_id}\n"
+        f"Plan: {plan_info['name']}"
+    )
+    
+    try:
+        await bot_client.send_message(
+            target_user_id,
+            f"âœ… Payment Approved!\n\n"
+            f"Your {plan_info['name']} plan has been activated.\n"
+            f"Use /start to begin searching.",
+            buttons=[[Button.inline("ðŸš€ Start Searching", "start")]]
+        )
+    except Exception as e:
+        logger.exception("Error notifying user: %s", e)
+
+@bot_client.on(events.CallbackQuery(pattern=r'^reject_(.+)_(.+)'))
+async def reject_payment_callback(event):
+    if event.sender_id != ADMIN_USER_ID:
+        await event.answer("âŒ Unauthorized", alert=True)
+        return
+    
+    data_parts = event.data.decode().split('_')
+    payment_id = data_parts[1]
+    target_user_id = int(data_parts[2])
+    
+    await asyncio.get_running_loop().run_in_executor(
+        None, lambda: payments_col.update_one(
+            {"payment_id": payment_id},
+            {"$set": {"status": "rejected", "rejected_at": datetime.now(timezone.utc).isoformat()}}
+        )
+    )
+    
+    await event.edit(f"âŒ Payment Rejected\n\nPayment ID: {payment_id}")
+    
+    try:
+        await bot_client.send_message(
+            target_user_id,
+            "âŒ Payment Rejected\n\n"
+            "Your payment was not approved. Please contact support or try again."
+        )
+    except Exception as e:
+        logger.exception("Error notifying user: %s", e)
+
+@bot_client.on(events.CallbackQuery(pattern='^cancel'))
+async def cancel_callback(event):
+    user_id = event.sender_id
+    user_states.pop(user_id, None)
+    await event.edit(
+        "âŒ Cancelled\n\nUse /start to begin again.",
+        buttons=None
+    )
+
+@bot_client.on(events.CallbackQuery(pattern='^check_membership'))
+async def check_membership_callback(event):
+    user_id = event.sender_id
+    
+    user_doc = await get_user(user_id)
+    if not user_doc:
+        user = await event.get_sender()
+        await create_or_update_user(user_id, user.username, user.first_name)
+        user_doc = await get_user(user_id)
+    
+    is_member = await check_channel_membership(user_id)
+    
+    if not is_member:
+        await event.answer(
+            "âŒ You haven't joined the channel yet. Please join and try again.",
+            alert=True
+        )
+        return
+    
+    await asyncio.get_running_loop().run_in_executor(
+        None, lambda: users_col.update_one(
+            {"user_id": user_id},
+            {"$set": {"channel_joined": True}}
+        )
+    )
+    
+    user = await event.get_sender()
+    
+    await event.edit(
+        f"âœ… Great! You've joined the channel!\n\n"
+        f"ðŸ‘‹ Welcome {user.first_name}!\n\n"
+        f"ðŸ“Š Your Plan: {user_doc.get('plan', 'free').upper()}\n"
+        f"ðŸ” Searches Remaining: {user_doc.get('searches_remaining', 0)}\n\n"
+        f"Select an option below:",
+        buttons=get_main_menu()
+    )
+
+@bot_client.on(events.NewMessage(func=lambda e: e.is_private and not e.text.startswith('/')))
+async def message_handler(event):
     user_id = event.sender_id
     
     if user_id not in user_states:
         return
     
     state = user_states[user_id]
-    action = state.get('action')
     
-    # Handle search input
-    if action == 'awaiting_input':
-        search_type = state['type']
-        query = event.text.strip()
+    if state.get('action') == 'awaiting_api_key_name':
+        key_name = event.text.strip()
         
-        if not query:
-            await event.respond("❌ Please send a valid query.")
+        if len(key_name) < 3:
+            await event.respond("âŒ Name must be at least 3 characters. Please try again:")
             return
         
-        # Show processing message
-        status_msg = await event.respond(
-            "🔍 **Searching...**\n\n"
-            "⏳ Please wait 15-30 seconds while we search through our databases.\n\n"
-            "💡 We search multiple sources to get you the best results!",
-            parse_mode="md"
-        )
+        user_doc = await get_user(user_id)
+        api_key = await create_api_key(user_id, key_name)
         
-        # Perform search
-        result = await search_engine.perform_search(search_type, query, user_id)
-        
-        # Delete status message
-        try:
-            await status_msg.delete()
-        except Exception:
-            pass
-        
-        if result.get('success'):
-            # Send result
-            await event.respond(result['result'])
+        if api_key:
+            if user_doc.get('plan') == 'unlimited':
+                credits_info = "Unlimited credits â™¾ï¸"
+            else:
+                credits_info = f"{user_doc.get('searches_remaining', 0)} credits remaining"
             
-            # Handle file if present
-            if result.get('file'):
-                try:
-                    await bot_client.forward_messages(user_id, result['file'])
-                except Exception as e:
-                    logger.error(f"Error forwarding file: {e}")
-            
-            # Deduct credit (skip for admin)
-            if not await admin_panel.is_admin(user_id):
-                await user_manager.update_searches(user_id, -1)
-                
-                # Check if this was user's first search (for referral reward)
-                user_doc = await user_manager.get_user(user_id)
-                if user_doc.get('total_searches') == 1 and user_doc.get('referred_by'):
-                    await user_manager.reward_referrer(user_id)
-        else:
-            # Search failed
-            error_msg = result.get('error', 'Unknown error occurred')
-            await event.respond(f"❌ **Search Failed**\n\n{error_msg}", parse_mode="md")
-        
-        # Clear user state
-        user_states.pop(user_id, None)
-    
-    # Handle payment screenshot
-    elif action == 'awaiting_payment':
-        if not event.photo:
             await event.respond(
-                "❌ **Invalid File**\n\n"
-                "Please send a payment screenshot image.",
-                parse_mode="md"
+                f"âœ… API Key Created Successfully!\n\n"
+                f"**Name:** {key_name}\n"
+                f"**API Key:** `{api_key}`\n"
+                f"**Your Credits:** {credits_info}\n\n"
+                f"âš ï¸ **Important:** \n"
+                f"â€¢ Save this key securely\n"
+                f"â€¢ API uses YOUR account credits\n"
+                f"â€¢ Recharge to get more credits",
+                buttons=[[Button.inline("ðŸ”™ Back to API Menu", "api_menu")]]
             )
-            return
+        else:
+            await event.respond(
+                "âŒ Failed to create API key. Please try again.",
+                buttons=[[Button.inline("ðŸ”™ Back to API Menu", "api_menu")]]
+            )
         
+        user_states.pop(user_id, None)
+        return
+    
+    if state.get('action') == 'awaiting_payment':
+        if not event.photo:
+            await event.respond("âŒ Please send a screenshot image.")
+            return
+
         payment_id = state['payment_id']
         plan_key = state['plan']
-        plan = PLANS.get(plan_key, {})
-        
-        # Update payment with screenshot
-        await payment_manager.update_payment_screenshot(payment_id, str(event.message.id))
-        
-        # Forward screenshot to admin
+        plan_info = PLANS[plan_key]
+
+        await update_payment_screenshot(payment_id, event.message.id)
+
         try:
             user = await event.get_sender()
             await bot_client.send_file(
-                config.ADMIN_USER_ID,
+                ADMIN_USER_ID,
                 event.photo,
                 caption=(
-                    f"💳 **Payment Screenshot**\n\n"
-                    f"👤 User: {user.first_name} (@{user.username or 'N/A'})\n"
-                    f"🆔 User ID: {user_id}\n"
-                    f"📦 Plan: {plan.get('name', 'Unknown')}\n"
-                    f"💰 Amount: ₹{plan.get('price', 0)}\n"
-                    f"🔢 Payment ID: `{payment_id}`"
+                    f"ðŸ’° Payment Screenshot Received\n\n"
+                    f"User: {user.first_name} (@{user.username or 'N/A'})\n"
+                    f"User ID: {user_id}\n"
+                    f"Plan: {plan_info['name']}\n"
+                    f"Amount: â‚¹{plan_info['price']}\n"
+                    f"Payment ID: {payment_id}"
                 ),
-                buttons=KeyboardBuilder.payment_approval_buttons(payment_id, user_id),
-                parse_mode="md"
+                buttons=get_payment_approval_buttons(payment_id, user_id)
             )
         except Exception as e:
-            logger.error(f"Error forwarding to admin: {e}")
-        
+            logger.exception("Error forwarding to admin: %s", e)
+
         await event.respond(
-            "✅ **Screenshot Received!**\n\n"
-            "📋 Your payment is being reviewed by admin.\n"
-            "🔔 You'll be notified once it's approved.\n\n"
-            "⏰ Usually takes 1-24 hours to process.\n\n"
-            "Thank you for your patience! 💙",
-            parse_mode="md"
+            "âœ… Payment screenshot received!\n\n"
+            "Your payment is being reviewed. You'll be notified once approved."
         )
-        
-        # Clear user state
+
+        user_states.pop(user_id, None)
+        return
+    
+    if state.get('action') == 'awaiting_input':
+        search_type = state['type']
+        query = event.text.strip()
+
+        status_msg = await event.respond("â³ Fetching information... Please wait.")
+
+        user_doc = await get_user(user_id)
+        is_first_search = (
+            user_doc.get('total_searches', 0) == 0
+            and user_doc.get('referred_by')
+        )
+
+        result = await perform_search(search_type, query, user_id)
+
+        try:
+            await status_msg.delete()
+        except:
+            pass
+
+        if result['success']:
+            if result.get('file'):
+                file_msg = result['file']
+                await event.respond(f"âœ… Search Result:\n\n{result['result']}")
+                
+                try:
+                    await bot_client.forward_messages(user_id, file_msg)
+                except Exception as e:
+                    logger.error(f"Error forwarding file: {e}")
+            else:
+                await event.respond(f"âœ… Search Result:\n\n{result['result']}")
+
+            if user_id != ADMIN_USER_ID:
+                user_doc = await get_user(user_id)
+                if user_doc.get('plan') != 'unlimited':
+                    await decrement_search(user_id)
+
+                if is_first_search:
+                    await reward_referrer(user_id)
+        elif result.get('needs_interaction'):
+            await event.respond(
+                result['message'],
+                buttons=result['buttons']
+            )
+            return
+        else:
+            error_msg = result.get('error', 'An error occurred')
+            await event.respond(f"âŒ {error_msg}")
+
         user_states.pop(user_id, None)
 
-# ================== WEB SERVER ==================
+# ============ Message Handler for All Groups and Bots ============
+@user_client.on(events.NewMessage())
+async def handle_all_replies(event):
+    message = event.message
+    
+    if not message.reply_to:
+        return
+    
+    text = message.text or message.raw_text
+    has_file = message.file is not None
+    file_name = (message.file.name if has_file else None) or ""
+    
+    if not text and not has_file:
+        return
+    
+    now = time.time()
+    matched_search = None
+    matched_key = None
+    
+    # FIRST: Check for direct reply match
+    for search_id, search_info in list(pending_searches.items()):
+        if search_info['future'].done():
+            continue
+        if now - search_info.get("timestamp", now) > REPLY_TIMEOUT:
+            continue
+        if message.reply_to.reply_to_msg_id == search_info.get('message_id'):
+            matched_search = search_info
+            matched_key = search_id
+            logger.info(f"ðŸŽ¯ Direct reply match for search_id: {search_id}")
+            break
+    
+    # SECOND: If no direct match, try content matching
+    if not matched_search:
+        for search_id, search_info in list(pending_searches.items()):
+            if search_info['future'].done():
+                continue
+            if now - search_info.get("timestamp", now) > REPLY_TIMEOUT:
+                continue
+            
+            query = search_info['query'].strip()
+            search_type = search_info['search_type']
+            
+            # PRIORITY 1: Check for file messages
+            if has_file:
+                logger.info(f"ðŸ“„ File detected: {file_name} (mime: {message.file.mime_type})")
+                
+                # All search types can now receive .txt files
+                if file_name and (file_name.lower().endswith('.txt') or message.file.mime_type == 'text/plain'):
+                    logger.info(f"âœ… TXT file match for search_id: {search_id}")
+                    matched_search = search_info
+                    matched_key = search_id
+                    break
+                
+                # Also check if query is in filename/text
+                clean_query = re.sub(r'[^\d]', '', query)
+                full_text = f"{(text or '').lower()} {file_name.lower() if file_name else ''}"
+                
+                if clean_query and len(clean_query) >= 6:
+                    if clean_query in re.sub(r'[^\d]', '', full_text):
+                        logger.info(f"ðŸŽ¯ File with matching number for search_id: {search_id}")
+                        matched_search = search_info
+                        matched_key = search_id
+                        break
+            
+            # PRIORITY 2: Text matching (but skip processing messages and files with text)
+            if text and not has_file and not matched_search:
+                # Skip processing messages - don't match them
+                if is_processing_message(text):
+                    logger.info(f"â­ï¸ Skipping processing message for content matching")
+                    continue
+                
+                message_text_lower = text.lower()
+                is_match = False
+                
+                if search_type in ['phone', 'telegram']:
+                    clean_query = re.sub(r'[^\d]', '', query)
+                    clean_msg = re.sub(r'[^\d]', '', text)
+                    if clean_query and len(clean_query) >= 10 and clean_query in clean_msg:
+                        is_match = True
+                        logger.info(f"ðŸŽ¯ Phone number text match")
+                        
+                elif search_type == 'aadhar':
+                    clean_query = re.sub(r'[^\d]', '', query)
+                    if len(clean_query) == 12 and clean_query in re.sub(r'[^\d]', '', text):
+                        is_match = True
+                        logger.info(f"ðŸŽ¯ Aadhar text match")
+                        
+                elif search_type in ['vehicle', 'vehicle_detail']:
+                    clean_query = re.sub(r'[^a-z0-9]', '', query.lower())
+                    clean_msg = re.sub(r'[^a-z0-9]', '', message_text_lower)
+                    if clean_query and len(clean_query) >= 6 and clean_query in clean_msg:
+                        is_match = True
+                        logger.info(f"ðŸŽ¯ Vehicle text match")
+                
+                elif search_type == 'family':
+                    clean_query = re.sub(r'[^\d]', '', query)
+                    clean_msg = re.sub(r'[^\d]', '', text)
+                    if clean_query and len(clean_query) >= 10 and clean_query in clean_msg:
+                        is_match = True
+                        logger.info(f"ðŸŽ¯ Family text match")
+                        
+                elif query.lower() in message_text_lower:
+                    is_match = True
+                    logger.info(f"ðŸŽ¯ Generic text match")
+                
+                if is_match:
+                    matched_search = search_info
+                    matched_key = search_id
+                    break
+    
+    if not matched_search:
+        logger.debug(f"â„¹ï¸ No matching search found for this message")
+        return
+    
+    await asyncio.sleep(FETCH_WAIT_TIME)
+    
+    # PRIORITY 1: Handle file messages FIRST (skip text checks for files)
+    if has_file:
+        try:
+            if file_name and (file_name.lower().endswith('.txt') or message.file.mime_type == 'text/plain'):
+                logger.info(f"ðŸ“¥ Downloading TXT file: {file_name}")
+                
+                file_bytes = await message.download_media(bytes)
+                
+                try:
+                    file_text = file_bytes.decode('utf-8')
+                except UnicodeDecodeError:
+                    try:
+                        file_text = file_bytes.decode('latin-1')
+                    except:
+                        file_text = file_bytes.decode('utf-8', errors='ignore')
+                
+                # Clean the file content - remove all links and usernames
+                cleaned_file_text = clean_file_content(file_text)
+                
+                logger.info(f"ðŸ“‹ File content length: {len(cleaned_file_text)} chars")
+                
+                # For family searches, also extract family members
+                if matched_search['search_type'] == 'family':
+                    family_members = extract_family_members(cleaned_file_text)
+                    if family_members:
+                        logger.info(f"ðŸ‘¨â€ðŸ‘©â€ðŸ‘§ Extracted family members")
+                        cleaned_file_text = family_members
+                
+                if cleaned_file_text:
+                    if not matched_search['future'].done():
+                        logger.info(f"âœ… Delivering cleaned file content")
+                        matched_search['future'].set_result(cleaned_file_text)
+                        logger.info(f"ðŸ“¨ File result delivered for search {matched_key}")
+                        pending_searches.pop(matched_key, None)
+                        return
+                    else:
+                        logger.warning(f"âš ï¸ Future already done, force delivering anyway")
+                        try:
+                            matched_search['future'].set_result(cleaned_file_text)
+                            logger.info(f"ðŸ“¨ File result force-delivered for search {matched_key}")
+                        except Exception as e:
+                            logger.warning(f"Could not set result: {e}")
+                        pending_searches.pop(matched_key, None)
+                        return
+                else:
+                    logger.warning(f"âš ï¸ File content is empty after cleaning")
+                    return
+                    
+        except Exception as e:
+            logger.error(f"âŒ Error processing file: {e}", exc_info=True)
+            # Don't fall through - stop processing this message
+            return
+    
+    # PRIORITY 2: Handle text messages ONLY (no files)
+    if text and not has_file:
+        # Check for processing/spam messages - only for text-only messages
+        if is_processing_message(text):
+            logger.info(f"â³ Processing text message detected, ignoring and waiting for real result...")
+            return  # Don't process, just return and wait
+        
+        if is_no_info_message(text):
+            logger.info(f"ðŸš« No-info text message detected, ignoring and waiting for valid data...")
+            return  # Don't process, just return and wait
+        
+        try:
+            chat = await event.get_chat()
+            latest = await user_client.get_messages(chat, ids=message.id)
+            if latest:
+                final_text = latest.text or latest.raw_text
+                if final_text:
+                    text = final_text
+        except Exception as e:
+            logger.error(f"Error getting latest message: {e}")
+        
+        # Final check: skip if still processing/no-info
+        if is_processing_message(text):
+            logger.info(f"ðŸš« Final check: Still processing message, skipping")
+            return
+        
+        if is_no_info_message(text):
+            logger.info(f"ðŸš« Final check: Still no-info message, skipping")
+            return
+        
+        if not matched_search['future'].done():
+            # Clean the text before delivering
+            cleaned_text = filter_links_and_usernames(text)
+            logger.info(f"âœ… Delivering cleaned text result ({len(cleaned_text)} chars)")
+            matched_search['future'].set_result(cleaned_text)
+            logger.info(f"ðŸ“¨ Text result delivered for search {matched_key}")
+            pending_searches.pop(matched_key, None)
+        else:
+            logger.warning(f"âš ï¸ Future already done, force delivering anyway")
+            try:
+                matched_search['future'].set_result(text)
+                logger.info(f"ðŸ“¨ Text result force-delivered for search {matched_key}")
+            except Exception as e:
+                logger.warning(f"Could not set result: {e}")
+            pending_searches.pop(matched_key, None)
+# ============ Cleanup Task ============
 
-async def start_web_server():
-    """Start web server for health checks - FIXED VERSION"""
-    app = web.Application()
+async def cleanup_old_searches():
+    while True:
+        await asyncio.sleep(30)
+        now = time.time()
+        to_remove = []
+        
+        for search_id, info in list(pending_searches.items()):
+            age = now - info.get('timestamp', now)
+            
+            if age > REPLY_TIMEOUT:
+                if not info['future'].done():
+                    try:
+                        info['future'].set_exception(TimeoutError("Search expired - cleaned up"))
+                        logger.warning(f"âš ï¸ Force-cleaned expired search {search_id} (age: {age:.1f}s)")
+                    except Exception as e:
+                        logger.error(f"Error setting exception for {search_id}: {e}")
+                to_remove.append(search_id)
+        
+        for search_id in to_remove:
+            pending_searches.pop(search_id, None)
+        
+        if to_remove:
+            logger.info(f"ðŸ§¹ Cleanup: Removed {len(to_remove)} expired searches")
+        
+        if pending_searches:
+            logger.info(f"ðŸ“Š Active searches: {len(pending_searches)}")
+
+# ============ API Endpoints ============
+
+async def verify_api_key(request):
+    api_key = request.headers.get('X-API-Key')
     
-    async def health_check(request):
-        return web.Response(text="OK", status=200)
-    
-    # FIX: Add root endpoint
-    async def root_handler(request):
-        return web.Response(
-            text="🤖 Premium Info Bot - Running\n\nEndpoints:\n• /health - Health check\n• /stats - Bot statistics",
-            status=200,
-            content_type="text/plain"
+    if not api_key:
+        return web.json_response(
+            {"success": False, "error": "Missing API key"},
+            status=401
         )
     
+    key_info = await get_api_key_info(api_key)
     
-    async def bot_stats(request):
-    if not admin_panel:
-        return web.json_response({"error": "Bot not ready"}, status=503)
+    if not key_info:
+        return web.json_response(
+            {"success": False, "error": "Invalid API key"},
+            status=401
+        )
+    
+    if not key_info.get('active', True):
+        return web.json_response(
+            {"success": False, "error": "API key is inactive"},
+            status=401
+        )
+    
+    user_id = key_info['user_id']
+    user_doc = await get_user(user_id)
+    
+    if not user_doc:
+        return web.json_response(
+            {"success": False, "error": "User not found"},
+            status=404
+        )
+    
+    if user_doc.get('plan') != 'unlimited':
+        searches_remaining = user_doc.get('searches_remaining', 0)
+        if searches_remaining <= 0:
+            return web.json_response(
+                {
+                    "success": False, 
+                    "error": "API creator has no credits remaining. Please recharge your account.",
+                    "creator_credits": 0
+                },
+                status=403
+            )
+    
+    request['api_key_info'] = key_info
+    request['user_doc'] = user_doc
+    return None
 
-    stats = await admin_panel.get_bot_statistics()
+async def api_search_handler(request):
+    auth_error = await verify_api_key(request)
+    if auth_error:
+        return auth_error
+    
+    key_info = request['api_key_info']
+    user_doc = request['user_doc']
+    
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response(
+            {"success": False, "error": "Invalid JSON"},
+            status=400
+        )
+    
+    search_type = data.get('search_type')
+    query = data.get('query')
+    
+    if not search_type or not query:
+        return web.json_response(
+            {"success": False, "error": "Missing search_type or query"},
+            status=400
+        )
+    
+    if search_type not in SEARCH_COMMANDS:
+        return web.json_response(
+            {"success": False, "error": f"Invalid search_type. Valid types: {list(SEARCH_COMMANDS.keys())}"},
+            status=400
+        )
+    
+    user_id = key_info['user_id']
+    result = await perform_search(search_type, query, user_id)
+    
+    if result['success']:
+        await increment_api_key_usage(key_info['api_key'])
+        
+        if user_doc.get('plan') != 'unlimited':
+            await decrement_search(user_id)
+            updated_user = await get_user(user_id)
+            remaining_credits = updated_user.get('searches_remaining', 0)
+        else:
+            remaining_credits = -1
+        
+        return web.json_response({
+            "success": True,
+            "search_type": search_type,
+            "query": query,
+            "result": result['result'],
+            "source": result.get('source', 'primary'),
+            "creator_credits_remaining": remaining_credits
+        })
+    else:
+        return web.json_response(result, status=500)
+
+async def api_info_handler(request):
+    auth_error = await verify_api_key(request)
+    if auth_error:
+        return auth_error
+    
+    key_info = request['api_key_info']
+    user_doc = request['user_doc']
+    
+    if user_doc.get('plan') == 'unlimited':
+        credits_remaining = -1
+        plan_status = "Unlimited"
+    else:
+        credits_remaining = user_doc.get('searches_remaining', 0)
+        plan_status = user_doc.get('plan', 'free').upper()
+    
     return web.json_response({
-        "status": "running",
-        "users": stats.get('total_users', 0),
-        "searches_today": stats.get('today_searches', 0),
-        "uptime": int(time.time() - start_time)
+        "success": True,
+        "api_key_name": key_info['name'],
+        "created_at": key_info['created_at'],
+        "api_searches_used": key_info.get('searches_used', 0),
+        "last_used": key_info.get('last_used'),
+        "creator_plan": plan_status,
+        "creator_credits_remaining": credits_remaining,
+        "note": "API uses creator's account credits. Recharge your account to get more credits."
     })
-    # FIX: Add all routes
-    app.router.add_get("/", root_handler)  # Root endpoint
+
+async def api_types_handler(request):
+    return web.json_response({
+        "success": True,
+        "search_types": {
+            key: info['name'] 
+            for key, info in SEARCH_COMMANDS.items()
+        }
+    })
+
+async def health_check(request):
+    return web.Response(text="OK", status=200)
+
+# ============ Web Server ============
+
+async def start_web_server():
+    app = web.Application()
+    
     app.router.add_get("/health", health_check)
-    app.router.add_get("/stats", bot_stats)
+    app.router.add_post("/api/search", api_search_handler)
+    app.router.add_get("/api/info", api_info_handler)
+    app.router.add_get("/api/types", api_types_handler)
     
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", config.PORT)
-    
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    logger.info(f"ðŸŒ Web server started on port {PORT}")
+
+# ============ Main ============
+
+async def start_bot():
     try:
-        await site.start()
-        logger.info(f"🌐 Web server started on port {config.PORT}")
-    except Exception as e:
-        logger.error(f"❌ Failed to start web server: {e}")
-
-# ================== MESSAGE HANDLER ==================
-
-class MessageHandler:
-    def __init__(self, search_engine: SearchEngine):
-        self.search_engine = search_engine
-    
-    async def handle_group_message(self, event):
-        """Handle messages from groups (replies to our searches)"""
-        message = event.message
-        
-        if not message.reply_to:
-            return
-        
-        text = message.text or message.raw_text
-        has_file = message.file is not None
-        
-        if not text and not has_file:
-            return
-        
-        # Find matching pending search
-        matched_search = None
-        matched_key = None
-        
-        for search_id, search_info in list(self.search_engine.pending_searches.items()):
-            if search_info['future'].done():
-                continue
-            
-            # Check if this is a reply to our message
-            if message.reply_to.reply_to_msg_id == search_info.get('message_id'):
-                matched_search = search_info
-                matched_key = search_id
-                break
-        
-        if not matched_search:
-            return
-        
-        await asyncio.sleep(config.FETCH_WAIT_TIME)
-        
-        # Handle file responses
-        if has_file:
-            await self._handle_file_response(message, matched_search, matched_key)
-            return
-        
-        # Handle text responses
-        if text:
-            await self._handle_text_response(text, matched_search, matched_key)
-    
-    async def _handle_file_response(self, message, matched_search, matched_key):
-        """Handle file responses (.txt, .json)"""
-        try:
-            file_name = (message.file.name or "").lower()
-            mime_type = (message.file.mime_type or "").lower()
-            
-            # Check if it's a text file we can process
-            is_processable = (
-                file_name.endswith(('.txt', '.json')) or 
-                mime_type.startswith('text/') or 
-                'json' in mime_type
-            )
-            
-            if not is_processable:
-                logger.info("📁 Non-text file received, ignoring")
-                return
-            
-            # Check file size
-            if message.file.size > config.MAX_FILE_SIZE_MB * 1024 * 1024:
-                logger.warning(f"📁 File too large: {message.file.size} bytes")
-                return
-            
-            logger.info(f"📥 Downloading file: {file_name}")
-            
-            # Download and process file
-            file_bytes = await message.download_media(bytes)
-            
-            # Try different encodings
-            content = None
-            for encoding in ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252']:
-                try:
-                    content = file_bytes.decode(encoding)
-                    break
-                except UnicodeDecodeError:
-                    continue
-            
-            if not content:
-                logger.error("❌ Could not decode file content")
-                return
-            
-            # Process JSON files
-            if file_name.endswith('.json') or 'json' in mime_type:
-                try:
-                    parsed = json.loads(content)
-                    content = json.dumps(parsed, indent=2, ensure_ascii=False)
-                except json.JSONDecodeError:
-                    logger.warning("⚠️ Invalid JSON, treating as text")
-            
-            # Clean content
-            cleaned_content = TextProcessor.clean_result_text(content)
-            
-            # Validate content
-            if cleaned_content and len(cleaned_content.strip()) > 15:
-                if not matched_search['future'].done():
-                    logger.info("✅ Delivering file content")
-                    matched_search['future'].set_result(cleaned_content)
-                    self.search_engine.pending_searches.pop(matched_key, None)
-            else:
-                logger.warning("⚠️ File content too short or empty after cleaning")
-                
-        except Exception as e:
-            logger.error(f"❌ Error processing file: {e}")
-    
-    async def _handle_text_response(self, text, matched_search, matched_key):
-        """Handle text responses"""
-        # Skip processing messages
-        if TextProcessor.is_processing_message(text):
-            logger.info("⏳ Processing message detected, waiting...")
-            return
-        
-        # Skip no-info messages  
-        if TextProcessor.is_no_info_message(text):
-            logger.info("🚫 No-info message detected")
-            if not matched_search['future'].done():
-                try:
-                    matched_search['future'].set_exception(TimeoutError("No info"))
-                except Exception:
-                    pass
-            self.search_engine.pending_searches.pop(matched_key, None)
-            return
-        
-        # Process valid text
-        if len(text.strip()) >= 15:  # Minimum content length
-            cleaned_text = TextProcessor.clean_result_text(text)
-            
-            if cleaned_text and not matched_search['future'].done():
-                logger.info("✅ Delivering text result")
-                matched_search['future'].set_result(cleaned_text)
-                self.search_engine.pending_searches.pop(matched_key, None)
-
-# ================== CLEANUP TASKS ==================
-
-async def cleanup_expired_searches():
-    """Clean up expired pending searches"""
-    while True:
-        try:
-            await asyncio.sleep(60)  # Check every minute
-            
-            current_time = time.time()
-            expired_searches = []
-            
-            for search_id, search_info in list(search_engine.pending_searches.items()):
-                # Check if search is older than max timeout
-                if current_time - search_info.get('timestamp', current_time) > 300:  # 5 minutes
-                    expired_searches.append(search_id)
-            
-            for search_id in expired_searches:
-                search_info = search_engine.pending_searches.pop(search_id, None)
-                if search_info and not search_info['future'].done():
-                    try:
-                        search_info['future'].set_exception(TimeoutError("Search expired"))
-                    except Exception:
-                        pass
-            
-            if expired_searches:
-                logger.info(f"🧹 Cleaned up {len(expired_searches)} expired searches")
-                
-        except Exception as e:
-            logger.error(f"Error in cleanup task: {e}")
-
-async def cleanup_user_states():
-    """Clean up expired user states"""
-    while True:
-        try:
-            await asyncio.sleep(300)  # Check every 5 minutes
-            
-            # Remove user states older than 30 minutes
-            current_time = time.time()
-            expired_states = []
-            
-            for user_id, state in list(user_states.items()):
-                state_time = state.get('timestamp', current_time)
-                if current_time - state_time > 1800:  # 30 minutes
-                    expired_states.append(user_id)
-            
-            for user_id in expired_states:
-                user_states.pop(user_id, None)
-            
-            if expired_states:
-                logger.info(f"🧹 Cleaned up {len(expired_states)} expired user states")
-                
-        except Exception as e:
-            logger.error(f"Error cleaning user states: {e}")
-
-# ================== INITIALIZATION ==================
-
-start_time = time.time()
-
-async def initialize_clients():
-    """Initialize Telegram clients"""
-    global user_manager, search_engine, payment_manager, admin_panel, message_handler
-    
-    try:
-        # Start bot client
-        logger.info("🤖 Starting bot client...")
-        await bot_client.start(bot_token=config.BOT_TOKEN)
+        logger.info("ðŸ¤– Starting Telegram bot...")
+        await bot_client.start(bot_token=BOT_TOKEN)
+        logger.info("âœ… Bot started successfully")
         
         me = await bot_client.get_me()
-        logger.info(f"✅ Bot started: @{me.username}")
+        logger.info(f"Bot username: @{me.username}")
         
-        # Start user client if configured
         if USE_USER_ACCOUNT:
-            logger.info("👤 Starting user client...")
+            logger.info("ðŸ‘¤ Starting user account client...")
             if not user_client.is_connected():
                 await user_client.connect()
             
             if not await user_client.is_user_authorized():
-                raise RuntimeError("❌ User account not authorized")
+                raise RuntimeError("âŒ User session not authorized")
             
-            logger.info("✅ User client started")
+            logger.info("âœ… User account session loaded")
+
+        logger.info("ðŸ“¡ Resolving destination groups...")
         
-        # Connect to database
-        logger.info("💾 Connecting to database...")
-        if not await db_manager.connect():
-            raise RuntimeError("❌ Database connection failed")
-        
-        # Initialize managers
-        user_manager = UserManager(db_manager)
-        search_engine = SearchEngine(db_manager, user_manager)
-        payment_manager = PaymentManager(db_manager)
-        admin_panel = AdminPanel(db_manager, user_manager)
-        message_handler = MessageHandler(search_engine)
-        
-        # Resolve group entities
-        logger.info("📡 Resolving destination groups...")
-        for group in DESTINATION_GROUPS:
+        for idx, group in enumerate(DESTINATION_GROUPS):
             try:
                 group['entity'] = await user_client.get_entity(group['identifier'])
-                logger.info(f"✅ Resolved {group['name']}")
+                logger.info(f"âœ… Group {idx} ({group['name']}): {group['identifier']}")
             except Exception as e:
-                logger.warning(f"⚠️ Could not resolve {group['name']}: {e}")
+                logger.warning(f"âŒ Could not resolve group {idx}: {e}")
         
-        # Resolve special bot entities
-        for key, bot in SPECIAL_BOTS.items():
-            try:
-                bot['entity'] = await user_client.get_entity(bot['identifier'])
-                logger.info(f"✅ Resolved {bot['name']}")
-            except Exception as e:
-                logger.warning(f"⚠️ Could not resolve {key} bot: {e}")
+        try:
+            VEHICLE_GROUP['entity'] = await user_client.get_entity(VEHICLE_GROUP['identifier'])
+            logger.info(f"âœ… Vehicle Group: {VEHICLE_GROUP['identifier']}")
+        except Exception as e:
+            logger.warning(f"âŒ Could not resolve vehicle group: {e}")
         
-        logger.info("✅ All managers initialized")
-        return True
+        try:
+            FAMILY_GROUP['entity'] = await user_client.get_entity(FAMILY_GROUP['identifier'])
+            logger.info(f"âœ… Family Group: {FAMILY_GROUP['identifier']}")
+        except Exception as e:
+            logger.warning(f"âŒ Could not resolve family group: {e}")
         
-    except Exception as e:
-        logger.error(f"❌ Initialization failed: {e}")
-        return False
+        try:
+            TELEGRAM_BOT['entity'] = await user_client.get_entity(TELEGRAM_BOT['identifier'])
+            logger.info(f"âœ… Telegram Bot: {TELEGRAM_BOT['identifier']}")
+        except Exception as e:
+            logger.warning(f"âŒ Could not resolve telegram bot: {e}")
+        
+        try:
+            TELEGRAM_USERNAME_GROUP['entity'] = await user_client.get_entity(TELEGRAM_USERNAME_GROUP['identifier'])
+            logger.info(f"âœ… Telegram Username Group: {TELEGRAM_USERNAME_GROUP['identifier']}")
+        except Exception as e:
+            logger.warning(f"âŒ Could not resolve telegram username group: {e}")
+        
+        try:
+            MOVIE_BOT['entity'] = await user_client.get_entity(MOVIE_BOT['identifier'])
+            logger.info(f"âœ… Movie Bot: {MOVIE_BOT['identifier']}")
+        except Exception as e:
+            logger.warning(f"âŒ Could not resolve movie bot: {e}")
 
-# ================== GROUP MESSAGE HANDLER ==================
-
-@user_client.on(events.NewMessage())
-async def handle_all_messages(event):
-    """Handle all messages for search responses"""
-    await message_handler.handle_group_message(event)
-
-# ================== MAIN FUNCTION ==================
-
-async def main():
-    """Main bot execution function"""
-    try:
-        logger.info("🚀 Starting Advanced Premium Info Bot...")
-        logger.info(f"📊 Config: {len(SEARCH_COMMANDS)} search types, {len(PLANS)} plans")
+        init_mongo()
         
-        # Initialize everything
-        if not await initialize_clients():
-            logger.error("❌ Failed to initialize. Exiting...")
-            return
-        
-        # Start background tasks
-        logger.info("🔧 Starting background tasks...")
-        asyncio.create_task(cleanup_expired_searches())
-        asyncio.create_task(cleanup_user_states())
+        asyncio.create_task(cleanup_old_searches())
         asyncio.create_task(start_web_server())
-        
-        # Log successful startup
-        stats = await admin_panel.get_bot_statistics()
-        logger.info("=" * 60)
-        logger.info("🎉 BOT SUCCESSFULLY STARTED!")
-        logger.info(f"👥 Total Users: {stats.get('total_users', 0)}")
-        logger.info(f"💎 Premium Users: {stats.get('premium_users', 0)}")
-        logger.info(f"🔍 Total Searches: {stats.get('total_searches', 0)}")
-        logger.info(f"💰 Total Revenue: ₹{stats.get('total_revenue', 0)}")
-        logger.info("=" * 60)
-        
-        # Notify admin of startup
-        try:
-            await bot_client.send_message(
-                config.ADMIN_USER_ID,
-                f"🚀 **Bot Started Successfully!**\n\n"
-                f"📊 **Current Stats:**\n"
-                f"• Users: {stats.get('total_users', 0)}\n"
-                f"• Premium: {stats.get('premium_users', 0)}\n"
-                f"• Revenue: ₹{stats.get('total_revenue', 0)}\n\n"
-                f"✅ All systems operational!",
-                parse_mode="md"
-            )
-        except Exception as e:
-            logger.warning(f"Could not notify admin: {e}")
-        
-        # Keep running
-        logger.info("🔄 Bot is running... Press Ctrl+C to stop")
-        await asyncio.Event().wait()
-        
-    except KeyboardInterrupt:
-        logger.info("🛑 Bot stopped by user")
-    except Exception as e:
-        logger.exception(f"❌ Fatal error: {e}")
-    finally:
-        # Cleanup
-        try:
-            logger.info("🧹 Cleaning up...")
-            if bot_client.is_connected():
-                await bot_client.disconnect()
-            if USE_USER_ACCOUNT and user_client.is_connected():
-                await user_client.disconnect()
-            if db_manager.client:
-                db_manager.client.close()
-            logger.info("✅ Cleanup completed")
-        except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
 
-# ================== ENTRY POINT ==================
+        logger.info("ðŸš€ Bot is fully operational")
+        logger.info(f"â±ï¸ Group timeout: {GROUP_TIMEOUT}s per group")
+        logger.info(f"â³ Processing wait: {PROCESSING_WAIT_EXTRA}s")
+        logger.info(f"ðŸ’° New users get {NEW_USER_CREDITS} free credits")
+        logger.info(f"ðŸ” Smart detection: Processing & No-info messages")
+        logger.info(f"ðŸ”„ Cascading fallback: Groups â†’ API")
+        logger.info(f"ðŸ“„ TXT file support: All search types")
+        logger.info(f"ðŸŽ¯ Interactive buttons: Telegram & Movie bots")
+
+        await asyncio.Event().wait()
+
+    except Exception as e:
+        logger.exception("âŒ Fatal error: %s", e)
+        raise
 
 if __name__ == "__main__":
     try:
-        # Set event loop policy for better performance on Windows
-        if sys.platform == "win32":
-            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-        
-        # Run the bot
-        asyncio.run(main())
-    except Exception as e:
-        logger.exception(f"Failed to start bot: {e}")
+        asyncio.run(start_bot())
+    except KeyboardInterrupt:
+        logger.info("ðŸ›‘ Bot stopped by user")
