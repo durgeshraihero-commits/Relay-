@@ -151,9 +151,9 @@ GROUP_PRIORITIES = {
         "entity": None
     },
     "advanced": {
-        "name": "🚀 Advanced Search Engine",
-        "identifier": "IntelXGroup",  # Replace with your advanced group ID
-        "timeout": 35,
+        "name": "🚀 Advanced OSINT Engine",
+        "identifier": -1001234567890,  # Replace with your advanced group ID
+        "timeout": 5,
         "weight": 15,
         "enabled": True,
         "entity": None,
@@ -172,40 +172,34 @@ DESTINATION_GROUPS = sorted(
 
 SUBSCRIPTION_PLANS = {
     "basic": {
-        "name": "🔰 Basic Plan",
-        "price": 100,
+        "name": "💰 BASIC TIER",
+        "price": 99,
         "searches": 10,
         "validity": "7 days",
-        "features": ["5 premium searches", "Standard data sources", "7-day access"],
-        "icon": "🔰",
-        "color": "#27AE60"
+        "features": ["10 Premium Searches", "Standard Databases", "7-day Access", "Email Support"],
+        "icon": "💰",
+        "color": "#27AE60",
+        "for": "New users trying the service"
     },
     "standard": {
-        "name": "⭐ Standard Plan",
-        "price": 250,
+        "name": "🚀 STANDARD TIER",
+        "price": 249,
         "searches": 30,
-        "validity": "7 days",
-        "features": ["10 premium searches", "Extended data sources", "Priority processing"],
-        "icon": "⭐",
-        "color": "#F39C12"
+        "validity": "15 days",
+        "features": ["30 Premium Searches", "All Databases", "15-day Access", "Priority Support", "Search History Saved"],
+        "icon": "🚀",
+        "color": "#F39C12",
+        "for": "Regular users needing more searches"
     },
     "premium": {
-        "name": "👑 Premium Plan",
-        "price": 400,
-        "searches": "∞",
-        "validity": "7 days",
-        "features": ["Unlimited searches", "All data sources", "Priority processing", "24/7 support"],
-        "icon": "👑",
-        "color": "#9B59B6"
-    },
-    "enterprise": {
-        "name": "🚀 Enterprise Plan",
-        "price": 600,
-        "searches": "∞",
+        "name": "👑 PREMIUM TIER",
+        "price": 499,
+        "searches": "Unlimited",
         "validity": "30 days",
-        "features": ["Unlimited searches", "All premium sources", "Highest priority", "Dedicated support", "API access"],
-        "icon": "🚀",
-        "color": "#E74C3C"
+        "features": ["Unlimited Searches (30 days)", "All Premium Databases", "Priority Processing", "24/7 WhatsApp Support", "Extended Search History"],
+        "icon": "👑",
+        "color": "#9B59B6",
+        "for": "Power users & professionals"
     }
 }
 
@@ -357,8 +351,8 @@ SEARCH_COMMANDS = {
         "category": "finance"
     },
     "leak": {
-        "name": "🚀 Search Anything",
-        "description": "🔮 **ADVANCED UNIVERSAL SEARCH**\n\n🔸 **Most Powerful Tool** - Finds ANY information\n🔸 **Input:** Email • Phone (with country code) • Name • Document • Username • Any query\n🔸 **Format:** Phone must include country code (e.g., 917204764637)\n🔸 **Returns:** Comprehensive results in JSON + TXT format\n🔸 **Speed:** Ultra-fast 5-second response\n🔸 **Sources:** Deep web • Breach databases • Global intelligence\n🔸 **Cost:** 3 credits per search",
+        "name": "🚀 ADVANCED OSINT TOOL",
+        "description": "🔮 **SEARCH ANYTHING - MOST POWERFUL TOOL**\n\n🔸 **Universal Search:** Email • Phone (with country code) • Name • Document • Username • Any query\n🔸 **Format:** Phone must include country code (e.g., 917204764637)\n🔸 **Returns:** Comprehensive results in JSON + TXT format\n🔸 **Speed:** Ultra-fast 5-second response\n🔸 **Sources:** Deep web • Breach databases • Global intelligence\n🔸 **Cost:** 3 credits per search",
         "commands": ["/leak"],
         "example": "917204764637 or email@domain.com or John Doe",
         "validation": r"^.+$",  # Accepts any input
@@ -530,7 +524,7 @@ class TextProcessor:
         if not content:
             return ""
         
-        # Remove promotional content
+        # Remove promotional content and personal information
         patterns = [
             r'https?://\S+',
             r'www\.\S+',
@@ -553,7 +547,13 @@ class TextProcessor:
             r'report_.*\.txt',
             r'download.*file',
             r'click.*download',
-            r'designed & powered.*'
+            r'designed & powered.*',
+            r'join.*@\w+',
+            r'channel.*@\w+',
+            r'username.*:.*@\w+',
+            r'telegram.*:.*@\w+',
+            r'@\w+.*bot',
+            r'bot.*@\w+'
         ]
         
         for pattern in patterns:
@@ -564,6 +564,29 @@ class TextProcessor:
         content = re.sub(r' {2,}', ' ', content)
         
         return content.strip()
+    
+    @staticmethod
+    def split_long_text(text: str, max_length: int = 4000) -> List[str]:
+        """Split long text into chunks"""
+        if len(text) <= max_length:
+            return [text]
+        
+        chunks = []
+        while len(text) > max_length:
+            # Try to split at paragraph
+            split_pos = text.rfind('\n\n', 0, max_length)
+            if split_pos == -1:
+                split_pos = text.rfind('\n', 0, max_length)
+            if split_pos == -1:
+                split_pos = max_length
+            
+            chunks.append(text[:split_pos])
+            text = text[split_pos:].lstrip()
+        
+        if text:
+            chunks.append(text)
+        
+        return chunks
 
 # ================== ADMIN DATABASE MANAGER ==================
 
@@ -1147,14 +1170,18 @@ class OneLineKeyboard:
             "phone", "family", "aadhar", "vehicle", 
             "upi", "email", "telegram", "imei",
             "gst", "insta", "pak", "ip", "ifsc",
-            "leak"  # Advanced search
+            "leak"  # Advanced OSINT tool - placed at the end for emphasis
         ]
         
         for cmd_key in commands_in_order:
             if cmd_key in SEARCH_COMMANDS:
                 cmd = SEARCH_COMMANDS[cmd_key]
-                # Each command gets its own line
-                buttons.append([Button.inline(f"{cmd['icon']} {cmd['name'].split()[1]}", f"search_{cmd_key}")])
+                # Special emphasis for leak command
+                if cmd_key == "leak":
+                    button_text = f"🚀 ADVANCED OSINT TOOL"
+                else:
+                    button_text = f"{cmd['icon']} {cmd['name'].split()[1]}"
+                buttons.append([Button.inline(button_text, f"search_{cmd_key}")])
         
         # Add action buttons in their own lines
         buttons.append([Button.inline("👤 Profile", "profile")])
@@ -1172,10 +1199,9 @@ class OneLineKeyboard:
     def subscription_plans() -> List[List[Button]]:
         """Premium plan selection"""
         buttons = [
-            [Button.inline("🔰 Basic Plan - ₹100", "plan_basic")],
-            [Button.inline("⭐ Standard Plan - ₹250", "plan_standard")],
-            [Button.inline("👑 Premium Plan - ₹400", "plan_premium")],
-            [Button.inline("🚀 Enterprise Plan - ₹600", "plan_enterprise")],
+            [Button.inline("💰 Basic Tier - ₹99", "plan_basic")],
+            [Button.inline("🚀 Standard Tier - ₹249", "plan_standard")],
+            [Button.inline("👑 Premium Tier - ₹499", "plan_premium")],
             [Button.inline("« Main Menu", "main_menu")]
         ]
         return buttons
@@ -2462,7 +2488,7 @@ class SearchEngine:
         await self._notify_admin(user_id, search_type, query)
         return {
             "success": False,
-            "error": f"🔍 **INTELLIGENCE GATHERING FAILED**\n\nQuery: `{query}`\n\n⚠️ **Premium Notice:** Your query has been escalated to our premium database.\nAdministrator will review and respond within 24 hours.\n\n💎 **For instant access, upgrade to:**\n• 👑 Premium Plan: Unlimited searches (7 days)\n• 🚀 Enterprise Plan: Unlimited searches (30 days)\n\nContact @darkboxesAdmin for immediate assistance."
+            "error": f"🔍 **INTELLIGENCE GATHERING FAILED**\n\nQuery: `{query}`\n\n⚠️ **Premium Notice:** Your query has been escalated to our premium database.\nAdministrator will review and respond within 24 hours.\n\n💎 **For instant access, upgrade to:**\n• 👑 Premium Tier: Unlimited searches (30 days)\n• 🚀 Standard Tier: 30 searches (15 days)\n\nContact @darkboxesAdmin for immediate assistance."
         }
     
     async def perform_leak_search(self, query: str, user_id: int) -> Dict:
@@ -2716,7 +2742,7 @@ class SearchEngine:
                     # Combine results
                     combined_result = {
                         "success": True,
-                        "result": "🚀 **ADVANCED SEARCH COMPLETE**\n\n",
+                        "result": "🚀 **ADVANCED OSINT SEARCH COMPLETE**\n\n",
                         "files": search_info["files_received"],
                         "has_multiple_files": True
                     }
@@ -2735,7 +2761,7 @@ class SearchEngine:
                     summary = f"🔮 **ADVANCED UNIVERSAL SEARCH RESULT**\n"
                     summary += f"═══════════════════════════════════\n\n"
                     summary += f"🔍 **Query:** `{search_info['query']}`\n"
-                    summary += f"🚀 **Source:** {search_info['group']['name']}\n"
+                    summary += f"🚀 **Source:** Advanced OSINT Engine\n"
                     summary += f"⚡ **Speed:** Ultra-fast processing\n"
                     summary += f"📊 **Files Received:** {len(search_info['files_received'])}\n\n"
                     
@@ -2823,6 +2849,7 @@ class SearchEngine:
                 logger.error("❌ Could not decode file with any encoding")
                 return {"success": False}
             
+            # Clean content - remove usernames and links
             cleaned_content = TextProcessor.clean_content(content, search_info["search_type"])
             
             if len(cleaned_content.strip()) < 30:
@@ -2832,11 +2859,11 @@ class SearchEngine:
                 for line in lines:
                     line = line.strip()
                     if len(line) > 10:
-                        if not any(word in line.lower() for word in ['powered', 'developed', 'created', 'join', 'subscribe', 'channel', 'admin', '@']):
+                        if not any(word in line.lower() for word in ['powered', 'developed', 'created', 'join', 'subscribe', 'channel', 'admin', '@', 't.me', 'http']):
                             meaningful_lines.append(line)
                 
                 if meaningful_lines:
-                    cleaned_content = '\n'.join(meaningful_lines)
+                    cleaned_content = '\n'.join(meaning_lines)
                     cleaned_content = TextProcessor.clean_content(cleaned_content, search_info["search_type"])
                 else:
                     return {"success": False}
@@ -3075,25 +3102,23 @@ async def search_callback(event):
                 "🔒 **ACCESS DENIED**\n\n"
                 "You have no search credits remaining.\n\n"
                 "💎 **UPGRADE TO PREMIUM**\n\n"
-                "🔰 **Basic Plan** - ₹100\n"
-                "├─ 5 Premium Searches\n"
-                "├─ Standard Databases\n"
-                "└─ 7-day Access\n\n"
-                "⭐ **Standard Plan** - ₹200\n"
+                "💰 **BASIC TIER** - ₹99\n"
                 "├─ 10 Premium Searches\n"
-                "├─ Extended Databases\n"
-                "└─ Priority Processing\n\n"
-                "👑 **Premium Plan** - ₹500\n"
-                "├─ Unlimited Searches\n"
+                "├─ Standard Databases\n"
+                "├─ 7-day Access\n"
+                "└─ Email Support\n\n"
+                "🚀 **STANDARD TIER** - ₹249\n"
+                "├─ 30 Premium Searches\n"
                 "├─ All Databases\n"
+                "├─ 15-day Access\n"
+                "├─ Priority Support\n"
+                "└─ Search History Saved\n\n"
+                "👑 **PREMIUM TIER** - ₹499\n"
+                "├─ Unlimited Searches (30 days)\n"
+                "├─ All Premium Databases\n"
                 "├─ Priority Processing\n"
-                "└─ 24/7 Support\n\n"
-                "🚀 **Enterprise Plan** - ₹800\n"
-                "├─ Unlimited Searches\n"
-                "├─ Premium Sources\n"
-                "├─ Highest Priority\n"
-                "├─ Dedicated Support\n"
-                "└─ 30-day Access\n\n"
+                "├─ 24/7 WhatsApp Support\n"
+                "└─ Extended Search History\n\n"
                 "Select a plan to continue:",
                 buttons=OneLineKeyboard.subscription_plans(),
                 parse_mode="md"
@@ -3105,7 +3130,7 @@ async def search_callback(event):
         # Special formatting for leak search
         if search_type == "leak":
             leak_text = (
-                f"🚀 **{cmd['name']}**\n\n"
+                f"🚀 **ADVANCED OSINT TOOL - SEARCH ANYTHING**\n\n"
                 f"{cmd['description']}\n\n"
                 f"⚡ **ULTRA-FAST PROCESSING** (5 seconds)\n"
                 f"💎 **Cost:** {cmd['cost']} credits\n"
@@ -3209,31 +3234,26 @@ async def premium_callback(event):
         premium_text = (
             "💎 **DARKBOXES PREMIUM PLANS**\n"
             "═══════════════════════\n\n"
-            "🔰 **BASIC PLAN** - ₹100\n"
-            "├─ 5 Premium Searches\n"
+            "💰 **BASIC TIER** - ₹99\n"
+            "├─ 10 Premium Searches\n"
             "├─ Standard Databases\n"
             "├─ 7-day Access\n"
-            "└─ Basic Support\n\n"
-            "⭐ **STANDARD PLAN** - ₹250\n"
-            "├─ 10 Premium Searches\n"
-            "├─ Extended Databases\n"
+            "├─ Email Support\n"
+            "└─ 🎯 For: New users trying the service\n\n"
+            "🚀 **STANDARD TIER** - ₹249\n"
+            "├─ 30 Premium Searches\n"
+            "├─ All Databases\n"
+            "├─ 15-day Access\n"
+            "├─ Priority Support\n"
+            "├─ Search History Saved\n"
+            "└─ 🎯 For: Regular users needing more searches\n\n"
+            "👑 **PREMIUM TIER** - ₹499\n"
+            "├─ Unlimited Searches (30 days)\n"
+            "├─ All Premium Databases\n"
             "├─ Priority Processing\n"
-            "├─ 7-day Access\n"
-            "└─ Email Support\n\n"
-            "👑 **PREMIUM PLAN** - ₹400\n"
-            "├─ Unlimited Searches\n"
-            "├─ All Data Sources\n"
-            "├─ Highest Priority\n"
-            "├─ 24/7 Support\n"
-            "├─ 7-day Access\n"
-            "└─ Advanced Features\n\n"
-            "🚀 **ENTERPRISE PLAN** - ₹600\n"
-            "├─ Unlimited Searches\n"
-            "├─ Premium Sources\n"
-            "├─ Real-time Updates\n"
-            "├─ Dedicated Support\n"
-            "├─ 30-day Access\n"
-            "└─ API Access (Coming Soon)\n\n"
+            "├─ 24/7 WhatsApp Support\n"
+            "├─ Extended Search History\n"
+            "└─ 🎯 For: Power users & professionals\n\n"
             "📞 **Contact @darkboxesAdmin to purchase**\n"
             "💳 **UPI ID:** `{config.UPI_ID}`\n\n"
             "🔒 **Payment Instructions:**\n"
@@ -3276,7 +3296,9 @@ async def plan_selection_callback(event):
         for feature in plan['features']:
             plan_details += f"• {feature}\n"
         
-        plan_details += f"\n📞 **To Purchase:**\n"
+        plan_details += f"\n🎯 **Perfect For:** {plan['for']}\n\n"
+        
+        plan_details += f"📞 **To Purchase:**\n"
         plan_details += f"1. Send ₹{plan['price']} to UPI: `{config.UPI_ID}`\n"
         plan_details += f"2. Send payment screenshot to @darkboxesAdmin\n"
         plan_details += f"3. Include your User ID: `{event.sender_id}`\n"
@@ -3475,6 +3497,7 @@ async def share_referral_callback(event):
             f"• Aadhar Information\n"
             f"• Vehicle Details\n"
             f"• Telegram Analysis\n"
+            f"• ADVANCED OSINT TOOL (Search Anything)\n"
             f"• And much more!\n\n"
             f"💎 **Get {config.NEW_USER_CREDITS} FREE Credits**\n"
             f"🔗 Sign up now: {referral_link}\n\n"
@@ -3596,7 +3619,7 @@ async def handle_search_query(event, state):
         # Special handling for leak search
         if search_type == "leak":
             leak_warning = (
-                "🚀 **ADVANCED SEARCH INITIATED**\n\n"
+                "🚀 **ADVANCED OSINT SEARCH INITIATED**\n\n"
                 f"🔍 **Query:** `{query}`\n"
                 f"⚡ **Processing:** Ultra-fast (5 seconds)\n"
                 f"📁 **Output:** JSON + TXT files\n"
@@ -3624,9 +3647,9 @@ async def handle_search_query(event, state):
             await event.respond(
                 "🔒 **INSUFFICIENT CREDITS**\n\n"
                 "Upgrade to Premium for unlimited access:\n\n"
-                "💎 **Premium Plan** - ₹500\n"
-                "• Unlimited searches (7 days)\n"
-                "• All databases\n"
+                "👑 **Premium Tier** - ₹499\n"
+                "• Unlimited searches (30 days)\n"
+                "• All premium databases\n"
                 "• Priority processing\n\n"
                 "Contact @darkboxesAdmin for assistance.",
                 buttons=OneLineKeyboard.subscription_plans()
@@ -3649,21 +3672,34 @@ async def handle_search_query(event, state):
                 # Send summary first
                 await event.respond(result["result"], parse_mode="md")
                 
-                # Send each file
+                # Send JSON file
                 for file_data in result.get("files", []):
-                    if file_data.get("raw_bytes"):
-                        filename = file_data.get("filename", f"result_{int(time.time())}.txt")
-                        
-                        # Determine file extension
-                        if file_data.get("file_type") == "json":
-                            filename = f"result_{int(time.time())}.json"
-                        elif file_data.get("file_type") == "txt":
-                            filename = f"result_{int(time.time())}.txt"
-                        
+                    if file_data.get("raw_bytes") and file_data.get("file_type") == "json":
                         await event.respond(
                             file=file_data["raw_bytes"],
-                            caption=f"📁 **{file_data.get('file_type', 'RESULT').upper()} File**\nQuery: `{query}`"
+                            caption=f"📁 **JSON DATA**\nQuery: `{query}`"
                         )
+                
+                # Send TXT content as text (not file)
+                for file_data in result.get("files", []):
+                    if file_data.get("content") and file_data.get("file_type") == "txt":
+                        txt_content = file_data["content"]
+                        # Clean the text content
+                        txt_content = TextProcessor.clean_content(txt_content, "leak")
+                        
+                        # Split long text into chunks
+                        text_chunks = TextProcessor.split_long_text(txt_content)
+                        
+                        # Send first chunk as reply
+                        if text_chunks:
+                            await event.respond(
+                                f"📄 **TEXT REPORT**\nQuery: `{query}`\n\n{text_chunks[0]}",
+                                parse_mode="md"
+                            )
+                            
+                            # Send remaining chunks
+                            for chunk in text_chunks[1:]:
+                                await event.respond(chunk, parse_mode="md")
             else:
                 await event.respond(result["result"], parse_mode="md")
             
@@ -4206,9 +4242,9 @@ async def leak_command_handler(event):
             await event.respond(
                 "🔒 **INSUFFICIENT CREDITS**\n\n"
                 "You need 3 credits for advanced search.\n\n"
-                "💎 **Premium Plan** - ₹500\n"
-                "• Unlimited searches (7 days)\n"
-                "• All databases\n"
+                "👑 **Premium Tier** - ₹499\n"
+                "• Unlimited searches (30 days)\n"
+                "• All premium databases\n"
                 "• Priority processing\n\n"
                 "Contact @darkboxesAdmin for assistance.",
                 buttons=OneLineKeyboard.subscription_plans()
@@ -4217,7 +4253,7 @@ async def leak_command_handler(event):
         
         # Perform leak search
         leak_warning = (
-            "🚀 **ADVANCED SEARCH INITIATED**\n\n"
+            "🚀 **ADVANCED OSINT SEARCH INITIATED**\n\n"
             f"🔍 **Query:** `{query}`\n"
             f"⚡ **Processing:** Ultra-fast (5 seconds)\n"
             f"📁 **Output:** JSON + TXT files\n"
@@ -4240,21 +4276,34 @@ async def leak_command_handler(event):
                 # Send summary first
                 await event.respond(result["result"], parse_mode="md")
                 
-                # Send each file
+                # Send JSON file
                 for file_data in result.get("files", []):
-                    if file_data.get("raw_bytes"):
-                        filename = file_data.get("filename", f"result_{int(time.time())}.txt")
-                        
-                        # Determine file extension
-                        if file_data.get("file_type") == "json":
-                            filename = f"result_{int(time.time())}.json"
-                        elif file_data.get("file_type") == "txt":
-                            filename = f"result_{int(time.time())}.txt"
-                        
+                    if file_data.get("raw_bytes") and file_data.get("file_type") == "json":
                         await event.respond(
                             file=file_data["raw_bytes"],
-                            caption=f"📁 **{file_data.get('file_type', 'RESULT').upper()} File**\nQuery: `{query}`"
+                            caption=f"📁 **JSON DATA**\nQuery: `{query}`"
                         )
+                
+                # Send TXT content as text (not file)
+                for file_data in result.get("files", []):
+                    if file_data.get("content") and file_data.get("file_type") == "txt":
+                        txt_content = file_data["content"]
+                        # Clean the text content
+                        txt_content = TextProcessor.clean_content(txt_content, "leak")
+                        
+                        # Split long text into chunks
+                        text_chunks = TextProcessor.split_long_text(txt_content)
+                        
+                        # Send first chunk as reply
+                        if text_chunks:
+                            await event.respond(
+                                f"📄 **TEXT REPORT**\nQuery: `{query}`\n\n{text_chunks[0]}",
+                                parse_mode="md"
+                            )
+                            
+                            # Send remaining chunks
+                            for chunk in text_chunks[1:]:
+                                await event.respond(chunk, parse_mode="md")
             else:
                 await event.respond(result["result"], parse_mode="md")
             
