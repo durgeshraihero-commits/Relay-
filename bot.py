@@ -149,6 +149,15 @@ GROUP_PRIORITIES = {
         "weight": 5,
         "enabled": True,
         "entity": None
+    },
+    "advanced": {
+        "name": "🚀 Advanced Search Engine",
+        "identifier": -1001234567890,  # Replace with your advanced group ID
+        "timeout": 5,
+        "weight": 15,
+        "enabled": True,
+        "entity": None,
+        "leak_command": "/leak"
     }
 }
 
@@ -346,6 +355,18 @@ SEARCH_COMMANDS = {
         "priority": "secondary",
         "icon": "🏦",
         "category": "finance"
+    },
+    "leak": {
+        "name": "🚀 Search Anything",
+        "description": "🔮 **ADVANCED UNIVERSAL SEARCH**\n\n🔸 **Most Powerful Tool** - Finds ANY information\n🔸 **Input:** Email • Phone (with country code) • Name • Document • Username • Any query\n🔸 **Format:** Phone must include country code (e.g., 917204764637)\n🔸 **Returns:** Comprehensive results in JSON + TXT format\n🔸 **Speed:** Ultra-fast 5-second response\n🔸 **Sources:** Deep web • Breach databases • Global intelligence\n🔸 **Cost:** 3 credits per search",
+        "commands": ["/leak"],
+        "example": "917204764637 or email@domain.com or John Doe",
+        "validation": r"^.+$",  # Accepts any input
+        "cost": 3,
+        "priority": "advanced",
+        "icon": "🚀",
+        "category": "advanced",
+        "group": "advanced"
     }
 }
 
@@ -1125,7 +1146,8 @@ class OneLineKeyboard:
         commands_in_order = [
             "phone", "family", "aadhar", "vehicle", 
             "upi", "email", "telegram", "imei",
-            "gst", "insta", "pak", "ip", "ifsc"
+            "gst", "insta", "pak", "ip", "ifsc",
+            "leak"  # Advanced search
         ]
         
         for cmd_key in commands_in_order:
@@ -1144,6 +1166,18 @@ class OneLineKeyboard:
         if is_admin:
             buttons.append([Button.inline("⚙️ Admin Panel", "admin_panel")])
         
+        return buttons
+    
+    @staticmethod
+    def subscription_plans() -> List[List[Button]]:
+        """Premium plan selection"""
+        buttons = [
+            [Button.inline("🔰 Basic Plan - ₹100", "plan_basic")],
+            [Button.inline("⭐ Standard Plan - ₹250", "plan_standard")],
+            [Button.inline("👑 Premium Plan - ₹400", "plan_premium")],
+            [Button.inline("🚀 Enterprise Plan - ₹600", "plan_enterprise")],
+            [Button.inline("« Main Menu", "main_menu")]
+        ]
         return buttons
     
     @staticmethod
@@ -1236,6 +1270,37 @@ class OneLineKeyboard:
         return [
             [Button.inline(f"✅ Confirm {action}", f"confirm_{action}_{target_id}")],
             [Button.inline("❌ Cancel", "admin_panel")]
+        ]
+    
+    @staticmethod
+    def profile_menu() -> List[List[Button]]:
+        """Profile menu buttons"""
+        return [
+            [Button.inline("🔄 Refresh", "profile")],
+            [Button.inline("💳 Add Credits", "buy_credits")],
+            [Button.inline("💎 Upgrade Plan", "premium")],
+            [Button.inline("« Main Menu", "main_menu")]
+        ]
+    
+    @staticmethod
+    def support_menu() -> List[List[Button]]:
+        """Support menu buttons"""
+        return [
+            [Button.inline("📞 Contact Admin", "contact_admin")],
+            [Button.inline("❓ FAQ", "faq")],
+            [Button.inline("⚠️ Report Issue", "report_issue")],
+            [Button.inline("📖 Tutorial", "tutorial")],
+            [Button.inline("« Main Menu", "main_menu")]
+        ]
+    
+    @staticmethod
+    def referrals_menu() -> List[List[Button]]:
+        """Referrals menu buttons"""
+        return [
+            [Button.inline("📋 My Referrals", "my_referrals")],
+            [Button.inline("📊 Referral Stats", "referral_stats")],
+            [Button.inline("📢 Share Referral", "share_referral")],
+            [Button.inline("« Main Menu", "main_menu")]
         ]
 
 # ================== ADMIN PANEL HANDLER ==================
@@ -2325,6 +2390,10 @@ class SearchEngine:
         """Perform cascading search with priority management"""
         logger.info(f"🚀 Starting {search_type} search: {query} (User: {user_id})")
         
+        # Check for leak search
+        if search_type == "leak":
+            return await self.perform_leak_search(query, user_id)
+        
         # Get command priority
         cmd = SEARCH_COMMANDS.get(search_type, {})
         preferred_priority = cmd.get("priority", "primary")
@@ -2395,6 +2464,73 @@ class SearchEngine:
             "success": False,
             "error": f"🔍 **INTELLIGENCE GATHERING FAILED**\n\nQuery: `{query}`\n\n⚠️ **Premium Notice:** Your query has been escalated to our premium database.\nAdministrator will review and respond within 24 hours.\n\n💎 **For instant access, upgrade to:**\n• 👑 Premium Plan: Unlimited searches (7 days)\n• 🚀 Enterprise Plan: Unlimited searches (30 days)\n\nContact @darkboxesAdmin for immediate assistance."
         }
+    
+    async def perform_leak_search(self, query: str, user_id: int) -> Dict:
+        """Perform advanced leak search (Search Anything)"""
+        try:
+            logger.info(f"🚀 ADVANCED LEAK SEARCH: {query} (User: {user_id})")
+            
+            # Get the advanced group
+            advanced_group = GROUP_PRIORITIES["advanced"]
+            if not advanced_group.get("entity"):
+                logger.error("❌ Advanced group not resolved")
+                return {
+                    "success": False,
+                    "error": "❌ Advanced search engine is currently unavailable. Please try again later."
+                }
+            
+            # Send leak command
+            leak_command = advanced_group.get("leak_command", "/leak")
+            sent_msg = await user_client.send_message(advanced_group["entity"], f"{leak_command} {query}")
+            
+            # Create search tracking
+            search_id = f"{user_id}_{int(time.time())}_leak"
+            future = asyncio.get_running_loop().create_future()
+            
+            self.active_searches[search_id] = {
+                "user_id": user_id,
+                "future": future,
+                "start_time": time.time(),
+                "group": advanced_group,
+                "message_id": sent_msg.id,
+                "search_type": "leak",
+                "query": query,
+                "chat_id": advanced_group["entity"].id if hasattr(advanced_group["entity"], 'id') else str(advanced_group["entity"]),
+                "expecting_file": True,
+                "file_wait_start": None,
+                "priority": advanced_group["weight"],
+                "expect_multiple_files": True,
+                "files_received": [],
+                "file_types": ["json", "txt"]
+            }
+            
+            # Wait for response (5 seconds timeout for leak search)
+            try:
+                result = await asyncio.wait_for(future, timeout=5)
+                
+                if result["success"]:
+                    logger.info(f"✅ Advanced leak search successful")
+                    return result
+                else:
+                    logger.info(f"⚠️ No result from advanced search")
+                    return {
+                        "success": False,
+                        "error": "❌ No information found in our advanced databases.\n\n⚠️ **Note:** For phone searches, include country code (e.g., 917204764637)\n💎 **Try our premium sources for better results.**"
+                    }
+                    
+            except asyncio.TimeoutError:
+                logger.info(f"⏱️ Timeout from advanced search")
+                return {
+                    "success": False,
+                    "error": "⏱️ **ADVANCED SEARCH TIMEOUT**\n\nOur advanced engine is processing your query.\nResults will be delivered shortly if available.\n\n⚠️ **For immediate results:**\n• Use specific search types (Phone, Email, etc.)\n• Ensure phone numbers include country code\n• Contact @darkboxesAdmin for premium support"
+                }
+                
+        except Exception as e:
+            logger.error(f"❌ Error in leak search: {e}")
+            return {
+                "success": False,
+                "error": "❌ Advanced search engine error. Please try again or use specific search types."
+            }
     
     def _get_priority_groups(self, preferred_priority: str) -> List:
         """Get groups sorted by priority and performance"""
@@ -2482,6 +2618,10 @@ class SearchEngine:
             text = message.text or message.raw_text or ""
             logger.info(f"📨 Processing message in {search_info['group']['name']}: {text[:100]}...")
             
+            # Special handling for leak search
+            if search_info["search_type"] == "leak":
+                return await self._process_leak_response(search_id, search_info, message)
+            
             file_result = await self._check_and_process_file(message, search_info)
             if file_result is not None:
                 logger.info(f"✅ Processing file from message")
@@ -2540,6 +2680,120 @@ class SearchEngine:
         except Exception as e:
             logger.error(f"❌ Error processing search response: {e}")
     
+    async def _process_leak_response(self, search_id: str, search_info: Dict, message):
+        """Process leak search response"""
+        try:
+            file_result = await self._check_and_process_file(message, search_info)
+            
+            if file_result is not None:
+                logger.info(f"📁 Processing leak search file")
+                
+                # Add file to received files
+                if "files_received" not in search_info:
+                    search_info["files_received"] = []
+                
+                # Determine file type
+                filename = ""
+                if hasattr(message.file, 'name') and message.file.name:
+                    filename = message.file.name.lower()
+                
+                file_type = "unknown"
+                if '.json' in filename:
+                    file_type = "json"
+                elif '.txt' in filename:
+                    file_type = "txt"
+                
+                file_result["file_type"] = file_type
+                search_info["files_received"].append(file_result)
+                
+                # Check if we have both JSON and TXT files
+                received_types = [f["file_type"] for f in search_info["files_received"]]
+                
+                if all(ft in received_types for ft in ["json", "txt"]) or len(search_info["files_received"]) >= 2:
+                    # We have both files or enough files
+                    logger.info(f"✅ Received {len(search_info['files_received'])} files for leak search")
+                    
+                    # Combine results
+                    combined_result = {
+                        "success": True,
+                        "result": "🚀 **ADVANCED SEARCH COMPLETE**\n\n",
+                        "files": search_info["files_received"],
+                        "has_multiple_files": True
+                    }
+                    
+                    # Create summary
+                    json_data = None
+                    txt_data = None
+                    
+                    for file in search_info["files_received"]:
+                        if file["file_type"] == "json":
+                            json_data = file.get("content", "")
+                        elif file["file_type"] == "txt":
+                            txt_data = file.get("content", "")
+                    
+                    # Format result
+                    summary = f"🔮 **ADVANCED UNIVERSAL SEARCH RESULT**\n"
+                    summary += f"═══════════════════════════════════\n\n"
+                    summary += f"🔍 **Query:** `{search_info['query']}`\n"
+                    summary += f"🚀 **Source:** {search_info['group']['name']}\n"
+                    summary += f"⚡ **Speed:** Ultra-fast processing\n"
+                    summary += f"📊 **Files Received:** {len(search_info['files_received'])}\n\n"
+                    
+                    if txt_data:
+                        summary += f"📄 **TEXT REPORT SUMMARY**\n"
+                        summary += f"─────────────────────────────\n"
+                        # Extract first 500 chars from text
+                        txt_preview = txt_data[:500].replace('\n', '\n')
+                        summary += f"{txt_preview}\n"
+                        if len(txt_data) > 500:
+                            summary += f"... (truncated, full report in TXT file)\n\n"
+                    
+                    if json_data:
+                        try:
+                            json_obj = json.loads(json_data)
+                            summary += f"📊 **DATA FIELDS FOUND**\n"
+                            summary += f"─────────────────────────────\n"
+                            for key in json_obj.keys():
+                                summary += f"• {key}\n"
+                            summary += f"\n"
+                        except:
+                            summary += f"📊 **JSON Data Received** (View in file)\n\n"
+                    
+                    summary += f"📁 **Files available for download below**\n"
+                    summary += f"⚡ **Powered by DarkBoxes Advanced Intelligence**\n"
+                    
+                    combined_result["result"] = summary
+                    
+                    if search_id in self.active_searches:
+                        future = self.active_searches[search_id]["future"]
+                        if not future.done():
+                            future.set_result(combined_result)
+                        del self.active_searches[search_id]
+                
+                return
+            
+            # Check for text response
+            text = message.text or message.raw_text or ""
+            if text and len(text.strip()) > 20:
+                if TextProcessor.is_processing_message(text):
+                    logger.info(f"⏳ Processing message for leak search")
+                    return
+                
+                if TextProcessor.is_no_info_message(text):
+                    logger.info(f"🚫 No info for leak search")
+                    result = {"success": False}
+                else:
+                    result = await self._process_text(text, search_info)
+                
+                if search_id in self.active_searches:
+                    future = self.active_searches[search_id]["future"]
+                    if not future.done():
+                        future.set_result(result)
+                    del self.active_searches[search_id]
+                
+        except Exception as e:
+            logger.error(f"❌ Error processing leak response: {e}")
+    
     async def _process_file(self, message, search_info: Dict) -> Dict:
         """Process file message"""
         try:
@@ -2587,19 +2841,27 @@ class SearchEngine:
                 else:
                     return {"success": False}
             
-            formatted_result = PremiumFormatter.format_result(
-                cleaned_content,
-                search_info["search_type"],
-                search_info["query"],
-                search_info["group"]["name"]
-            )
+            result = {
+                "success": True,
+                "result": None,
+                "has_file": True,
+                "content": cleaned_content,
+                "raw_bytes": file_bytes,
+                "filename": message.file.name if hasattr(message.file, 'name') else f"result_{int(time.time())}.txt"
+            }
+            
+            # For non-leak searches, format the result
+            if search_info["search_type"] != "leak":
+                formatted_result = PremiumFormatter.format_result(
+                    cleaned_content,
+                    search_info["search_type"],
+                    search_info["query"],
+                    search_info["group"]["name"]
+                )
+                result["result"] = formatted_result
             
             logger.info(f"✅ Processed file with {len(cleaned_content)} characters")
-            return {
-                "success": True,
-                "result": formatted_result,
-                "has_file": True
-            }
+            return result
             
         except Exception as e:
             logger.error(f"❌ Error processing file: {e}")
@@ -2840,21 +3102,446 @@ async def search_callback(event):
         
         cmd = SEARCH_COMMANDS[search_type]
         
-        await event.edit(
-            f"{cmd['icon']} **{cmd['name']}**\n\n"
-            f"{cmd['description']}\n\n"
-            f"⚡ **Cost:** {cmd['cost']} credit{'s' if cmd['cost'] > 1 else ''}\n"
-            f"📝 **Example:** `{cmd['example']}`\n\n"
-            f"Enter your query below:",
-            buttons=OneLineKeyboard.cancel_button(),
-            parse_mode="md"
-        )
+        # Special formatting for leak search
+        if search_type == "leak":
+            leak_text = (
+                f"🚀 **{cmd['name']}**\n\n"
+                f"{cmd['description']}\n\n"
+                f"⚡ **ULTRA-FAST PROCESSING** (5 seconds)\n"
+                f"💎 **Cost:** {cmd['cost']} credits\n"
+                f"📁 **Returns:** JSON + TXT files\n"
+                f"🌐 **Best For:** Phone numbers with country code (e.g., 917204764637)\n\n"
+                f"📝 **Enter your query below:**\n"
+                f"(Email, Phone with country code, Name, Document, Username, etc.)"
+            )
+            
+            await event.edit(
+                leak_text,
+                buttons=OneLineKeyboard.cancel_button(),
+                parse_mode="md"
+            )
+        else:
+            await event.edit(
+                f"{cmd['icon']} **{cmd['name']}**\n\n"
+                f"{cmd['description']}\n\n"
+                f"⚡ **Cost:** {cmd['cost']} credit{'s' if cmd['cost'] > 1 else ''}\n"
+                f"📝 **Example:** `{cmd['example']}`\n\n"
+                f"Enter your query below:",
+                buttons=OneLineKeyboard.cancel_button(),
+                parse_mode="md"
+            )
         
         user_states[user_id] = {"action": "search", "type": search_type}
         
     except Exception as e:
         logger.error(f"❌ Error in search_callback: {e}")
         await event.answer("❌ Error", alert=True)
+
+@bot_client.on(events.CallbackQuery(pattern=r'^profile$'))
+async def profile_callback(event):
+    """Handle profile callback"""
+    try:
+        user_id = event.sender_id
+        user_doc = await db_manager.get_user(user_id)
+        
+        if not user_doc:
+            await event.answer("❌ User not found", alert=True)
+            return
+        
+        # Format profile
+        profile_text = (
+            f"👤 **USER PROFILE**\n"
+            f"═══════════════════════\n\n"
+            f"📋 **Personal Information**\n"
+            f"├─ Name: {user_doc.get('first_name', 'N/A')}\n"
+            f"├─ Username: @{user_doc.get('username', 'N/A')}\n"
+            f"├─ User ID: `{user_id}`\n"
+            f"├─ Joined: {user_doc.get('joined_at', 'N/A')[:10]}\n"
+            f"└─ Last Seen: {user_doc.get('last_seen', 'N/A')[:16]}\n\n"
+        )
+        
+        # Credits and subscription
+        profile_text += f"💰 **Account Status**\n"
+        
+        if user_doc.get('subscription') and user_doc.get('subscription_expiry'):
+            expiry_date = datetime.fromisoformat(user_doc['subscription_expiry'])
+            days_left = (expiry_date - datetime.now(timezone.utc)).days
+            
+            if days_left > 0:
+                profile_text += f"├─ Subscription: {user_doc['subscription']}\n"
+                profile_text += f"├─ Status: Active ({days_left} days left)\n"
+                profile_text += f"└─ Searches: Unlimited\n\n"
+            else:
+                profile_text += f"├─ Credits: {user_doc.get('searches_remaining', 0)}\n"
+                profile_text += f"└─ Subscription: Expired\n\n"
+        else:
+            profile_text += f"├─ Credits: {user_doc.get('searches_remaining', 0)}\n"
+            profile_text += f"└─ Subscription: None\n\n"
+        
+        # Statistics
+        profile_text += f"📊 **Statistics**\n"
+        profile_text += f"├─ Total Searches: {user_doc.get('total_searches', 0)}\n"
+        profile_text += f"├─ Successful: {user_doc.get('total_searches', 0) - user_doc.get('failed_searches', 0)}\n"
+        profile_text += f"├─ Referral Code: `{user_doc.get('referral_code', 'N/A')}`\n"
+        profile_text += f"├─ Referrals: {user_doc.get('referrals', 0)}\n"
+        profile_text += f"└─ Referral Credits: {user_doc.get('referral_credits', 0)}\n\n"
+        
+        # Referral link
+        referral_link = f"https://t.me/{bot_info.username}?start={user_doc.get('referral_code')}"
+        profile_text += f"📢 **Referral Link**\n"
+        profile_text += f"🔗 {referral_link}\n\n"
+        profile_text += f"💎 **Earn 1 credit for each successful referral!**"
+        
+        await event.edit(
+            profile_text,
+            buttons=OneLineKeyboard.profile_menu(),
+            parse_mode="md"
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Error in profile_callback: {e}")
+        await event.answer("❌ Error loading profile", alert=True)
+
+@bot_client.on(events.CallbackQuery(pattern=r'^premium$'))
+async def premium_callback(event):
+    """Handle premium plans callback"""
+    try:
+        premium_text = (
+            "💎 **DARKBOXES PREMIUM PLANS**\n"
+            "═══════════════════════\n\n"
+            "🔰 **BASIC PLAN** - ₹100\n"
+            "├─ 5 Premium Searches\n"
+            "├─ Standard Databases\n"
+            "├─ 7-day Access\n"
+            "└─ Basic Support\n\n"
+            "⭐ **STANDARD PLAN** - ₹250\n"
+            "├─ 10 Premium Searches\n"
+            "├─ Extended Databases\n"
+            "├─ Priority Processing\n"
+            "├─ 7-day Access\n"
+            "└─ Email Support\n\n"
+            "👑 **PREMIUM PLAN** - ₹400\n"
+            "├─ Unlimited Searches\n"
+            "├─ All Data Sources\n"
+            "├─ Highest Priority\n"
+            "├─ 24/7 Support\n"
+            "├─ 7-day Access\n"
+            "└─ Advanced Features\n\n"
+            "🚀 **ENTERPRISE PLAN** - ₹600\n"
+            "├─ Unlimited Searches\n"
+            "├─ Premium Sources\n"
+            "├─ Real-time Updates\n"
+            "├─ Dedicated Support\n"
+            "├─ 30-day Access\n"
+            "└─ API Access (Coming Soon)\n\n"
+            "📞 **Contact @darkboxesAdmin to purchase**\n"
+            "💳 **UPI ID:** `{config.UPI_ID}`\n\n"
+            "🔒 **Payment Instructions:**\n"
+            "1. Send payment via UPI\n"
+            "2. Send screenshot to @darkboxesAdmin\n"
+            "3. Your account will be upgraded within 5 minutes"
+        )
+        
+        await event.edit(
+            premium_text,
+            buttons=OneLineKeyboard.subscription_plans(),
+            parse_mode="md"
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Error in premium_callback: {e}")
+        await event.answer("❌ Error loading premium plans", alert=True)
+
+@bot_client.on(events.CallbackQuery(pattern=r'^plan_(.+)$'))
+async def plan_selection_callback(event):
+    """Handle plan selection"""
+    try:
+        plan_id = event.data.decode().split('_', 1)[1]
+        
+        if plan_id not in SUBSCRIPTION_PLANS:
+            await event.answer("❌ Invalid plan selection", alert=True)
+            return
+        
+        plan = SUBSCRIPTION_PLANS[plan_id]
+        
+        plan_details = (
+            f"{plan['icon']} **{plan['name']}**\n"
+            f"═══════════════════════\n\n"
+            f"💰 **Price:** ₹{plan['price']}\n"
+            f"🔍 **Searches:** {plan['searches']}\n"
+            f"📅 **Validity:** {plan['validity']}\n\n"
+            f"🌟 **Features:**\n"
+        )
+        
+        for feature in plan['features']:
+            plan_details += f"• {feature}\n"
+        
+        plan_details += f"\n📞 **To Purchase:**\n"
+        plan_details += f"1. Send ₹{plan['price']} to UPI: `{config.UPI_ID}`\n"
+        plan_details += f"2. Send payment screenshot to @darkboxesAdmin\n"
+        plan_details += f"3. Include your User ID: `{event.sender_id}`\n"
+        plan_details += f"4. Your account will be upgraded within 5 minutes\n\n"
+        plan_details += f"💡 **Note:** Contact @darkboxesAdmin for bulk discounts"
+        
+        buttons = [
+            [Button.inline("« Back to Plans", "premium")],
+            [Button.inline("« Main Menu", "main_menu")]
+        ]
+        
+        await event.edit(plan_details, buttons=buttons, parse_mode="md")
+        
+    except Exception as e:
+        logger.error(f"❌ Error in plan_selection_callback: {e}")
+        await event.answer("❌ Error loading plan details", alert=True)
+
+@bot_client.on(events.CallbackQuery(pattern=r'^referrals$'))
+async def referrals_callback(event):
+    """Handle referrals callback"""
+    try:
+        user_id = event.sender_id
+        user_doc = await db_manager.get_user(user_id)
+        
+        if not user_doc:
+            await event.answer("❌ User not found", alert=True)
+            return
+        
+        referral_code = user_doc.get('referral_code', 'N/A')
+        referrals_count = user_doc.get('referrals', 0)
+        referral_credits = user_doc.get('referral_credits', 0)
+        
+        referral_link = f"https://t.me/{bot_info.username}?start={referral_code}"
+        
+        referrals_text = (
+            f"📊 **REFER & EARN PROGRAM**\n"
+            f"═══════════════════════\n\n"
+            f"💰 **How It Works:**\n"
+            f"1. Share your referral link below\n"
+            f"2. When someone signs up using your link\n"
+            f"3. You get **{config.REFERRAL_REWARD} credit** instantly!\n"
+            f"4. They get **{config.NEW_USER_CREDITS} free credits**\n\n"
+            f"📈 **Your Stats:**\n"
+            f"├─ Referral Code: `{referral_code}`\n"
+            f"├─ Total Referrals: {referrals_count}\n"
+            f"├─ Credits Earned: {referral_credits}\n"
+            f"└─ Active Status: ✅\n\n"
+            f"🔗 **Your Referral Link:**\n"
+            f"{referral_link}\n\n"
+            f"📢 **Share Message:**\n"
+            f"```\n"
+            f"🚀 Join DarkBoxes Intelligence System!\n"
+            f"🔍 Access powerful OSINT tools\n"
+            f"📊 Phone, Email, Aadhar, Vehicle searches\n"
+            f"💎 Get {config.NEW_USER_CREDITS} free credits\n"
+            f"🔗 Sign up: {referral_link}\n"
+            f"```\n\n"
+            f"💡 **Tips:** Share in groups, with friends, on social media!"
+        )
+        
+        await event.edit(
+            referrals_text,
+            buttons=OneLineKeyboard.referrals_menu(),
+            parse_mode="md"
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Error in referrals_callback: {e}")
+        await event.answer("❌ Error loading referrals", alert=True)
+
+@bot_client.on(events.CallbackQuery(pattern=r'^support$'))
+async def support_callback(event):
+    """Handle support callback"""
+    try:
+        support_text = (
+            f"🆘 **DARKBOXES SUPPORT**\n"
+            f"═══════════════════════\n\n"
+            f"📞 **Contact Admin:** @darkboxesAdmin\n"
+            f"⏰ **Response Time:** Within 1 hour\n"
+            f"🌐 **Official Channel:** @darkboxesv1\n\n"
+            f"❓ **Common Issues:**\n"
+            f"• Payment not processed\n"
+            f"• Search not working\n"
+            f"• Account issues\n"
+            f"• Bug reports\n"
+            f"• Feature requests\n\n"
+            f"⚠️ **Before Contacting:**\n"
+            f"1. Check if you have sufficient credits\n"
+            f"2. Verify your query format\n"
+            f"3. Wait 30 seconds for search results\n"
+            f"4. Check @darkboxesv1 for announcements\n\n"
+            f"💳 **Payment Support:**\n"
+            f"UPI: `{config.UPI_ID}`\n"
+            f"Send screenshot after payment\n\n"
+            f"🔒 **Security Notice:**\n"
+            f"Never share passwords or OTPs\n"
+            f"Official admin: @darkboxesAdmin only"
+        )
+        
+        await event.edit(
+            support_text,
+            buttons=OneLineKeyboard.support_menu(),
+            parse_mode="md"
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Error in support_callback: {e}")
+        await event.answer("❌ Error loading support", alert=True)
+
+@bot_client.on(events.CallbackQuery(pattern=r'^my_referrals$'))
+async def my_referrals_callback(event):
+    """Handle my referrals callback"""
+    try:
+        user_id = event.sender_id
+        user_doc = await db_manager.get_user(user_id)
+        
+        if not user_doc:
+            await event.answer("❌ User not found", alert=True)
+            return
+        
+        # Get referrals from database
+        referral_code = user_doc.get('referral_code', '')
+        referrals = []
+        
+        if referral_code:
+            referrals = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: list(db_manager.db.users.find(
+                    {"referred_by": referral_code},
+                    {"user_id": 1, "username": 1, "first_name": 1, "joined_at": 1}
+                ).limit(20))
+            )
+        
+        referrals_text = (
+            f"📋 **MY REFERRALS**\n"
+            f"═══════════════════════\n\n"
+        )
+        
+        if referrals:
+            referrals_text += f"👥 **Total Referrals:** {len(referrals)}\n\n"
+            
+            for i, ref in enumerate(referrals[:10], 1):
+                username = f"@{ref['username']}" if ref.get('username') else "No username"
+                joined = ref.get('joined_at', '')[:10]
+                
+                referrals_text += (
+                    f"{i}. **{ref['first_name']}**\n"
+                    f"   ├─ {username}\n"
+                    f"   ├─ ID: `{ref['user_id']}`\n"
+                    f"   └─ Joined: {joined}\n\n"
+                )
+            
+            if len(referrals) > 10:
+                referrals_text += f"... and {len(referrals) - 10} more referrals\n"
+        else:
+            referrals_text += "📭 No referrals yet.\n\n"
+            referrals_text += f"🔗 **Your Referral Code:** `{user_doc.get('referral_code', 'N/A')}`\n"
+            referrals_text += "💡 Share your referral link to earn credits!"
+        
+        buttons = [
+            [Button.inline("📢 Share Referral", "share_referral")],
+            [Button.inline("« Refer & Earn", "referrals")],
+            [Button.inline("« Main Menu", "main_menu")]
+        ]
+        
+        await event.edit(referrals_text, buttons=buttons, parse_mode="md")
+        
+    except Exception as e:
+        logger.error(f"❌ Error in my_referrals_callback: {e}")
+        await event.answer("❌ Error loading referrals", alert=True)
+
+@bot_client.on(events.CallbackQuery(pattern=r'^share_referral$'))
+async def share_referral_callback(event):
+    """Handle share referral callback"""
+    try:
+        user_id = event.sender_id
+        user_doc = await db_manager.get_user(user_id)
+        
+        if not user_doc:
+            await event.answer("❌ User not found", alert=True)
+            return
+        
+        referral_code = user_doc.get('referral_code', '')
+        referral_link = f"https://t.me/{bot_info.username}?start={referral_code}"
+        
+        share_text = (
+            f"📢 **SHARE REFERRAL LINK**\n"
+            f"═══════════════════════\n\n"
+            f"🔗 **Your Referral Link:**\n"
+            f"{referral_link}\n\n"
+            f"📝 **Copy-Paste Message:**\n"
+            f"```\n"
+            f"🚀 Join DarkBoxes Intelligence System!\n\n"
+            f"🔍 **Powerful OSINT Tools:**\n"
+            f"• Phone Number Lookup\n"
+            f"• Email Intelligence\n"
+            f"• Aadhar Information\n"
+            f"• Vehicle Details\n"
+            f"• Telegram Analysis\n"
+            f"• And much more!\n\n"
+            f"💎 **Get {config.NEW_USER_CREDITS} FREE Credits**\n"
+            f"🔗 Sign up now: {referral_link}\n\n"
+            f"⚡ **Features:**\n"
+            f"• Fast & Accurate Results\n"
+            f"• Premium Databases\n"
+            f"• 24/7 Support\n"
+            f"• Affordable Plans\n"
+            f"```\n\n"
+            f"💡 **Where to Share:**\n"
+            f"• Telegram Groups\n"
+            f"• Friends & Family\n"
+            f"• Social Media\n"
+            f"• Forums\n\n"
+            f"💰 **Earn {config.REFERRAL_REWARD} credit for each successful referral!**"
+        )
+        
+        buttons = [
+            [Button.inline("« Back to Referrals", "referrals")],
+            [Button.inline("« Main Menu", "main_menu")]
+        ]
+        
+        await event.edit(share_text, buttons=buttons, parse_mode="md")
+        
+    except Exception as e:
+        logger.error(f"❌ Error in share_referral_callback: {e}")
+        await event.answer("❌ Error loading share referral", alert=True)
+
+@bot_client.on(events.CallbackQuery(pattern=r'^contact_admin$'))
+async def contact_admin_callback(event):
+    """Handle contact admin callback"""
+    try:
+        contact_text = (
+            f"📞 **CONTACT ADMINISTRATOR**\n"
+            f"═══════════════════════\n\n"
+            f"👤 **Official Admin:** @darkboxesAdmin\n\n"
+            f"📧 **Contact Methods:**\n"
+            f"• Telegram: @darkboxesAdmin (Preferred)\n"
+            f"• Email: darkboxes.admin@gmail.com\n"
+            f"• Channel: @darkboxesv1\n\n"
+            f"⏰ **Response Time:**\n"
+            f"• General: Within 1 hour\n"
+            f"• Urgent: 15-30 minutes\n"
+            f"• Payment: 5-10 minutes\n\n"
+            f"💳 **Payment Issues:**\n"
+            f"1. Send payment to: `{config.UPI_ID}`\n"
+            f"2. Take screenshot\n"
+            f"3. Send to @darkboxesAdmin\n"
+            f"4. Include your User ID: `{event.sender_id}`\n\n"
+            f"⚠️ **Important:**\n"
+            f"• Never share passwords/OTPs\n"
+            f"• Official admin ONLY: @darkboxesAdmin\n"
+            f"• Beware of impersonators\n"
+            f"• Report suspicious accounts"
+        )
+        
+        buttons = [
+            [Button.inline("📋 Report Issue", "report_issue")],
+            [Button.inline("« Support", "support")],
+            [Button.inline("« Main Menu", "main_menu")]
+        ]
+        
+        await event.edit(contact_text, buttons=buttons, parse_mode="md")
+        
+    except Exception as e:
+        logger.error(f"❌ Error in contact_admin_callback: {e}")
+        await event.answer("❌ Error loading contact info", alert=True)
 
 @bot_client.on(events.NewMessage(func=lambda e: e.is_private and not e.text.startswith('/')))
 async def private_message_handler(event):
@@ -2906,9 +3593,22 @@ async def handle_search_query(event, state):
             await event.respond(f"❌ Invalid format. Example: `{cmd['example']}`")
             return
         
-        # Show premium processing message
-        processing_text = PremiumFormatter.format_processing(search_type, query)
-        status = await event.respond(processing_text, parse_mode="md")
+        # Special handling for leak search
+        if search_type == "leak":
+            leak_warning = (
+                "🚀 **ADVANCED SEARCH INITIATED**\n\n"
+                f"🔍 **Query:** `{query}`\n"
+                f"⚡ **Processing:** Ultra-fast (5 seconds)\n"
+                f"📁 **Output:** JSON + TXT files\n"
+                f"💎 **Cost:** 3 credits\n\n"
+                f"⚠️ **Note:** For phone numbers, include country code (e.g., 917204764637)\n"
+                f"⏳ Processing your advanced search..."
+            )
+            status = await event.respond(leak_warning, parse_mode="md")
+        else:
+            # Show premium processing message
+            processing_text = PremiumFormatter.format_processing(search_type, query)
+            status = await event.respond(processing_text, parse_mode="md")
         
         # Check access
         user_doc = await db_manager.get_user(user_id)
@@ -2944,7 +3644,29 @@ async def handle_search_query(event, state):
             pass
         
         if result["success"]:
-            await event.respond(result["result"], parse_mode="md")
+            # Handle multiple files for leak search
+            if result.get("has_multiple_files"):
+                # Send summary first
+                await event.respond(result["result"], parse_mode="md")
+                
+                # Send each file
+                for file_data in result.get("files", []):
+                    if file_data.get("raw_bytes"):
+                        filename = file_data.get("filename", f"result_{int(time.time())}.txt")
+                        
+                        # Determine file extension
+                        if file_data.get("file_type") == "json":
+                            filename = f"result_{int(time.time())}.json"
+                        elif file_data.get("file_type") == "txt":
+                            filename = f"result_{int(time.time())}.txt"
+                        
+                        await event.respond(
+                            file=file_data["raw_bytes"],
+                            caption=f"📁 **{file_data.get('file_type', 'RESULT').upper()} File**\nQuery: `{query}`"
+                        )
+            else:
+                await event.respond(result["result"], parse_mode="md")
+            
             await db_manager.update_searches(user_id, search_type, query, True)
         else:
             await event.respond(result["error"], parse_mode="md")
@@ -3447,6 +4169,103 @@ async def admin_reply_handler(event):
         
     except Exception as e:
         logger.error(f"❌ Error in admin_reply_handler: {e}")
+
+@bot_client.on(events.NewMessage(pattern=r'/leak (.+)'))
+async def leak_command_handler(event):
+    """Handle /leak command directly"""
+    try:
+        user_id = event.sender_id
+        query = event.pattern_match.group(1).strip()
+        
+        if not query:
+            await event.respond("❌ Please provide a query. Example: `/leak 917204764637`")
+            return
+        
+        # Check if user is banned
+        user_doc = await db_manager.get_user(user_id)
+        if user_doc and user_doc.get('is_banned'):
+            await event.respond("🚫 Your account has been banned. Contact @darkboxesAdmin for assistance.")
+            return
+        
+        if not user_doc:
+            await event.respond("❌ User not found. Please use /start first.")
+            return
+        
+        # Check access
+        can_search = False
+        searches_remaining = user_doc.get('searches_remaining', 0)
+        subscription = user_doc.get('subscription')
+        subscription_expiry = user_doc.get('subscription_expiry')
+        
+        if subscription and subscription_expiry:
+            expiry_date = datetime.fromisoformat(subscription_expiry)
+            if expiry_date > datetime.now(timezone.utc):
+                can_search = True
+        
+        if not can_search and searches_remaining <= 0:
+            await event.respond(
+                "🔒 **INSUFFICIENT CREDITS**\n\n"
+                "You need 3 credits for advanced search.\n\n"
+                "💎 **Premium Plan** - ₹500\n"
+                "• Unlimited searches (7 days)\n"
+                "• All databases\n"
+                "• Priority processing\n\n"
+                "Contact @darkboxesAdmin for assistance.",
+                buttons=OneLineKeyboard.subscription_plans()
+            )
+            return
+        
+        # Perform leak search
+        leak_warning = (
+            "🚀 **ADVANCED SEARCH INITIATED**\n\n"
+            f"🔍 **Query:** `{query}`\n"
+            f"⚡ **Processing:** Ultra-fast (5 seconds)\n"
+            f"📁 **Output:** JSON + TXT files\n"
+            f"💎 **Cost:** 3 credits\n\n"
+            f"⚠️ **Note:** For phone numbers, include country code (e.g., 917204764637)\n"
+            f"⏳ Processing your advanced search..."
+        )
+        status = await event.respond(leak_warning, parse_mode="md")
+        
+        result = await search_engine.perform_search("leak", query, user_id)
+        
+        try:
+            await status.delete()
+        except:
+            pass
+        
+        if result["success"]:
+            # Handle multiple files for leak search
+            if result.get("has_multiple_files"):
+                # Send summary first
+                await event.respond(result["result"], parse_mode="md")
+                
+                # Send each file
+                for file_data in result.get("files", []):
+                    if file_data.get("raw_bytes"):
+                        filename = file_data.get("filename", f"result_{int(time.time())}.txt")
+                        
+                        # Determine file extension
+                        if file_data.get("file_type") == "json":
+                            filename = f"result_{int(time.time())}.json"
+                        elif file_data.get("file_type") == "txt":
+                            filename = f"result_{int(time.time())}.txt"
+                        
+                        await event.respond(
+                            file=file_data["raw_bytes"],
+                            caption=f"📁 **{file_data.get('file_type', 'RESULT').upper()} File**\nQuery: `{query}`"
+                        )
+            else:
+                await event.respond(result["result"], parse_mode="md")
+            
+            await db_manager.update_searches(user_id, "leak", query, True)
+        else:
+            await event.respond(result["error"], parse_mode="md")
+            await db_manager.update_searches(user_id, "leak", query, False)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in leak_command_handler: {e}")
+        await event.respond("❌ An error occurred during advanced search.")
 
 @user_client.on(events.NewMessage())
 async def handle_all_messages(event):
