@@ -152,8 +152,8 @@ GROUP_PRIORITIES = {
     },
     "advanced": {
         "name": "🚀 Advanced Search Engine",
-        "identifier": -1001234567890,  # Replace with your advanced group ID
-        "timeout": 5,
+        "identifier": "IntelXGroup",  # Replace with your advanced group ID
+        "timeout": 35,
         "weight": 15,
         "enabled": True,
         "entity": None,
