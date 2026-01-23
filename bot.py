@@ -129,7 +129,7 @@ GROUP_PRIORITIES = {
     "advanced": {
         "name": "🚀 Advanced OSINT Engine",
         "identifier": "IntelXGroup",  # Replace with your advanced group ID
-        "timeout": 5,
+        "timeout": 25,
         "weight": 20,
         "enabled": True,
         "entity": None,
