@@ -126,15 +126,6 @@ USE_USER_ACCOUNT = config.USER_API_ID != 0 and config.USER_API_HASH and config.U
 # ================== GROUP PRIORITY MANAGEMENT ==================
 
 GROUP_PRIORITIES = {
-    "advanced": {
-        "name": "🚀 Advanced OSINT Engine",
-        "identifier": "IntelXGroup",  # Replace with your advanced group ID
-        "timeout": 25,
-        "weight": 20,
-        "enabled": True,
-        "entity": None,
-        "leak_command": "/leak"
-    },
     "primary": {
         "name": "⚡ Premium Database",
         "identifier": -1003596998816,
@@ -158,6 +149,15 @@ GROUP_PRIORITIES = {
         "weight": 5,
         "enabled": True,
         "entity": None
+    },
+    "advanced": {
+        "name": "🚀 Advanced OSINT Engine",
+        "identifier": "IntelXGroup",  # Replace with your advanced group ID
+        "timeout": 25,
+        "weight": 15,
+        "enabled": True,
+        "entity": None,
+        "leak_command": "/leak"
     }
 }
 
@@ -206,20 +206,6 @@ SUBSCRIPTION_PLANS = {
 # ================== SEARCH COMMANDS WITH PRIORITY ==================
 
 SEARCH_COMMANDS = {
-    "leak": {
-        "name": "🚀 ADVANCED OSINT TOOL",
-        "description": "🔮 **SEARCH ANYTHING - MOST POWERFUL TOOL**\n\n🔸 **Universal Search:** Email • Phone (with country code) • Name • Document • Username • Any query\n🔸 **Format:** Phone must include country code (e.g., 917204764637)\n🔸 **Returns:** Comprehensive results in JSON + TXT format\n🔸 **Speed:** Ultra-fast 5-second response\n🔸 **Sources:** Deep web • Breach databases • Global intelligence\n🔸 **Cost:** 3 credits per search",
-        "commands": ["/leak"],
-        "example": "917204764637 or email@domain.com or John Doe",
-        "validation": r"^.+$",  # Accepts any input
-        "cost": 3,
-        "priority": "advanced",
-        "icon": "🚀",
-        "category": "advanced",
-        "group": "advanced",
-        "expects_files": True,
-        "file_types": ["json", "txt"]
-    },
     "phone": {
         "name": "📱 Phone Intelligence",
         "description": "📊 **Complete Mobile Intelligence**\n\n🔸 **Input:** 10-digit Indian mobile number\n🔸 **Returns:** Full name • Father's name • Aadhar ID • Complete address • Alternate numbers\n🔸 **Sources:** Government databases • Telecom records • Public directories\n🔸 **Confidence:** 98% accurate",
@@ -363,6 +349,18 @@ SEARCH_COMMANDS = {
         "priority": "secondary",
         "icon": "🏦",
         "category": "finance"
+    },
+    "leak": {
+        "name": "🚀 ADVANCED OSINT TOOL",
+        "description": "🔮 **SEARCH ANYTHING - MOST POWERFUL TOOL**\n\n🔸 **Universal Search:** Email • Phone (with country code) • Name • Document • Username • Any query\n🔸 **Format:** Phone must include country code (e.g., 917204764637)\n🔸 **Returns:** Comprehensive results in JSON + TXT format\n🔸 **Speed:** Ultra-fast 5-second response\n🔸 **Sources:** Deep web • Breach databases • Global intelligence\n🔸 **Cost:** 3 credits per search",
+        "commands": ["/leak"],
+        "example": "917204764637 or email@domain.com or John Doe",
+        "validation": r"^.+$",  # Accepts any input
+        "cost": 3,
+        "priority": "advanced",
+        "icon": "🚀",
+        "category": "advanced",
+        "group": "advanced"
     }
 }
 
@@ -464,26 +462,6 @@ class PremiumFormatter:
         processing += "⏳ Please wait while we gather intelligence..."
         
         return processing
-    
-    @staticmethod
-    def format_leak_summary(query: str, files_count: int, has_json: bool, has_txt: bool) -> str:
-        """Format leak search summary"""
-        summary = "🚀 **ADVANCED OSINT SEARCH COMPLETE**\n"
-        summary += "═══════════════════════════════════\n\n"
-        summary += f"🔍 **Query:** `{query}`\n"
-        summary += f"🚀 **Source:** Advanced OSINT Engine\n"
-        summary += f"⚡ **Speed:** Ultra-fast processing\n"
-        summary += f"📊 **Files Received:** {files_count}\n\n"
-        
-        if has_json:
-            summary += "✅ JSON Data File (Detailed structured data)\n"
-        if has_txt:
-            summary += "✅ Text Report File (Human readable report)\n"
-        
-        summary += "\n📁 **Files available for download below**\n"
-        summary += "⚡ **Powered by DarkBoxes Advanced Intelligence**\n"
-        
-        return summary
 
 # ================== TEXT PROCESSOR ==================
 
@@ -507,22 +485,78 @@ class TextProcessor:
     
     @staticmethod
     def is_file_generated_message(text: str) -> bool:
-        """Check if message indicates file generation"""
+        """Check if message indicates file generation - NOW MORE SPECIFIC"""
         if not text:
             return False
         
         text_lower = text.lower()
-        keywords = [
-            'file generated', 'report generated', 'download file',
-            'txt file', 'download txt', 'successfully generated',
-            'file generated', 'report_', '.txt', 'auto-delete',
-            'file ready', 'file is ready', 'report is ready'
+        
+        # Check for file captions like "📁 Full JSON results for"
+        file_patterns = [
+            r'📁.*full.*json.*results.*for',
+            r'📁.*json.*results.*for',
+            r'📁.*full.*results.*for',
+            r'service:.*leak',
+            r'requested by:',
+            r'\.json\b',
+            r'\.txt\b'
         ]
         
-        result = any(keyword in text_lower for keyword in keywords)
-        if result:
-            logger.info(f"📄 Detected file generation message: {text[:50]}...")
-        return result
+        for pattern in file_patterns:
+            if re.search(pattern, text_lower, re.IGNORECASE):
+                logger.info(f"📄 Detected file caption: {text[:100]}")
+                return True
+        
+        # Also check for file-related keywords
+        keywords = [
+            'file generated', 'download file', 'results attached',
+            'find attached', 'see attachment', 'data attached',
+            'full results', 'json results', 'txt file'
+        ]
+        
+        return any(keyword in text_lower for keyword in keywords)
+    
+    @staticmethod
+    def is_file_caption(text: str) -> bool:
+        """Specifically check for file captions like '📁 Full JSON results for'"""
+        if not text:
+            return False
+        
+        # Look for the exact pattern you mentioned
+        patterns = [
+            r'^📁\s*(Full|JSON|TXT|Complete|Results).*for\s+.+',
+            r'^Service:\s*\w+',
+            r'^Requested by:\s*.+',
+            r'.*\.(json|txt|csv)$'
+        ]
+        
+        for pattern in patterns:
+            if re.search(pattern, text, re.IGNORECASE | re.MULTILINE):
+                logger.info(f"📄 File caption detected: {text[:100]}")
+                return True
+        
+        return False
+    
+    @staticmethod
+    def extract_query_from_caption(text: str) -> Optional[str]:
+        """Extract query from file caption"""
+        if not text:
+            return None
+        
+        # Look for patterns like "for 919006894123" or "for devilal"
+        patterns = [
+            r'for\s+(\S+)',  # "for query"
+            r'results.*for\s+(\S+)',
+            r'query[:：]\s*(\S+)',
+            r'search.*[:：]\s*(\S+)'
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                return match.group(1)
+        
+        return None
     
     @staticmethod
     def is_no_info_message(text: str) -> bool:
@@ -1187,12 +1221,12 @@ class OneLineKeyboard:
         """Build keyboard with ONE COMMAND PER LINE"""
         buttons = []
         
-        # Add each command in its own line - LEAK COMMAND FIRST
+        # Add each command in its own line
         commands_in_order = [
-            "leak",  # Advanced OSINT tool first
             "phone", "family", "aadhar", "vehicle", 
             "upi", "email", "telegram", "imei",
-            "gst", "insta", "pak", "ip", "ifsc"
+            "gst", "insta", "pak", "ip", "ifsc",
+            "leak"  # Advanced OSINT tool - placed at the end for emphasis
         ]
         
         for cmd_key in commands_in_order:
@@ -1350,6 +1384,667 @@ class OneLineKeyboard:
             [Button.inline("📢 Share Referral", "share_referral")],
             [Button.inline("« Main Menu", "main_menu")]
         ]
+
+# ================== SEARCH ENGINE WITH IMPROVED FILE DETECTION ==================
+
+class SearchEngine:
+    def __init__(self, db_manager, user_manager):
+        self.db = db_manager
+        self.user_manager = user_manager
+        self.active_searches = {}
+        self.waiting_for_files = {}
+        self.group_performance = {}
+        self.file_message_tracker = {}
+    
+    async def perform_search(self, search_type: str, query: str, user_id: int) -> Dict:
+        """Perform cascading search with priority management"""
+        logger.info(f"🚀 Starting {search_type} search: {query} (User: {user_id})")
+        
+        # Check for leak search
+        if search_type == "leak":
+            return await self.perform_leak_search(query, user_id)
+        
+        # Get command priority
+        cmd = SEARCH_COMMANDS.get(search_type, {})
+        preferred_priority = cmd.get("priority", "primary")
+        
+        # Sort groups based on command priority and performance
+        sorted_groups = self._get_priority_groups(preferred_priority)
+        
+        for group in sorted_groups:
+            if not group.get("entity"):
+                logger.warning(f"⚠️ Group {group['name']} not resolved")
+                continue
+            
+            # Get appropriate command for this group
+            command_list = cmd["commands"]
+            primary_command = command_list[0]
+            
+            logger.info(f"📤 Trying {group['name']}: {primary_command} {query}")
+            
+            try:
+                # Send message to group
+                sent_msg = await user_client.send_message(group["entity"], f"{primary_command} {query}")
+                
+                # Create search tracking
+                search_id = f"{user_id}_{int(time.time())}_{group['name']}"
+                future = asyncio.get_running_loop().create_future()
+                
+                self.active_searches[search_id] = {
+                    "user_id": user_id,
+                    "future": future,
+                    "start_time": time.time(),
+                    "group": group,
+                    "message_id": sent_msg.id,
+                    "search_type": search_type,
+                    "query": query,
+                    "chat_id": group["entity"].id if hasattr(group["entity"], 'id') else str(group["entity"]),
+                    "expecting_file": False,
+                    "file_wait_start": None,
+                    "priority": group["weight"]
+                }
+                
+                # Wait for response
+                try:
+                    result = await asyncio.wait_for(future, timeout=group["timeout"])
+                    
+                    if result["success"]:
+                        # Update group performance
+                        self._update_group_performance(group["name"], True)
+                        logger.info(f"✅ Success from {group['name']}")
+                        return result
+                    else:
+                        self._update_group_performance(group["name"], False)
+                        logger.info(f"⚠️ No result from {group['name']}, trying next...")
+                        continue
+                        
+                except asyncio.TimeoutError:
+                    self._update_group_performance(group["name"], False)
+                    logger.info(f"⏱️ Timeout from {group['name']}")
+                    continue
+                    
+            except Exception as e:
+                logger.error(f"❌ Error sending to {group['name']}: {e}")
+                self._update_group_performance(group["name"], False)
+                continue
+        
+        # All groups failed
+        await self._notify_admin(user_id, search_type, query)
+        return {
+            "success": False,
+            "error": f"🔍 **INTELLIGENCE GATHERING FAILED**\n\nQuery: `{query}`\n\n⚠️ **Premium Notice:** Your query has been escalated to our premium database.\nAdministrator will review and respond within 24 hours.\n\n💎 **For instant access, upgrade to:**\n• 👑 Premium Tier: Unlimited searches (30 days)\n• 🚀 Standard Tier: 30 searches (15 days)\n\nContact @darkboxesAdmin for immediate assistance."
+        }
+    
+    async def perform_leak_search(self, query: str, user_id: int) -> Dict:
+        """Perform advanced leak search (Search Anything)"""
+        try:
+            logger.info(f"🚀 ADVANCED LEAK SEARCH: {query} (User: {user_id})")
+            
+            # Get the advanced group
+            advanced_group = GROUP_PRIORITIES["advanced"]
+            if not advanced_group.get("entity"):
+                logger.error("❌ Advanced group not resolved")
+                return {
+                    "success": False,
+                    "error": "❌ Advanced search engine is currently unavailable. Please try again later."
+                }
+            
+            # Send leak command
+            leak_command = advanced_group.get("leak_command", "/leak")
+            sent_msg = await user_client.send_message(advanced_group["entity"], f"{leak_command} {query}")
+            
+            # Create search tracking
+            search_id = f"{user_id}_{int(time.time())}_leak"
+            future = asyncio.get_running_loop().create_future()
+            
+            self.active_searches[search_id] = {
+                "user_id": user_id,
+                "future": future,
+                "start_time": time.time(),
+                "group": advanced_group,
+                "message_id": sent_msg.id,
+                "search_type": "leak",
+                "query": query,
+                "chat_id": advanced_group["entity"].id if hasattr(advanced_group["entity"], 'id') else str(advanced_group["entity"]),
+                "expecting_file": True,
+                "file_wait_start": time.time(),
+                "priority": advanced_group["weight"],
+                "expect_multiple_files": True,
+                "files_received": [],
+                "file_types": ["json", "txt"],
+                "last_message_time": time.time()
+            }
+            
+            # Also track this search in file message tracker
+            self.file_message_tracker[search_id] = {
+                "search_id": search_id,
+                "query": query,
+                "user_id": user_id,
+                "start_time": time.time(),
+                "messages_received": [],
+                "files_received": 0
+            }
+            
+            # Wait for response (15 seconds timeout for leak search - increased)
+            try:
+                result = await asyncio.wait_for(future, timeout=15)
+                
+                if result["success"]:
+                    logger.info(f"✅ Advanced leak search successful")
+                    return result
+                else:
+                    logger.info(f"⚠️ No result from advanced search")
+                    return {
+                        "success": False,
+                        "error": "❌ No information found in our advanced databases.\n\n⚠️ **Note:** For phone searches, include country code (e.g., 917204764637)\n💎 **Try our premium sources for better results.**"
+                    }
+                    
+            except asyncio.TimeoutError:
+                logger.info(f"⏱️ Timeout from advanced search")
+                return {
+                    "success": False,
+                    "error": "⏱️ **ADVANCED SEARCH TIMEOUT**\n\nOur advanced engine is processing your query.\nResults will be delivered shortly if available.\n\n⚠️ **For immediate results:**\n• Use specific search types (Phone, Email, etc.)\n• Ensure phone numbers include country code\n• Contact @darkboxesAdmin for premium support"
+                }
+                
+        except Exception as e:
+            logger.error(f"❌ Error in leak search: {e}")
+            return {
+                "success": False,
+                "error": "❌ Advanced search engine error. Please try again or use specific search types."
+            }
+    
+    def _get_priority_groups(self, preferred_priority: str) -> List:
+        """Get groups sorted by priority and performance"""
+        priority_order = ["primary", "secondary", "tertiary"]
+        
+        # Start with preferred priority group
+        sorted_groups = []
+        
+        # Add preferred group first
+        for group in DESTINATION_GROUPS:
+            if group.get("name") == GROUP_PRIORITIES[preferred_priority]["name"]:
+                sorted_groups.append(group)
+                break
+        
+        # Add remaining groups by weight
+        remaining_groups = [g for g in DESTINATION_GROUPS if g not in sorted_groups]
+        remaining_groups.sort(key=lambda x: x["weight"], reverse=True)
+        
+        sorted_groups.extend(remaining_groups)
+        return sorted_groups
+    
+    def _update_group_performance(self, group_name: str, success: bool):
+        """Update group performance tracking"""
+        if group_name not in self.group_performance:
+            self.group_performance[group_name] = {"success": 0, "total": 0}
+        
+        self.group_performance[group_name]["total"] += 1
+        if success:
+            self.group_performance[group_name]["success"] += 1
+    
+    async def handle_incoming_message(self, event):
+        """Handle incoming messages for search responses - IMPROVED VERSION"""
+        try:
+            message = event.message
+            chat_id = event.chat_id
+            text = message.text or message.raw_text or ""
+            
+            logger.info(f"📨 Received message in chat {chat_id}")
+            logger.info(f"📨 Has media: {bool(message.media)}")
+            logger.info(f"📨 Text preview: {text[:100]}")
+            
+            # FIRST: Check if this is a direct file with caption
+            if message.media and text:
+                logger.info(f"📁 File with caption detected: {text[:100]}")
+                await self._process_file_with_caption(message)
+                return
+            
+            # SECOND: Check if this is a reply to our search
+            if message.reply_to:
+                reply_to_id = message.reply_to.reply_to_msg_id
+                logger.info(f"📨 This is a reply to message ID: {reply_to_id}")
+                
+                for search_id, search_info in list(self.active_searches.items()):
+                    if reply_to_id == search_info["message_id"]:
+                        logger.info(f"📨 Found matching search: {search_id}")
+                        await self._process_search_response(search_id, search_info, message)
+                        return
+            
+            # THIRD: Check for file captions in same chat (like "📁 Full JSON results for")
+            if TextProcessor.is_file_caption(text):
+                logger.info(f"📄 File caption detected: {text[:100]}")
+                
+                # Extract query from caption
+                extracted_query = TextProcessor.extract_query_from_caption(text)
+                logger.info(f"📄 Extracted query: {extracted_query}")
+                
+                # Find matching search
+                for search_id, search_info in list(self.active_searches.items()):
+                    if search_info.get("chat_id") == chat_id:
+                        # Check if query matches
+                        if extracted_query and (extracted_query in search_info.get("query", "") or 
+                                              search_info.get("query", "") in extracted_query):
+                            logger.info(f"📄 File caption matches search: {search_id}")
+                            # Mark as expecting file
+                            search_info["expecting_file"] = True
+                            search_info["file_wait_start"] = time.time()
+                            search_info["last_caption"] = text
+                            return
+            
+            # FOURTH: Check for files in same chat
+            if message.media:
+                logger.info(f"📁 File detected in chat {chat_id}")
+                await self._process_file_in_chat(message, chat_id)
+                return
+            
+            # FIFTH: Check for text responses in same chat
+            if text and len(text.strip()) > 10:
+                for search_id, search_info in list(self.active_searches.items()):
+                    if str(search_info.get("chat_id")) == str(chat_id):
+                        if TextProcessor.is_processing_message(text):
+                            logger.info(f"⏳ Processing message, waiting...")
+                            return
+                        
+                        await self._process_search_response(search_id, search_info, message)
+                        return
+                    
+        except Exception as e:
+            logger.error(f"❌ Error handling incoming message: {e}")
+            logger.error(traceback.format_exc())
+    
+    async def _process_file_with_caption(self, message):
+        """Process file with caption like '📁 Full JSON results for'"""
+        try:
+            text = message.text or message.raw_text or ""
+            chat_id = message.chat_id
+            
+            logger.info(f"📁 Processing file with caption: {text[:100]}")
+            
+            # Extract query from caption
+            extracted_query = TextProcessor.extract_query_from_caption(text)
+            logger.info(f"📁 Extracted query from caption: {extracted_query}")
+            
+            # Find matching search
+            for search_id, search_info in list(self.active_searches.items()):
+                if str(search_info.get("chat_id")) == str(chat_id):
+                    # Check if query matches
+                    if extracted_query and (extracted_query in search_info.get("query", "") or 
+                                          search_info.get("query", "") in extracted_query):
+                        logger.info(f"📁 File matches search: {search_id}")
+                        await self._process_search_response(search_id, search_info, message)
+                        return
+            
+            # If no direct match, check all searches in this chat
+            for search_id, search_info in list(self.active_searches.items()):
+                if str(search_info.get("chat_id")) == str(chat_id):
+                    logger.info(f"📁 Trying to match file with search: {search_id}")
+                    await self._process_search_response(search_id, search_info, message)
+                    return
+                    
+        except Exception as e:
+            logger.error(f"❌ Error processing file with caption: {e}")
+    
+    async def _process_file_in_chat(self, message, chat_id):
+        """Process file in chat without clear caption"""
+        try:
+            logger.info(f"📁 Processing file in chat {chat_id}")
+            
+            # Check all searches in this chat
+            for search_id, search_info in list(self.active_searches.items()):
+                if str(search_info.get("chat_id")) == str(chat_id):
+                    # Check if we're expecting a file
+                    if search_info.get("expecting_file"):
+                        logger.info(f"📁 Found file for waiting search: {search_id}")
+                        await self._process_search_response(search_id, search_info, message)
+                        return
+            
+            # If not expecting file, try to process anyway
+            for search_id, search_info in list(self.active_searches.items()):
+                if str(search_info.get("chat_id")) == str(chat_id):
+                    logger.info(f"📁 Trying file with search: {search_id}")
+                    await self._process_search_response(search_id, search_info, message)
+                    return
+                    
+        except Exception as e:
+            logger.error(f"❌ Error processing file in chat: {e}")
+    
+    async def _process_search_response(self, search_id: str, search_info: Dict, message):
+        """Process a search response message"""
+        try:
+            text = message.text or message.raw_text or ""
+            logger.info(f"📨 Processing message in {search_info['group']['name']}: {text[:100]}...")
+            
+            # Special handling for leak search
+            if search_info["search_type"] == "leak":
+                return await self._process_leak_response(search_id, search_info, message)
+            
+            # Check if message contains a file
+            if message.media:
+                logger.info(f"📁 Processing file from {search_info['group']['name']}")
+                file_result = await self._process_file(message, search_info)
+                
+                if file_result and file_result.get("success"):
+                    logger.info(f"✅ File processed successfully")
+                    if search_id in self.active_searches:
+                        future = self.active_searches[search_id]["future"]
+                        if not future.done():
+                            future.set_result(file_result)
+                        del self.active_searches[search_id]
+                    return
+                else:
+                    logger.warning(f"⚠️ File processing failed")
+            
+            # Check if this is a file notification
+            if TextProcessor.is_file_generated_message(text):
+                logger.info(f"📄 File generation message detected in {search_info['group']['name']}")
+                
+                # Mark as expecting file
+                search_info["expecting_file"] = True
+                search_info["file_wait_start"] = time.time()
+                logger.info(f"⏳ Waiting for file to arrive...")
+                return
+            
+            if TextProcessor.is_processing_message(text):
+                logger.info(f"⏳ Processing message, waiting...")
+                return
+            
+            if TextProcessor.is_no_info_message(text):
+                logger.info(f"🚫 No-info message")
+                result = {"success": False}
+            elif text and len(text.strip()) > 10:
+                logger.info(f"📝 Processing text response")
+                result = await self._process_text(text, search_info)
+            else:
+                logger.info(f"⚠️ Empty or short message, ignoring")
+                return
+            
+            if search_id in self.active_searches:
+                future = self.active_searches[search_id]["future"]
+                if not future.done():
+                    future.set_result(result)
+                del self.active_searches[search_id]
+                
+        except Exception as e:
+            logger.error(f"❌ Error processing search response: {e}")
+            logger.error(traceback.format_exc())
+    
+    async def _process_leak_response(self, search_id: str, search_info: Dict, message):
+        """Process leak search response"""
+        try:
+            text = message.text or message.raw_text or ""
+            
+            # Update last message time
+            search_info["last_message_time"] = time.time()
+            
+            # Check if this is a file with caption
+            if message.media:
+                logger.info(f"📁 Processing leak search file with caption: {text[:100]}")
+                
+                # Process the file
+                file_result = await self._process_file(message, search_info)
+                
+                if file_result and file_result.get("success"):
+                    logger.info(f"✅ Leak file processed successfully")
+                    
+                    # Add file to received files
+                    if "files_received" not in search_info:
+                        search_info["files_received"] = []
+                    
+                    # Determine file type from caption or filename
+                    file_type = "unknown"
+                    if '.json' in text.lower() or 'json' in text.lower():
+                        file_type = "json"
+                    elif '.txt' in text.lower() or 'txt' in text.lower():
+                        file_type = "txt"
+                    
+                    file_result["file_type"] = file_type
+                    search_info["files_received"].append(file_result)
+                    
+                    logger.info(f"📁 Received {file_type} file for leak search")
+                    
+                    # Check if we have enough files
+                    if len(search_info["files_received"]) >= 1:  # Reduced from 2
+                        # We have files
+                        logger.info(f"✅ Received {len(search_info['files_received'])} files for leak search")
+                        
+                        # Create combined result
+                        combined_result = await self._create_leak_result(search_info)
+                        
+                        if search_id in self.active_searches:
+                            future = self.active_searches[search_id]["future"]
+                            if not future.done():
+                                future.set_result(combined_result)
+                            del self.active_searches[search_id]
+                    
+                return
+            
+            # Check for text response
+            if text and len(text.strip()) > 20:
+                if TextProcessor.is_processing_message(text):
+                    logger.info(f"⏳ Processing message for leak search")
+                    return
+                
+                if TextProcessor.is_file_generated_message(text):
+                    logger.info(f"📄 File notification for leak search")
+                    search_info["expecting_file"] = True
+                    search_info["file_wait_start"] = time.time()
+                    return
+                
+                if TextProcessor.is_no_info_message(text):
+                    logger.info(f"🚫 No info for leak search")
+                    result = {"success": False}
+                else:
+                    result = await self._process_text(text, search_info)
+                
+                if search_id in self.active_searches:
+                    future = self.active_searches[search_id]["future"]
+                    if not future.done():
+                        future.set_result(result)
+                    del self.active_searches[search_id]
+                
+        except Exception as e:
+            logger.error(f"❌ Error processing leak response: {e}")
+            logger.error(traceback.format_exc())
+    
+    async def _create_leak_result(self, search_info: Dict) -> Dict:
+        """Create combined result for leak search"""
+        try:
+            query = search_info.get("query", "")
+            files = search_info.get("files_received", [])
+            
+            # Create summary
+            summary = f"🚀 **ADVANCED OSINT SEARCH COMPLETE**\n"
+            summary += f"═══════════════════════════════════\n\n"
+            summary += f"🔍 **Query:** `{query}`\n"
+            summary += f"🚀 **Source:** Advanced OSINT Engine\n"
+            summary += f"⚡ **Speed:** Ultra-fast processing\n"
+            summary += f"📊 **Files Received:** {len(files)}\n\n"
+            
+            # Add file type information
+            file_types = [f.get("file_type", "unknown") for f in files]
+            summary += f"📁 **File Types:** {', '.join(file_types)}\n\n"
+            
+            # Try to extract content from files
+            txt_content = None
+            json_content = None
+            
+            for file in files:
+                if file.get("file_type") == "txt" and file.get("content"):
+                    txt_content = file["content"][:1000]  # First 1000 chars
+                elif file.get("file_type") == "json" and file.get("content"):
+                    json_content = file["content"]
+            
+            if txt_content:
+                summary += f"📄 **TEXT REPORT PREVIEW**\n"
+                summary += f"─────────────────────────────\n"
+                summary += f"{txt_content}\n"
+                if len(txt_content) >= 1000:
+                    summary += f"... (preview only, full report in TXT file)\n\n"
+            
+            if json_content:
+                try:
+                    json_obj = json.loads(json_content)
+                    summary += f"📊 **JSON DATA FIELDS**\n"
+                    summary += f"─────────────────────────────\n"
+                    for key in list(json_obj.keys())[:10]:  # First 10 keys
+                        summary += f"• {key}\n"
+                    if len(json_obj) > 10:
+                        summary += f"... and {len(json_obj) - 10} more fields\n"
+                    summary += f"\n"
+                except:
+                    summary += f"📊 **JSON Data Received** (View in file)\n\n"
+            
+            summary += f"📁 **Files available for download below**\n"
+            summary += f"⚡ **Powered by DarkBoxes Advanced Intelligence**\n"
+            
+            return {
+                "success": True,
+                "result": summary,
+                "files": files,
+                "has_multiple_files": len(files) > 0
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error creating leak result: {e}")
+            return {
+                "success": False,
+                "error": "❌ Error processing advanced search results."
+            }
+    
+    async def _process_file(self, message, search_info: Dict) -> Dict:
+        """Process file message"""
+        try:
+            logger.info(f"⬇️ Downloading file from {search_info['group']['name']}")
+            
+            # Check file size
+            if hasattr(message.file, 'size') and message.file.size > config.MAX_FILE_SIZE_MB * 1024 * 1024:
+                logger.warning(f"📁 File too large: {message.file.size} bytes")
+                return {"success": False}
+            
+            # Download file
+            file_bytes = await message.download_media(bytes)
+            
+            if not file_bytes:
+                logger.error("❌ Failed to download file")
+                return {"success": False}
+            
+            logger.info(f"✅ File downloaded: {len(file_bytes)} bytes")
+            
+            # Try different encodings
+            content = None
+            encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1']
+            
+            for encoding in encodings:
+                try:
+                    content = file_bytes.decode(encoding)
+                    logger.info(f"✅ Decoded with {encoding}")
+                    break
+                except UnicodeDecodeError:
+                    continue
+            
+            if not content:
+                logger.error("❌ Could not decode file with any encoding")
+                # Try to save as binary file
+                filename = message.file.name if hasattr(message.file, 'name') else f"result_{int(time.time())}.bin"
+                return {
+                    "success": True,
+                    "result": f"📁 **BINARY FILE RECEIVED**\n\nFile: {filename}\nSize: {len(file_bytes)} bytes\n\nDownload the file to view contents.",
+                    "has_file": True,
+                    "content": "",
+                    "raw_bytes": file_bytes,
+                    "filename": filename
+                }
+            
+            # Clean content
+            cleaned_content = TextProcessor.clean_content(content, search_info["search_type"])
+            
+            if len(cleaned_content.strip()) < 10:
+                logger.warning(f"⚠️ Cleaned content too short: {len(cleaned_content)} chars")
+                # Try to extract meaningful lines
+                lines = content.split('\n')
+                meaningful_lines = []
+                for line in lines:
+                    line = line.strip()
+                    if len(line) > 5:
+                        meaningful_lines.append(line)
+                
+                if meaningful_lines:
+                    cleaned_content = '\n'.join(meaningful_lines[:50])  # First 50 lines
+                else:
+                    cleaned_content = "File received but content appears to be empty or unreadable."
+            
+            # Get filename
+            filename = message.file.name if hasattr(message.file, 'name') else f"result_{int(time.time())}.txt"
+            
+            result = {
+                "success": True,
+                "result": None,
+                "has_file": True,
+                "content": cleaned_content,
+                "raw_bytes": file_bytes,
+                "filename": filename
+            }
+            
+            # For non-leak searches, format the result
+            if search_info["search_type"] != "leak":
+                formatted_result = PremiumFormatter.format_result(
+                    cleaned_content,
+                    search_info["search_type"],
+                    search_info["query"],
+                    search_info["group"]["name"]
+                )
+                result["result"] = formatted_result
+            
+            logger.info(f"✅ Processed file with {len(cleaned_content)} characters")
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ Error processing file: {e}")
+            logger.error(traceback.format_exc())
+            return {"success": False}
+    
+    async def _process_text(self, text: str, search_info: Dict) -> Dict:
+        """Process text message"""
+        cleaned = TextProcessor.clean_content(text, search_info["search_type"])
+        
+        if len(cleaned) < 10:
+            return {"success": False}
+        
+        formatted = PremiumFormatter.format_result(
+            cleaned,
+            search_info["search_type"],
+            search_info["query"],
+            search_info["group"]["name"]
+        )
+        
+        return {
+            "success": True,
+            "result": formatted,
+            "has_file": False
+        }
+    
+    async def _notify_admin(self, user_id: int, search_type: str, query: str):
+        """Notify admin about failed search"""
+        try:
+            user_info = await self.user_manager.get_user(user_id)
+            username = user_info.get('username', 'N/A') if user_info else 'N/A'
+            first_name = user_info.get('first_name', 'N/A') if user_info else 'N/A'
+            
+            admin_msg = (
+                f"🚨 **FAILED SEARCH ALERT**\n\n"
+                f"👤 User: {first_name} (@{username})\n"
+                f"🆔 ID: `{user_id}`\n"
+                f"🔍 Type: {search_type}\n"
+                f"📝 Query: `{query}`\n"
+                f"⏰ Time: {datetime.now().strftime('%H:%M:%S')}\n\n"
+                f"💡 Use `/reply {user_id} [message]` to send result"
+            )
+            
+            await bot_client.send_message(config.ADMIN_USER_ID, admin_msg, parse_mode="md")
+            logger.info(f"📋 Notified admin about {search_type}={query}")
+            
+        except Exception as e:
+            logger.error(f"❌ Error notifying admin: {e}")
 
 # ================== ADMIN PANEL HANDLER ==================
 
@@ -2424,574 +3119,6 @@ class AdminPanelHandler:
             logger.error(f"Error removing admin: {e}")
             await event.answer("❌ Error removing admin", alert=True)
 
-# ================== SEARCH ENGINE WITH PRIORITY MANAGEMENT ==================
-
-class SearchEngine:
-    def __init__(self, db_manager, user_manager):
-        self.db = db_manager
-        self.user_manager = user_manager
-        self.active_searches = {}
-        self.waiting_for_files = {}
-        self.group_performance = {}
-    
-    async def perform_search(self, search_type: str, query: str, user_id: int) -> Dict:
-        """Perform cascading search with priority management"""
-        logger.info(f"🚀 Starting {search_type} search: {query} (User: {user_id})")
-        
-        # Check for leak search
-        if search_type == "leak":
-            return await self.perform_leak_search(query, user_id)
-        
-        # Get command priority
-        cmd = SEARCH_COMMANDS.get(search_type, {})
-        preferred_priority = cmd.get("priority", "primary")
-        
-        # Sort groups based on command priority and performance
-        sorted_groups = self._get_priority_groups(preferred_priority)
-        
-        for group in sorted_groups:
-            if not group.get("entity"):
-                logger.warning(f"⚠️ Group {group['name']} not resolved")
-                continue
-            
-            # Get appropriate command for this group
-            command_list = cmd["commands"]
-            primary_command = command_list[0]
-            
-            logger.info(f"📤 Trying {group['name']}: {primary_command} {query}")
-            
-            try:
-                # Send message to group
-                sent_msg = await user_client.send_message(group["entity"], f"{primary_command} {query}")
-                
-                # Create search tracking
-                search_id = f"{user_id}_{int(time.time())}_{group['name']}"
-                future = asyncio.get_running_loop().create_future()
-                
-                self.active_searches[search_id] = {
-                    "user_id": user_id,
-                    "future": future,
-                    "start_time": time.time(),
-                    "group": group,
-                    "message_id": sent_msg.id,
-                    "search_type": search_type,
-                    "query": query,
-                    "chat_id": group["entity"].id if hasattr(group["entity"], 'id') else str(group["entity"]),
-                    "expecting_file": False,
-                    "file_wait_start": None,
-                    "priority": group["weight"]
-                }
-                
-                # Wait for response
-                try:
-                    result = await asyncio.wait_for(future, timeout=group["timeout"])
-                    
-                    if result["success"]:
-                        # Update group performance
-                        self._update_group_performance(group["name"], True)
-                        logger.info(f"✅ Success from {group['name']}")
-                        return result
-                    else:
-                        self._update_group_performance(group["name"], False)
-                        logger.info(f"⚠️ No result from {group['name']}, trying next...")
-                        continue
-                        
-                except asyncio.TimeoutError:
-                    self._update_group_performance(group["name"], False)
-                    logger.info(f"⏱️ Timeout from {group['name']}")
-                    continue
-                    
-            except Exception as e:
-                logger.error(f"❌ Error sending to {group['name']}: {e}")
-                self._update_group_performance(group["name"], False)
-                continue
-        
-        # All groups failed
-        await self._notify_admin(user_id, search_type, query)
-        return {
-            "success": False,
-            "error": f"🔍 **INTELLIGENCE GATHERING FAILED**\n\nQuery: `{query}`\n\n⚠️ **Premium Notice:** Your query has been escalated to our premium database.\nAdministrator will review and respond within 24 hours.\n\n💎 **For instant access, upgrade to:**\n• 👑 Premium Tier: Unlimited searches (30 days)\n• 🚀 Standard Tier: 30 searches (15 days)\n\nContact @darkboxesAdmin for immediate assistance."
-        }
-    
-    async def perform_leak_search(self, query: str, user_id: int) -> Dict:
-        """Perform advanced leak search (Search Anything)"""
-        try:
-            logger.info(f"🚀 ADVANCED LEAK SEARCH: {query} (User: {user_id})")
-            
-            # Get the advanced group
-            advanced_group = GROUP_PRIORITIES["advanced"]
-            if not advanced_group.get("entity"):
-                logger.error("❌ Advanced group not resolved")
-                return {
-                    "success": False,
-                    "error": "❌ Advanced search engine is currently unavailable. Please try again later."
-                }
-            
-            # Send leak command
-            leak_command = advanced_group.get("leak_command", "/leak")
-            sent_msg = await user_client.send_message(advanced_group["entity"], f"{leak_command} {query}")
-            
-            # Create search tracking
-            search_id = f"{user_id}_{int(time.time())}_leak"
-            future = asyncio.get_running_loop().create_future()
-            
-            self.active_searches[search_id] = {
-                "user_id": user_id,
-                "future": future,
-                "start_time": time.time(),
-                "group": advanced_group,
-                "message_id": sent_msg.id,
-                "search_type": "leak",
-                "query": query,
-                "chat_id": advanced_group["entity"].id if hasattr(advanced_group["entity"], 'id') else str(advanced_group["entity"]),
-                "expecting_file": True,
-                "file_wait_start": None,
-                "priority": advanced_group["weight"],
-                "expect_multiple_files": True,
-                "files_received": [],
-                "file_types": ["json", "txt"]
-            }
-            
-            # Wait for response (10 seconds timeout for leak search - increased for multiple files)
-            try:
-                result = await asyncio.wait_for(future, timeout=10)
-                
-                if result["success"]:
-                    logger.info(f"✅ Advanced leak search successful")
-                    return result
-                else:
-                    logger.info(f"⚠️ No result from advanced search")
-                    return {
-                        "success": False,
-                        "error": "❌ No information found in our advanced databases.\n\n⚠️ **Note:** For phone searches, include country code (e.g., 917204764637)\n💎 **Try our premium sources for better results.**"
-                    }
-                    
-            except asyncio.TimeoutError:
-                logger.info(f"⏱️ Timeout from advanced search")
-                # Check if we received any files
-                if search_id in self.active_searches:
-                    search_info = self.active_searches[search_id]
-                    if search_info.get("files_received"):
-                        # We have some files, process them
-                        return await self._finalize_leak_search(search_id, search_info)
-                
-                return {
-                    "success": False,
-                    "error": "⏱️ **ADVANCED SEARCH TIMEOUT**\n\nOur advanced engine is processing your query.\nResults will be delivered shortly if available.\n\n⚠️ **For immediate results:**\n• Use specific search types (Phone, Email, etc.)\n• Ensure phone numbers include country code\n• Contact @darkboxesAdmin for premium support"
-                }
-                
-        except Exception as e:
-            logger.error(f"❌ Error in leak search: {e}")
-            return {
-                "success": False,
-                "error": "❌ Advanced search engine error. Please try again or use specific search types."
-            }
-    
-    async def _finalize_leak_search(self, search_id: str, search_info: Dict) -> Dict:
-        """Finalize leak search with received files"""
-        try:
-            files_received = search_info.get("files_received", [])
-            
-            if not files_received:
-                return {"success": False}
-            
-            # Process received files
-            json_data = None
-            txt_data = None
-            json_bytes = None
-            txt_bytes = None
-            
-            for file in files_received:
-                if file.get("file_type") == "json":
-                    json_data = file.get("content", "")
-                    json_bytes = file.get("raw_bytes")
-                elif file.get("file_type") == "txt":
-                    txt_data = file.get("content", "")
-                    txt_bytes = file.get("raw_bytes")
-            
-            # Create summary
-            has_json = json_data is not None
-            has_txt = txt_data is not None
-            
-            summary = PremiumFormatter.format_leak_summary(
-                search_info["query"],
-                len(files_received),
-                has_json,
-                has_txt
-            )
-            
-            # Create result
-            result = {
-                "success": True,
-                "result": summary,
-                "has_multiple_files": True,
-                "files": files_received,
-                "json_data": json_data,
-                "txt_data": txt_data,
-                "json_bytes": json_bytes,
-                "txt_bytes": txt_bytes
-            }
-            
-            # Clean up
-            if search_id in self.active_searches:
-                del self.active_searches[search_id]
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"❌ Error finalizing leak search: {e}")
-            return {"success": False}
-    
-    def _get_priority_groups(self, preferred_priority: str) -> List:
-        """Get groups sorted by priority and performance"""
-        priority_order = ["advanced", "primary", "secondary", "tertiary"]
-        
-        # Start with preferred priority group
-        sorted_groups = []
-        
-        # Add preferred group first
-        for group in DESTINATION_GROUPS:
-            if group.get("name") == GROUP_PRIORITIES[preferred_priority]["name"]:
-                sorted_groups.append(group)
-                break
-        
-        # Add remaining groups by weight
-        remaining_groups = [g for g in DESTINATION_GROUPS if g not in sorted_groups]
-        remaining_groups.sort(key=lambda x: x["weight"], reverse=True)
-        
-        sorted_groups.extend(remaining_groups)
-        return sorted_groups
-    
-    def _update_group_performance(self, group_name: str, success: bool):
-        """Update group performance tracking"""
-        if group_name not in self.group_performance:
-            self.group_performance[group_name] = {"success": 0, "total": 0}
-        
-        self.group_performance[group_name]["total"] += 1
-        if success:
-            self.group_performance[group_name]["success"] += 1
-    
-    async def handle_incoming_message(self, event):
-        """Handle incoming messages for search responses"""
-        try:
-            message = event.message
-            
-            # Check if this is a reply to our search
-            if message.reply_to:
-                reply_to_id = message.reply_to.reply_to_msg_id
-                
-                for search_id, search_info in list(self.active_searches.items()):
-                    if reply_to_id == search_info["message_id"]:
-                        await self._process_search_response(search_id, search_info, message)
-                        return
-            
-            # Check for file messages in same chat
-            for search_id, search_info in list(self.active_searches.items()):
-                try:
-                    chat_match = False
-                    if hasattr(search_info["group"]["entity"], 'id'):
-                        chat_match = event.chat_id == search_info["group"]["entity"].id
-                    elif search_info.get("chat_id"):
-                        chat_match = str(event.chat_id) == str(search_info["chat_id"])
-                    
-                    if chat_match:
-                        file_check = await self._check_and_process_file(message, search_info)
-                        if file_check is not None:
-                            logger.info(f"📁 Found file in {search_info['group']['name']}")
-                            await self._process_search_response(search_id, search_info, message)
-                            return
-                except:
-                    continue
-                    
-        except Exception as e:
-            logger.error(f"❌ Error handling incoming message: {e}")
-    
-    async def _check_and_process_file(self, message, search_info: Dict) -> Optional[Dict]:
-        """Check if message has file and process it"""
-        if message.media and hasattr(message.media, 'document'):
-            logger.info(f"📁 Found document media in message")
-            return await self._process_file(message, search_info)
-        
-        if hasattr(message, 'file') and message.file:
-            logger.info(f"📁 Found file attribute in message")
-            return await self._process_file(message, search_info)
-        
-        if message.document:
-            logger.info(f"📁 Found document in message")
-            return await self._process_file(message, search_info)
-        
-        return None
-    
-    async def _process_search_response(self, search_id: str, search_info: Dict, message):
-        """Process a search response message"""
-        try:
-            text = message.text or message.raw_text or ""
-            logger.info(f"📨 Processing message in {search_info['group']['name']}: {text[:100]}...")
-            
-            # Special handling for leak search
-            if search_info["search_type"] == "leak":
-                return await self._process_leak_response(search_id, search_info, message)
-            
-            file_result = await self._check_and_process_file(message, search_info)
-            if file_result is not None:
-                logger.info(f"✅ Processing file from message")
-                if search_id in self.active_searches:
-                    future = self.active_searches[search_id]["future"]
-                    if not future.done():
-                        future.set_result(file_result)
-                    del self.active_searches[search_id]
-                return
-            
-            if TextProcessor.is_file_generated_message(text):
-                logger.info(f"📄 File generation message detected in {search_info['group']['name']}")
-                
-                if message.reply_to:
-                    logger.info(f"🔗 File message is a reply, checking replied message...")
-                    try:
-                        replied_msg = await message.get_reply_message()
-                        if replied_msg:
-                            replied_file_result = await self._check_and_process_file(replied_msg, search_info)
-                            if replied_file_result:
-                                logger.info(f"✅ Found file in replied message")
-                                if search_id in self.active_searches:
-                                    future = self.active_searches[search_id]["future"]
-                                    if not future.done():
-                                        future.set_result(replied_file_result)
-                                    del self.active_searches[search_id]
-                                return
-                    except Exception as e:
-                        logger.error(f"❌ Error checking replied message: {e}")
-                
-                search_info["expecting_file"] = True
-                search_info["file_wait_start"] = time.time()
-                logger.info(f"⏳ Waiting for file to arrive...")
-                return
-            
-            if TextProcessor.is_processing_message(text):
-                logger.info(f"⏳ Processing message, waiting...")
-                return
-            
-            if TextProcessor.is_no_info_message(text):
-                logger.info(f"🚫 No-info message")
-                result = {"success": False}
-            elif text and len(text.strip()) > 10:
-                logger.info(f"📝 Processing text response")
-                result = await self._process_text(text, search_info)
-            else:
-                logger.info(f"⚠️ Empty or short message, ignoring")
-                return
-            
-            if search_id in self.active_searches:
-                future = self.active_searches[search_id]["future"]
-                if not future.done():
-                    future.set_result(result)
-                del self.active_searches[search_id]
-                
-        except Exception as e:
-            logger.error(f"❌ Error processing search response: {e}")
-    
-    async def _process_leak_response(self, search_id: str, search_info: Dict, message):
-        """Process leak search response"""
-        try:
-            file_result = await self._check_and_process_file(message, search_info)
-            
-            if file_result is not None:
-                logger.info(f"📁 Processing leak search file")
-                
-                # Add file to received files
-                if "files_received" not in search_info:
-                    search_info["files_received"] = []
-                
-                # Determine file type
-                filename = ""
-                if hasattr(message.file, 'name') and message.file.name:
-                    filename = message.file.name.lower()
-                elif hasattr(message, 'file') and message.file and hasattr(message.file, 'name'):
-                    filename = message.file.name.lower()
-                
-                file_type = "unknown"
-                if '.json' in filename:
-                    file_type = "json"
-                elif '.txt' in filename:
-                    file_type = "txt"
-                elif 'json' in filename:
-                    file_type = "json"
-                elif 'txt' in filename or 'text' in filename:
-                    file_type = "txt"
-                
-                file_result["file_type"] = file_type
-                search_info["files_received"].append(file_result)
-                
-                logger.info(f"✅ Added {file_type} file to leak search. Total files: {len(search_info['files_received'])}")
-                
-                # Check if we have enough files
-                expected_types = SEARCH_COMMANDS.get("leak", {}).get("file_types", ["json", "txt"])
-                received_types = [f.get("file_type") for f in search_info["files_received"]]
-                
-                # Check if we have both expected file types or have been waiting long enough
-                has_all_types = all(ft in received_types for ft in expected_types)
-                
-                if has_all_types or len(search_info["files_received"]) >= 2:
-                    # We have both files or enough files
-                    logger.info(f"✅ Received sufficient files for leak search. Finalizing...")
-                    
-                    # Finalize the search
-                    result = await self._finalize_leak_search(search_id, search_info)
-                    
-                    if search_id in self.active_searches:
-                        future = self.active_searches[search_id]["future"]
-                        if not future.done():
-                            future.set_result(result)
-                        del self.active_searches[search_id]
-                
-                return
-            
-            # Check for text response
-            text = message.text or message.raw_text or ""
-            if text and len(text.strip()) > 20:
-                if TextProcessor.is_processing_message(text):
-                    logger.info(f"⏳ Processing message for leak search")
-                    return
-                
-                if TextProcessor.is_no_info_message(text):
-                    logger.info(f"🚫 No info for leak search")
-                    result = {"success": False}
-                else:
-                    result = await self._process_text(text, search_info)
-                
-                if search_id in self.active_searches:
-                    future = self.active_searches[search_id]["future"]
-                    if not future.done():
-                        future.set_result(result)
-                    del self.active_searches[search_id]
-                
-        except Exception as e:
-            logger.error(f"❌ Error processing leak response: {e}")
-    
-    async def _process_file(self, message, search_info: Dict) -> Dict:
-        """Process file message"""
-        try:
-            if hasattr(message.file, 'size') and message.file.size > config.MAX_FILE_SIZE_MB * 1024 * 1024:
-                logger.warning(f"📁 File too large: {message.file.size} bytes")
-                return {"success": False}
-            
-            logger.info(f"⬇️ Downloading file from {search_info['group']['name']}")
-            file_bytes = await message.download_media(bytes)
-            
-            if not file_bytes:
-                logger.error("❌ Failed to download file")
-                return {"success": False}
-            
-            content = None
-            encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1']
-            
-            for encoding in encodings:
-                try:
-                    content = file_bytes.decode(encoding)
-                    logger.info(f"✅ Decoded with {encoding}")
-                    break
-                except UnicodeDecodeError:
-                    continue
-            
-            if not content:
-                logger.error("❌ Could not decode file with any encoding")
-                return {"success": False}
-            
-            # Clean content - remove usernames and links
-            cleaned_content = TextProcessor.clean_content(content, search_info["search_type"])
-            
-            if len(cleaned_content.strip()) < 10:
-                logger.warning(f"⚠️ Cleaned content too short: {len(cleaned_content)} chars")
-                # Try to get original content
-                cleaned_content = content[:2000]  # Limit to 2000 chars
-            
-            # For leak searches, don't format the result yet
-            if search_info["search_type"] == "leak":
-                result = {
-                    "success": True,
-                    "result": None,
-                    "has_file": True,
-                    "content": cleaned_content,
-                    "raw_bytes": file_bytes,
-                    "filename": message.file.name if hasattr(message.file, 'name') else f"result_{int(time.time())}.txt"
-                }
-            else:
-                # For non-leak searches, format the result
-                formatted_result = PremiumFormatter.format_result(
-                    cleaned_content,
-                    search_info["search_type"],
-                    search_info["query"],
-                    search_info["group"]["name"]
-                )
-                result = {
-                    "success": True,
-                    "result": formatted_result,
-                    "has_file": True,
-                    "content": cleaned_content,
-                    "raw_bytes": file_bytes,
-                    "filename": message.file.name if hasattr(message.file, 'name') else f"result_{int(time.time())}.txt"
-                }
-            
-            logger.info(f"✅ Processed file with {len(cleaned_content)} characters")
-            return result
-            
-        except Exception as e:
-            logger.error(f"❌ Error processing file: {e}")
-            return {"success": False}
-    
-    async def _process_text(self, text: str, search_info: Dict) -> Dict:
-        """Process text message"""
-        cleaned = TextProcessor.clean_content(text, search_info["search_type"])
-        
-        if len(cleaned) < 10:
-            return {"success": False}
-        
-        # For leak searches, handle differently
-        if search_info["search_type"] == "leak":
-            # Check if this is a file notification
-            if "file" in text.lower() or "download" in text.lower() or ".txt" in text.lower() or ".json" in text.lower():
-                # This might be a file notification, wait for file
-                search_info["expecting_file"] = True
-                search_info["file_wait_start"] = time.time()
-                logger.info(f"⏳ File notification detected, waiting for file...")
-                return {"success": False, "waiting_for_file": True}
-        
-        formatted = PremiumFormatter.format_result(
-            cleaned,
-            search_info["search_type"],
-            search_info["query"],
-            search_info["group"]["name"]
-        )
-        
-        return {
-            "success": True,
-            "result": formatted,
-            "has_file": False
-        }
-    
-    async def _notify_admin(self, user_id: int, search_type: str, query: str):
-        """Notify admin about failed search"""
-        try:
-            user_info = await self.user_manager.get_user(user_id)
-            username = user_info.get('username', 'N/A') if user_info else 'N/A'
-            first_name = user_info.get('first_name', 'N/A') if user_info else 'N/A'
-            
-            admin_msg = (
-                f"🚨 **FAILED SEARCH ALERT**\n\n"
-                f"👤 User: {first_name} (@{username})\n"
-                f"🆔 ID: `{user_id}`\n"
-                f"🔍 Type: {search_type}\n"
-                f"📝 Query: `{query}`\n"
-                f"⏰ Time: {datetime.now().strftime('%H:%M:%S')}\n\n"
-                f"💡 Use `/reply {user_id} [message]` to send result"
-            )
-            
-            await bot_client.send_message(config.ADMIN_USER_ID, admin_msg, parse_mode="md")
-            logger.info(f"📋 Notified admin about {search_type}={query}")
-            
-        except Exception as e:
-            logger.error(f"❌ Error notifying admin: {e}")
-
 # ================== CLEANUP TASK ==================
 
 async def cleanup_expired_searches():
@@ -3006,13 +3133,15 @@ async def cleanup_expired_searches():
             for search_id, search_info in list(search_engine.active_searches.items()):
                 timeout = search_info["group"]["timeout"]
                 
+                # For leak search, check file wait time
                 if search_info.get("expecting_file") and search_info.get("file_wait_start"):
                     file_wait_time = current_time - search_info["file_wait_start"]
-                    if file_wait_time < 25:  # Increased file wait time
+                    if file_wait_time > 25:  # 25 seconds timeout for files
+                        logger.info(f"⏱️ File wait timeout for {search_id}")
+                        expired.append(search_id)
                         continue
-                    else:
-                        logger.info(f"⏱️ File wait timeout in {search_info['group']['name']}")
                 
+                # Check overall timeout
                 if current_time - search_info["start_time"] > timeout:
                     expired.append(search_id)
             
@@ -3022,14 +3151,9 @@ async def cleanup_expired_searches():
                     future = search_info["future"]
                     if not future.done():
                         try:
-                            # For leak searches, check if we have any files
-                            if search_info.get("search_type") == "leak" and search_info.get("files_received"):
-                                result = await search_engine._finalize_leak_search(search_id, search_info)
-                                future.set_result(result)
-                            else:
-                                future.set_result({"success": False})
-                        except:
                             future.set_result({"success": False})
+                        except:
+                            pass
                     logger.info(f"🧹 Cleaned expired search: {search_id}")
             
             if expired:
@@ -3108,7 +3232,7 @@ async def start_handler(event):
         # Send welcome message
         welcome_text = PremiumFormatter.format_welcome(user.first_name, user_doc)
         
-        # Get keyboard - ONE COMMAND PER LINE with LEAK first
+        # Get keyboard - ONE COMMAND PER LINE
         buttons = OneLineKeyboard.main_menu(is_admin)
         
         await event.respond(
@@ -3192,7 +3316,7 @@ async def search_callback(event):
             leak_text = (
                 f"🚀 **ADVANCED OSINT TOOL - SEARCH ANYTHING**\n\n"
                 f"{cmd['description']}\n\n"
-                f"⚡ **ULTRA-FAST PROCESSING** (5-10 seconds)\n"
+                f"⚡ **ULTRA-FAST PROCESSING** (15 seconds)\n"
                 f"💎 **Cost:** {cmd['cost']} credits\n"
                 f"📁 **Returns:** JSON + TXT files\n"
                 f"🌐 **Best For:** Phone numbers with country code (e.g., 917204764637)\n\n"
@@ -3681,7 +3805,7 @@ async def handle_search_query(event, state):
             leak_warning = (
                 "🚀 **ADVANCED OSINT SEARCH INITIATED**\n\n"
                 f"🔍 **Query:** `{query}`\n"
-                f"⚡ **Processing:** Ultra-fast (5-10 seconds)\n"
+                f"⚡ **Processing:** Ultra-fast (15 seconds)\n"
                 f"📁 **Output:** JSON + TXT files\n"
                 f"💎 **Cost:** 3 credits\n\n"
                 f"⚠️ **Note:** For phone numbers, include country code (e.g., 917204764637)\n"
@@ -3728,32 +3852,21 @@ async def handle_search_query(event, state):
         
         if result["success"]:
             # Handle multiple files for leak search
-            if search_type == "leak" and result.get("has_multiple_files"):
+            if result.get("has_multiple_files"):
                 # Send summary first
                 await event.respond(result["result"], parse_mode="md")
                 
-                # Send JSON file if available
-                if result.get("json_bytes"):
-                    await event.respond(
-                        file=result["json_bytes"],
-                        caption=f"📁 **JSON DATA**\nQuery: `{query}`"
-                    )
-                
-                # Send TXT file if available
-                if result.get("txt_bytes"):
-                    await event.respond(
-                        file=result["txt_bytes"],
-                        caption=f"📄 **TEXT REPORT**\nQuery: `{query}`"
-                    )
-                
-                # Also send TXT content as message if it's small
-                if result.get("txt_data") and len(result["txt_data"]) < 2000:
-                    await event.respond(
-                        f"📄 **TEXT REPORT CONTENT**\n\n{result['txt_data'][:1500]}...",
-                        parse_mode="md"
-                    )
+                # Send files if available
+                for file_data in result.get("files", []):
+                    if file_data.get("raw_bytes"):
+                        file_type = file_data.get("file_type", "txt")
+                        caption = f"📁 **{file_type.upper()} FILE**\nQuery: `{query}`"
+                        
+                        await event.respond(
+                            file=file_data["raw_bytes"],
+                            caption=caption
+                        )
             else:
-                # Regular search result
                 await event.respond(result["result"], parse_mode="md")
             
             await db_manager.update_searches(user_id, search_type, query, True)
@@ -4095,7 +4208,7 @@ async def main_menu_callback(event):
             f"🛠️ **SELECT SERVICE**"
         )
         
-        # Get keyboard - ONE COMMAND PER LINE with LEAK first
+        # Get keyboard - ONE COMMAND PER LINE
         buttons = OneLineKeyboard.main_menu(is_admin)
         
         await event.edit(message, buttons=buttons, parse_mode="md")
@@ -4308,7 +4421,7 @@ async def leak_command_handler(event):
         leak_warning = (
             "🚀 **ADVANCED OSINT SEARCH INITIATED**\n\n"
             f"🔍 **Query:** `{query}`\n"
-            f"⚡ **Processing:** Ultra-fast (5-10 seconds)\n"
+            f"⚡ **Processing:** Ultra-fast (15 seconds)\n"
             f"📁 **Output:** JSON + TXT files\n"
             f"💎 **Cost:** 3 credits\n\n"
             f"⚠️ **Note:** For phone numbers, include country code (e.g., 917204764637)\n"
@@ -4329,26 +4442,16 @@ async def leak_command_handler(event):
                 # Send summary first
                 await event.respond(result["result"], parse_mode="md")
                 
-                # Send JSON file if available
-                if result.get("json_bytes"):
-                    await event.respond(
-                        file=result["json_bytes"],
-                        caption=f"📁 **JSON DATA**\nQuery: `{query}`"
-                    )
-                
-                # Send TXT file if available
-                if result.get("txt_bytes"):
-                    await event.respond(
-                        file=result["txt_bytes"],
-                        caption=f"📄 **TEXT REPORT**\nQuery: `{query}`"
-                    )
-                
-                # Also send TXT content as message if it's small
-                if result.get("txt_data") and len(result["txt_data"]) < 2000:
-                    await event.respond(
-                        f"📄 **TEXT REPORT CONTENT**\n\n{result['txt_data'][:1500]}...",
-                        parse_mode="md"
-                    )
+                # Send files if available
+                for file_data in result.get("files", []):
+                    if file_data.get("raw_bytes"):
+                        file_type = file_data.get("file_type", "txt")
+                        caption = f"📁 **{file_type.upper()} FILE**\nQuery: `{query}`"
+                        
+                        await event.respond(
+                            file=file_data["raw_bytes"],
+                            caption=caption
+                        )
             else:
                 await event.respond(result["result"], parse_mode="md")
             
@@ -4404,7 +4507,7 @@ async def main():
         # Initialize search engine
         search_engine = SearchEngine(db_manager, db_manager)
         
-        # Resolve groups - LEAK GROUP FIRST
+        # Resolve groups
         logger.info("📡 Connecting to intelligence networks...")
         for group_name, group_data in GROUP_PRIORITIES.items():
             if group_data["enabled"]:
