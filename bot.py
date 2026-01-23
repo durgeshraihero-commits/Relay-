@@ -126,6 +126,15 @@ USE_USER_ACCOUNT = config.USER_API_ID != 0 and config.USER_API_HASH and config.U
 # ================== GROUP PRIORITY MANAGEMENT ==================
 
 GROUP_PRIORITIES = {
+    "advanced": {
+        "name": "🚀 Advanced OSINT Engine",
+        "identifier": "IntelXGroup",  # Replace with your advanced group ID
+        "timeout": 5,
+        "weight": 20,
+        "enabled": True,
+        "entity": None,
+        "leak_command": "/leak"
+    },
     "primary": {
         "name": "⚡ Premium Database",
         "identifier": -1003596998816,
@@ -149,15 +158,6 @@ GROUP_PRIORITIES = {
         "weight": 5,
         "enabled": True,
         "entity": None
-    },
-    "advanced": {
-        "name": "🚀 Advanced OSINT Engine",
-        "identifier": "IntelXGroup",  # Replace with your advanced group ID
-        "timeout": 25,
-        "weight": 15,
-        "enabled": True,
-        "entity": None,
-        "leak_command": "/leak"
     }
 }
 
@@ -206,6 +206,20 @@ SUBSCRIPTION_PLANS = {
 # ================== SEARCH COMMANDS WITH PRIORITY ==================
 
 SEARCH_COMMANDS = {
+    "leak": {
+        "name": "🚀 ADVANCED OSINT TOOL",
+        "description": "🔮 **SEARCH ANYTHING - MOST POWERFUL TOOL**\n\n🔸 **Universal Search:** Email • Phone (with country code) • Name • Document • Username • Any query\n🔸 **Format:** Phone must include country code (e.g., 917204764637)\n🔸 **Returns:** Comprehensive results in JSON + TXT format\n🔸 **Speed:** Ultra-fast 5-second response\n🔸 **Sources:** Deep web • Breach databases • Global intelligence\n🔸 **Cost:** 3 credits per search",
+        "commands": ["/leak"],
+        "example": "917204764637 or email@domain.com or John Doe",
+        "validation": r"^.+$",  # Accepts any input
+        "cost": 3,
+        "priority": "advanced",
+        "icon": "🚀",
+        "category": "advanced",
+        "group": "advanced",
+        "expects_files": True,
+        "file_types": ["json", "txt"]
+    },
     "phone": {
         "name": "📱 Phone Intelligence",
         "description": "📊 **Complete Mobile Intelligence**\n\n🔸 **Input:** 10-digit Indian mobile number\n🔸 **Returns:** Full name • Father's name • Aadhar ID • Complete address • Alternate numbers\n🔸 **Sources:** Government databases • Telecom records • Public directories\n🔸 **Confidence:** 98% accurate",
@@ -349,18 +363,6 @@ SEARCH_COMMANDS = {
         "priority": "secondary",
         "icon": "🏦",
         "category": "finance"
-    },
-    "leak": {
-        "name": "🚀 ADVANCED OSINT TOOL",
-        "description": "🔮 **SEARCH ANYTHING - MOST POWERFUL TOOL**\n\n🔸 **Universal Search:** Email • Phone (with country code) • Name • Document • Username • Any query\n🔸 **Format:** Phone must include country code (e.g., 917204764637)\n🔸 **Returns:** Comprehensive results in JSON + TXT format\n🔸 **Speed:** Ultra-fast 5-second response\n🔸 **Sources:** Deep web • Breach databases • Global intelligence\n🔸 **Cost:** 3 credits per search",
-        "commands": ["/leak"],
-        "example": "917204764637 or email@domain.com or John Doe",
-        "validation": r"^.+$",  # Accepts any input
-        "cost": 3,
-        "priority": "advanced",
-        "icon": "🚀",
-        "category": "advanced",
-        "group": "advanced"
     }
 }
 
@@ -462,6 +464,26 @@ class PremiumFormatter:
         processing += "⏳ Please wait while we gather intelligence..."
         
         return processing
+    
+    @staticmethod
+    def format_leak_summary(query: str, files_count: int, has_json: bool, has_txt: bool) -> str:
+        """Format leak search summary"""
+        summary = "🚀 **ADVANCED OSINT SEARCH COMPLETE**\n"
+        summary += "═══════════════════════════════════\n\n"
+        summary += f"🔍 **Query:** `{query}`\n"
+        summary += f"🚀 **Source:** Advanced OSINT Engine\n"
+        summary += f"⚡ **Speed:** Ultra-fast processing\n"
+        summary += f"📊 **Files Received:** {files_count}\n\n"
+        
+        if has_json:
+            summary += "✅ JSON Data File (Detailed structured data)\n"
+        if has_txt:
+            summary += "✅ Text Report File (Human readable report)\n"
+        
+        summary += "\n📁 **Files available for download below**\n"
+        summary += "⚡ **Powered by DarkBoxes Advanced Intelligence**\n"
+        
+        return summary
 
 # ================== TEXT PROCESSOR ==================
 
@@ -1165,12 +1187,12 @@ class OneLineKeyboard:
         """Build keyboard with ONE COMMAND PER LINE"""
         buttons = []
         
-        # Add each command in its own line
+        # Add each command in its own line - LEAK COMMAND FIRST
         commands_in_order = [
+            "leak",  # Advanced OSINT tool first
             "phone", "family", "aadhar", "vehicle", 
             "upi", "email", "telegram", "imei",
-            "gst", "insta", "pak", "ip", "ifsc",
-            "leak"  # Advanced OSINT tool - placed at the end for emphasis
+            "gst", "insta", "pak", "ip", "ifsc"
         ]
         
         for cmd_key in commands_in_order:
@@ -2530,9 +2552,9 @@ class SearchEngine:
                 "file_types": ["json", "txt"]
             }
             
-            # Wait for response (5 seconds timeout for leak search)
+            # Wait for response (10 seconds timeout for leak search - increased for multiple files)
             try:
-                result = await asyncio.wait_for(future, timeout=5)
+                result = await asyncio.wait_for(future, timeout=10)
                 
                 if result["success"]:
                     logger.info(f"✅ Advanced leak search successful")
@@ -2546,6 +2568,13 @@ class SearchEngine:
                     
             except asyncio.TimeoutError:
                 logger.info(f"⏱️ Timeout from advanced search")
+                # Check if we received any files
+                if search_id in self.active_searches:
+                    search_info = self.active_searches[search_id]
+                    if search_info.get("files_received"):
+                        # We have some files, process them
+                        return await self._finalize_leak_search(search_id, search_info)
+                
                 return {
                     "success": False,
                     "error": "⏱️ **ADVANCED SEARCH TIMEOUT**\n\nOur advanced engine is processing your query.\nResults will be delivered shortly if available.\n\n⚠️ **For immediate results:**\n• Use specific search types (Phone, Email, etc.)\n• Ensure phone numbers include country code\n• Contact @darkboxesAdmin for premium support"
@@ -2558,9 +2587,64 @@ class SearchEngine:
                 "error": "❌ Advanced search engine error. Please try again or use specific search types."
             }
     
+    async def _finalize_leak_search(self, search_id: str, search_info: Dict) -> Dict:
+        """Finalize leak search with received files"""
+        try:
+            files_received = search_info.get("files_received", [])
+            
+            if not files_received:
+                return {"success": False}
+            
+            # Process received files
+            json_data = None
+            txt_data = None
+            json_bytes = None
+            txt_bytes = None
+            
+            for file in files_received:
+                if file.get("file_type") == "json":
+                    json_data = file.get("content", "")
+                    json_bytes = file.get("raw_bytes")
+                elif file.get("file_type") == "txt":
+                    txt_data = file.get("content", "")
+                    txt_bytes = file.get("raw_bytes")
+            
+            # Create summary
+            has_json = json_data is not None
+            has_txt = txt_data is not None
+            
+            summary = PremiumFormatter.format_leak_summary(
+                search_info["query"],
+                len(files_received),
+                has_json,
+                has_txt
+            )
+            
+            # Create result
+            result = {
+                "success": True,
+                "result": summary,
+                "has_multiple_files": True,
+                "files": files_received,
+                "json_data": json_data,
+                "txt_data": txt_data,
+                "json_bytes": json_bytes,
+                "txt_bytes": txt_bytes
+            }
+            
+            # Clean up
+            if search_id in self.active_searches:
+                del self.active_searches[search_id]
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ Error finalizing leak search: {e}")
+            return {"success": False}
+    
     def _get_priority_groups(self, preferred_priority: str) -> List:
         """Get groups sorted by priority and performance"""
-        priority_order = ["primary", "secondary", "tertiary"]
+        priority_order = ["advanced", "primary", "secondary", "tertiary"]
         
         # Start with preferred priority group
         sorted_groups = []
@@ -2722,78 +2806,42 @@ class SearchEngine:
                 filename = ""
                 if hasattr(message.file, 'name') and message.file.name:
                     filename = message.file.name.lower()
+                elif hasattr(message, 'file') and message.file and hasattr(message.file, 'name'):
+                    filename = message.file.name.lower()
                 
                 file_type = "unknown"
                 if '.json' in filename:
                     file_type = "json"
                 elif '.txt' in filename:
                     file_type = "txt"
+                elif 'json' in filename:
+                    file_type = "json"
+                elif 'txt' in filename or 'text' in filename:
+                    file_type = "txt"
                 
                 file_result["file_type"] = file_type
                 search_info["files_received"].append(file_result)
                 
-                # Check if we have both JSON and TXT files
-                received_types = [f["file_type"] for f in search_info["files_received"]]
+                logger.info(f"✅ Added {file_type} file to leak search. Total files: {len(search_info['files_received'])}")
                 
-                if all(ft in received_types for ft in ["json", "txt"]) or len(search_info["files_received"]) >= 2:
+                # Check if we have enough files
+                expected_types = SEARCH_COMMANDS.get("leak", {}).get("file_types", ["json", "txt"])
+                received_types = [f.get("file_type") for f in search_info["files_received"]]
+                
+                # Check if we have both expected file types or have been waiting long enough
+                has_all_types = all(ft in received_types for ft in expected_types)
+                
+                if has_all_types or len(search_info["files_received"]) >= 2:
                     # We have both files or enough files
-                    logger.info(f"✅ Received {len(search_info['files_received'])} files for leak search")
+                    logger.info(f"✅ Received sufficient files for leak search. Finalizing...")
                     
-                    # Combine results
-                    combined_result = {
-                        "success": True,
-                        "result": "🚀 **ADVANCED OSINT SEARCH COMPLETE**\n\n",
-                        "files": search_info["files_received"],
-                        "has_multiple_files": True
-                    }
-                    
-                    # Create summary
-                    json_data = None
-                    txt_data = None
-                    
-                    for file in search_info["files_received"]:
-                        if file["file_type"] == "json":
-                            json_data = file.get("content", "")
-                        elif file["file_type"] == "txt":
-                            txt_data = file.get("content", "")
-                    
-                    # Format result
-                    summary = f"🔮 **ADVANCED UNIVERSAL SEARCH RESULT**\n"
-                    summary += f"═══════════════════════════════════\n\n"
-                    summary += f"🔍 **Query:** `{search_info['query']}`\n"
-                    summary += f"🚀 **Source:** Advanced OSINT Engine\n"
-                    summary += f"⚡ **Speed:** Ultra-fast processing\n"
-                    summary += f"📊 **Files Received:** {len(search_info['files_received'])}\n\n"
-                    
-                    if txt_data:
-                        summary += f"📄 **TEXT REPORT SUMMARY**\n"
-                        summary += f"─────────────────────────────\n"
-                        # Extract first 500 chars from text
-                        txt_preview = txt_data[:500].replace('\n', '\n')
-                        summary += f"{txt_preview}\n"
-                        if len(txt_data) > 500:
-                            summary += f"... (truncated, full report in TXT file)\n\n"
-                    
-                    if json_data:
-                        try:
-                            json_obj = json.loads(json_data)
-                            summary += f"📊 **DATA FIELDS FOUND**\n"
-                            summary += f"─────────────────────────────\n"
-                            for key in json_obj.keys():
-                                summary += f"• {key}\n"
-                            summary += f"\n"
-                        except:
-                            summary += f"📊 **JSON Data Received** (View in file)\n\n"
-                    
-                    summary += f"📁 **Files available for download below**\n"
-                    summary += f"⚡ **Powered by DarkBoxes Advanced Intelligence**\n"
-                    
-                    combined_result["result"] = summary
+                    # Finalize the search
+                    result = await self._finalize_leak_search(search_id, search_info)
                     
                     if search_id in self.active_searches:
                         future = self.active_searches[search_id]["future"]
                         if not future.done():
-                            future.set_result(combined_result)
+                            future.set_result(result)
                         del self.active_searches[search_id]
                 
                 return
@@ -2852,40 +2900,37 @@ class SearchEngine:
             # Clean content - remove usernames and links
             cleaned_content = TextProcessor.clean_content(content, search_info["search_type"])
             
-            if len(cleaned_content.strip()) < 30:
+            if len(cleaned_content.strip()) < 10:
                 logger.warning(f"⚠️ Cleaned content too short: {len(cleaned_content)} chars")
-                lines = content.split('\n')
-                meaningful_lines = []
-                for line in lines:
-                    line = line.strip()
-                    if len(line) > 10:
-                        if not any(word in line.lower() for word in ['powered', 'developed', 'created', 'join', 'subscribe', 'channel', 'admin', '@', 't.me', 'http']):
-                            meaningful_lines.append(line)
-                
-                if meaningful_lines:
-                    cleaned_content = '\n'.join(meaning_lines)
-                    cleaned_content = TextProcessor.clean_content(cleaned_content, search_info["search_type"])
-                else:
-                    return {"success": False}
+                # Try to get original content
+                cleaned_content = content[:2000]  # Limit to 2000 chars
             
-            result = {
-                "success": True,
-                "result": None,
-                "has_file": True,
-                "content": cleaned_content,
-                "raw_bytes": file_bytes,
-                "filename": message.file.name if hasattr(message.file, 'name') else f"result_{int(time.time())}.txt"
-            }
-            
-            # For non-leak searches, format the result
-            if search_info["search_type"] != "leak":
+            # For leak searches, don't format the result yet
+            if search_info["search_type"] == "leak":
+                result = {
+                    "success": True,
+                    "result": None,
+                    "has_file": True,
+                    "content": cleaned_content,
+                    "raw_bytes": file_bytes,
+                    "filename": message.file.name if hasattr(message.file, 'name') else f"result_{int(time.time())}.txt"
+                }
+            else:
+                # For non-leak searches, format the result
                 formatted_result = PremiumFormatter.format_result(
                     cleaned_content,
                     search_info["search_type"],
                     search_info["query"],
                     search_info["group"]["name"]
                 )
-                result["result"] = formatted_result
+                result = {
+                    "success": True,
+                    "result": formatted_result,
+                    "has_file": True,
+                    "content": cleaned_content,
+                    "raw_bytes": file_bytes,
+                    "filename": message.file.name if hasattr(message.file, 'name') else f"result_{int(time.time())}.txt"
+                }
             
             logger.info(f"✅ Processed file with {len(cleaned_content)} characters")
             return result
@@ -2898,8 +2943,18 @@ class SearchEngine:
         """Process text message"""
         cleaned = TextProcessor.clean_content(text, search_info["search_type"])
         
-        if len(cleaned) < 20:
+        if len(cleaned) < 10:
             return {"success": False}
+        
+        # For leak searches, handle differently
+        if search_info["search_type"] == "leak":
+            # Check if this is a file notification
+            if "file" in text.lower() or "download" in text.lower() or ".txt" in text.lower() or ".json" in text.lower():
+                # This might be a file notification, wait for file
+                search_info["expecting_file"] = True
+                search_info["file_wait_start"] = time.time()
+                logger.info(f"⏳ File notification detected, waiting for file...")
+                return {"success": False, "waiting_for_file": True}
         
         formatted = PremiumFormatter.format_result(
             cleaned,
@@ -2953,7 +3008,7 @@ async def cleanup_expired_searches():
                 
                 if search_info.get("expecting_file") and search_info.get("file_wait_start"):
                     file_wait_time = current_time - search_info["file_wait_start"]
-                    if file_wait_time < 20:
+                    if file_wait_time < 25:  # Increased file wait time
                         continue
                     else:
                         logger.info(f"⏱️ File wait timeout in {search_info['group']['name']}")
@@ -2967,9 +3022,14 @@ async def cleanup_expired_searches():
                     future = search_info["future"]
                     if not future.done():
                         try:
-                            future.set_result({"success": False})
+                            # For leak searches, check if we have any files
+                            if search_info.get("search_type") == "leak" and search_info.get("files_received"):
+                                result = await search_engine._finalize_leak_search(search_id, search_info)
+                                future.set_result(result)
+                            else:
+                                future.set_result({"success": False})
                         except:
-                            pass
+                            future.set_result({"success": False})
                     logger.info(f"🧹 Cleaned expired search: {search_id}")
             
             if expired:
@@ -3048,7 +3108,7 @@ async def start_handler(event):
         # Send welcome message
         welcome_text = PremiumFormatter.format_welcome(user.first_name, user_doc)
         
-        # Get keyboard - ONE COMMAND PER LINE
+        # Get keyboard - ONE COMMAND PER LINE with LEAK first
         buttons = OneLineKeyboard.main_menu(is_admin)
         
         await event.respond(
@@ -3132,7 +3192,7 @@ async def search_callback(event):
             leak_text = (
                 f"🚀 **ADVANCED OSINT TOOL - SEARCH ANYTHING**\n\n"
                 f"{cmd['description']}\n\n"
-                f"⚡ **ULTRA-FAST PROCESSING** (5 seconds)\n"
+                f"⚡ **ULTRA-FAST PROCESSING** (5-10 seconds)\n"
                 f"💎 **Cost:** {cmd['cost']} credits\n"
                 f"📁 **Returns:** JSON + TXT files\n"
                 f"🌐 **Best For:** Phone numbers with country code (e.g., 917204764637)\n\n"
@@ -3621,7 +3681,7 @@ async def handle_search_query(event, state):
             leak_warning = (
                 "🚀 **ADVANCED OSINT SEARCH INITIATED**\n\n"
                 f"🔍 **Query:** `{query}`\n"
-                f"⚡ **Processing:** Ultra-fast (5 seconds)\n"
+                f"⚡ **Processing:** Ultra-fast (5-10 seconds)\n"
                 f"📁 **Output:** JSON + TXT files\n"
                 f"💎 **Cost:** 3 credits\n\n"
                 f"⚠️ **Note:** For phone numbers, include country code (e.g., 917204764637)\n"
@@ -3668,39 +3728,32 @@ async def handle_search_query(event, state):
         
         if result["success"]:
             # Handle multiple files for leak search
-            if result.get("has_multiple_files"):
+            if search_type == "leak" and result.get("has_multiple_files"):
                 # Send summary first
                 await event.respond(result["result"], parse_mode="md")
                 
-                # Send JSON file
-                for file_data in result.get("files", []):
-                    if file_data.get("raw_bytes") and file_data.get("file_type") == "json":
-                        await event.respond(
-                            file=file_data["raw_bytes"],
-                            caption=f"📁 **JSON DATA**\nQuery: `{query}`"
-                        )
+                # Send JSON file if available
+                if result.get("json_bytes"):
+                    await event.respond(
+                        file=result["json_bytes"],
+                        caption=f"📁 **JSON DATA**\nQuery: `{query}`"
+                    )
                 
-                # Send TXT content as text (not file)
-                for file_data in result.get("files", []):
-                    if file_data.get("content") and file_data.get("file_type") == "txt":
-                        txt_content = file_data["content"]
-                        # Clean the text content
-                        txt_content = TextProcessor.clean_content(txt_content, "leak")
-                        
-                        # Split long text into chunks
-                        text_chunks = TextProcessor.split_long_text(txt_content)
-                        
-                        # Send first chunk as reply
-                        if text_chunks:
-                            await event.respond(
-                                f"📄 **TEXT REPORT**\nQuery: `{query}`\n\n{text_chunks[0]}",
-                                parse_mode="md"
-                            )
-                            
-                            # Send remaining chunks
-                            for chunk in text_chunks[1:]:
-                                await event.respond(chunk, parse_mode="md")
+                # Send TXT file if available
+                if result.get("txt_bytes"):
+                    await event.respond(
+                        file=result["txt_bytes"],
+                        caption=f"📄 **TEXT REPORT**\nQuery: `{query}`"
+                    )
+                
+                # Also send TXT content as message if it's small
+                if result.get("txt_data") and len(result["txt_data"]) < 2000:
+                    await event.respond(
+                        f"📄 **TEXT REPORT CONTENT**\n\n{result['txt_data'][:1500]}...",
+                        parse_mode="md"
+                    )
             else:
+                # Regular search result
                 await event.respond(result["result"], parse_mode="md")
             
             await db_manager.update_searches(user_id, search_type, query, True)
@@ -4042,7 +4095,7 @@ async def main_menu_callback(event):
             f"🛠️ **SELECT SERVICE**"
         )
         
-        # Get keyboard - ONE COMMAND PER LINE
+        # Get keyboard - ONE COMMAND PER LINE with LEAK first
         buttons = OneLineKeyboard.main_menu(is_admin)
         
         await event.edit(message, buttons=buttons, parse_mode="md")
@@ -4255,7 +4308,7 @@ async def leak_command_handler(event):
         leak_warning = (
             "🚀 **ADVANCED OSINT SEARCH INITIATED**\n\n"
             f"🔍 **Query:** `{query}`\n"
-            f"⚡ **Processing:** Ultra-fast (5 seconds)\n"
+            f"⚡ **Processing:** Ultra-fast (5-10 seconds)\n"
             f"📁 **Output:** JSON + TXT files\n"
             f"💎 **Cost:** 3 credits\n\n"
             f"⚠️ **Note:** For phone numbers, include country code (e.g., 917204764637)\n"
@@ -4276,34 +4329,26 @@ async def leak_command_handler(event):
                 # Send summary first
                 await event.respond(result["result"], parse_mode="md")
                 
-                # Send JSON file
-                for file_data in result.get("files", []):
-                    if file_data.get("raw_bytes") and file_data.get("file_type") == "json":
-                        await event.respond(
-                            file=file_data["raw_bytes"],
-                            caption=f"📁 **JSON DATA**\nQuery: `{query}`"
-                        )
+                # Send JSON file if available
+                if result.get("json_bytes"):
+                    await event.respond(
+                        file=result["json_bytes"],
+                        caption=f"📁 **JSON DATA**\nQuery: `{query}`"
+                    )
                 
-                # Send TXT content as text (not file)
-                for file_data in result.get("files", []):
-                    if file_data.get("content") and file_data.get("file_type") == "txt":
-                        txt_content = file_data["content"]
-                        # Clean the text content
-                        txt_content = TextProcessor.clean_content(txt_content, "leak")
-                        
-                        # Split long text into chunks
-                        text_chunks = TextProcessor.split_long_text(txt_content)
-                        
-                        # Send first chunk as reply
-                        if text_chunks:
-                            await event.respond(
-                                f"📄 **TEXT REPORT**\nQuery: `{query}`\n\n{text_chunks[0]}",
-                                parse_mode="md"
-                            )
-                            
-                            # Send remaining chunks
-                            for chunk in text_chunks[1:]:
-                                await event.respond(chunk, parse_mode="md")
+                # Send TXT file if available
+                if result.get("txt_bytes"):
+                    await event.respond(
+                        file=result["txt_bytes"],
+                        caption=f"📄 **TEXT REPORT**\nQuery: `{query}`"
+                    )
+                
+                # Also send TXT content as message if it's small
+                if result.get("txt_data") and len(result["txt_data"]) < 2000:
+                    await event.respond(
+                        f"📄 **TEXT REPORT CONTENT**\n\n{result['txt_data'][:1500]}...",
+                        parse_mode="md"
+                    )
             else:
                 await event.respond(result["result"], parse_mode="md")
             
@@ -4359,7 +4404,7 @@ async def main():
         # Initialize search engine
         search_engine = SearchEngine(db_manager, db_manager)
         
-        # Resolve groups
+        # Resolve groups - LEAK GROUP FIRST
         logger.info("📡 Connecting to intelligence networks...")
         for group_name, group_data in GROUP_PRIORITIES.items():
             if group_data["enabled"]:
