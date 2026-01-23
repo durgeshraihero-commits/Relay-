@@ -152,8 +152,8 @@ GROUP_PRIORITIES = {
     },
     "advanced": {
         "name": "🚀 Advanced Search Engine",
-        "identifier": -1001234567890,  # Replace with your advanced group ID
-        "timeout": 5,
+        "identifier": "IntelXGroup",  # Replace with your advanced group ID
+        "timeout": 30,
         "weight": 15,
         "enabled": True,
         "entity": None,
@@ -182,7 +182,7 @@ SUBSCRIPTION_PLANS = {
     },
     "standard": {
         "name": "⭐ Standard Plan",
-        "price": 250,
+        "price": 249,
         "searches": 30,
         "validity": "7 days",
         "features": ["10 premium searches", "Extended data sources", "Priority processing"],
@@ -191,18 +191,18 @@ SUBSCRIPTION_PLANS = {
     },
     "premium": {
         "name": "👑 Premium Plan",
-        "price": 400,
+        "price": 499,
         "searches": "∞",
-        "validity": "7 days",
+        "validity": "30 days",
         "features": ["Unlimited searches", "All data sources", "Priority processing", "24/7 support"],
         "icon": "👑",
         "color": "#9B59B6"
     },
     "enterprise": {
         "name": "🚀 Enterprise Plan",
-        "price": 600,
+        "price": 799,
         "searches": "∞",
-        "validity": "30 days",
+        "validity": "50 days",
         "features": ["Unlimited searches", "All premium sources", "Highest priority", "Dedicated support", "API access"],
         "icon": "🚀",
         "color": "#E74C3C"
@@ -3076,24 +3076,24 @@ async def search_callback(event):
                 "You have no search credits remaining.\n\n"
                 "💎 **UPGRADE TO PREMIUM**\n\n"
                 "🔰 **Basic Plan** - ₹100\n"
-                "├─ 5 Premium Searches\n"
+                "├─ 10 Premium Searches\n"
                 "├─ Standard Databases\n"
                 "└─ 7-day Access\n\n"
-                "⭐ **Standard Plan** - ₹200\n"
-                "├─ 10 Premium Searches\n"
+                "⭐ **Standard Plan** - ₹249\n"
+                "├─ 30 Premium Searches\n"
                 "├─ Extended Databases\n"
                 "└─ Priority Processing\n\n"
-                "👑 **Premium Plan** - ₹500\n"
+                "👑 **Premium Plan** - ₹499\n"
                 "├─ Unlimited Searches\n"
                 "├─ All Databases\n"
                 "├─ Priority Processing\n"
                 "└─ 24/7 Support\n\n"
-                "🚀 **Enterprise Plan** - ₹800\n"
+                "🚀 **Enterprise Plan** - ₹799\n"
                 "├─ Unlimited Searches\n"
                 "├─ Premium Sources\n"
                 "├─ Highest Priority\n"
                 "├─ Dedicated Support\n"
-                "└─ 30-day Access\n\n"
+                "└─ 50-day Access\n\n"
                 "Select a plan to continue:",
                 buttons=OneLineKeyboard.subscription_plans(),
                 parse_mode="md"
@@ -3210,29 +3210,29 @@ async def premium_callback(event):
             "💎 **DARKBOXES PREMIUM PLANS**\n"
             "═══════════════════════\n\n"
             "🔰 **BASIC PLAN** - ₹100\n"
-            "├─ 5 Premium Searches\n"
+            "├─ 10 Premium Searches\n"
             "├─ Standard Databases\n"
             "├─ 7-day Access\n"
             "└─ Basic Support\n\n"
-            "⭐ **STANDARD PLAN** - ₹250\n"
-            "├─ 10 Premium Searches\n"
+            "⭐ **STANDARD PLAN** - ₹249\n"
+            "├─ 30 Premium Searches\n"
             "├─ Extended Databases\n"
             "├─ Priority Processing\n"
             "├─ 7-day Access\n"
             "└─ Email Support\n\n"
-            "👑 **PREMIUM PLAN** - ₹400\n"
+            "👑 **PREMIUM PLAN** - ₹499\n"
             "├─ Unlimited Searches\n"
             "├─ All Data Sources\n"
             "├─ Highest Priority\n"
             "├─ 24/7 Support\n"
-            "├─ 7-day Access\n"
+            "├─ 30-day Access\n"
             "└─ Advanced Features\n\n"
-            "🚀 **ENTERPRISE PLAN** - ₹600\n"
+            "🚀 **ENTERPRISE PLAN** - ₹799\n"
             "├─ Unlimited Searches\n"
             "├─ Premium Sources\n"
             "├─ Real-time Updates\n"
             "├─ Dedicated Support\n"
-            "├─ 30-day Access\n"
+            "├─ 50-day Access\n"
             "└─ API Access (Coming Soon)\n\n"
             "📞 **Contact @darkboxesAdmin to purchase**\n"
             "💳 **UPI ID:** `{config.UPI_ID}`\n\n"
