@@ -2630,7 +2630,7 @@ class SearchEngine:
     async def handle_incoming_message(self, event):
         """Handle incoming messages for search responses"""
         try:
-                        message = event.message
+            message = event.message
             chat_id = event.chat_id
             text = message.text or message.raw_text or ""
             
