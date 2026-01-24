@@ -2603,20 +2603,20 @@ class SearchEngine:
                         return
             
             # Check for file messages in same chat
-                for search_id, search_info in list(self.active_searches.items()):
-                    try:
-                        chat_match = False
-                        if hasattr(search_info["group"]["entity"], 'id'):
-                            chat_match = event.chat_id == search_info["group"]["entity"].id
-                        elif search_info.get("chat_id"):
-                            chat_match = str(event.chat_id) == str(search_info["chat_id"])
+            for search_id, search_info in list(self.active_searches.items()):
+                try:
+                    chat_match = False
+                    if hasattr(search_info["group"]["entity"], 'id'):
+                        chat_match = event.chat_id == search_info["group"]["entity"].id
+                    elif search_info.get("chat_id"):
+                        chat_match = str(event.chat_id) == str(search_info["chat_id"])
                     
-                        if chat_match:
-                            file_check = await self._check_and_process_file(message, search_info)
-                            if file_check is not None:
-                                logger.info(f"📁 Found file in {search_info['group']['name']}")
-                                await self._process_search_response(search_id, search_info, message)
-                            return
+                    if chat_match:
+                        file_check = await self._check_and_process_file(message, search_info)
+                        if file_check is not None:
+                            logger.info(f"📁 Found file in {search_info['group']['name']}")
+                            await self._process_search_response(search_id, search_info, message)
+                        return
                 except:
                     continue
                     
