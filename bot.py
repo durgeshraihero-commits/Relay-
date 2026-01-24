@@ -2603,100 +2603,99 @@ class SearchEngine:
                         return
             
             # Check for file messages in same chat
-            for search_id, search_info in list(self.active_searches.items()):
-                try:
-                    chat_match = False
-                    if hasattr(search_info["group"]["entity"], 'id'):
-                        chat_match = event.chat_id == search_info["group"]["entity"].id
-                    elif search_info.get("chat_id"):
-                        chat_match = str(event.chat_id) == str(search_info["chat_id"])
+                for search_id, search_info in list(self.active_searches.items()):
+                    try:
+                        chat_match = False
+                        if hasattr(search_info["group"]["entity"], 'id'):
+                            chat_match = event.chat_id == search_info["group"]["entity"].id
+                        elif search_info.get("chat_id"):
+                            chat_match = str(event.chat_id) == str(search_info["chat_id"])
                     
-                    if chat_match:
-                        file_check = await self._check_and_process_file(message, search_info)
-                        if file_check is not None:
-                            logger.info(f"📁 Found file in {search_info['group']['name']}")
-                            await self._process_search_response(search_id, search_info, message)
+                        if chat_match:
+                            file_check = await self._check_and_process_file(message, search_info)
+                            if file_check is not None:
+                                logger.info(f"📁 Found file in {search_info['group']['name']}")
+                                await self._process_search_response(search_id, search_info, message)
                             return
                 except:
                     continue
                     
         except Exception as e:
             logger.error(f"❌ Error handling incoming message: {e}")
-    
+
     async def _check_and_process_file(self, message, search_info: Dict) -> Optional[Dict]:
-    """Check if message has file and process it"""
-    try:
-        # First check for actual file/document
-        if message.media and hasattr(message.media, 'document'):
-            logger.info(f"📁 Found document media in message")
-            return await self._process_file(message, search_info)
+        """Check if message has file and process it"""
+        try:
+            # First check for actual file/document
+            if message.media and hasattr(message.media, 'document'):
+                logger.info(f"📁 Found document media in message")
+                return await self._process_file(message, search_info)
         
-        if hasattr(message, 'file') and message.file:
-            logger.info(f"📁 Found file attribute in message")
-            return await self._process_file(message, search_info)
+            if hasattr(message, 'file') and message.file:
+                logger.info(f"📁 Found file attribute in message")
+                return await self._process_file(message, search_info)
         
-        if message.document:
-            logger.info(f"📁 Found document in message")
-            return await self._process_file(message, search_info)
+            if message.document:
+                logger.info(f"📁 Found document in message")
+                return await self._process_file(message, search_info)
         
-        # Check for text that might be a TXT file
-        text = message.text or message.raw_text or ""
-        if text and len(text) > 1000:
-            # Check for TXT file indicators in the text
-            txt_indicators = [
-                'Full results available as JSON file',
-                'Total length:',
-                'TRUNCATED - DATA TOO LONG',
-                '───────────────────────',
-                '━━━━━━━━━━━━━━━━━━━━━━━━',
-                'Service: leak',
-                'Requested by:',
-                '👤 ʀᴇǫᴜᴇꜱᴛᴇᴅ ʙʏ:',
-                '🔍 ǫᴜᴇʀʏ:',
-                '⏰ ᴛɪᴍᴇ:'
-            ]
+            # Check for text that might be a TXT file
+            text = message.text or message.raw_text or ""
+            if text and len(text) > 1000:
+                # Check for TXT file indicators in the text
+                txt_indicators = [
+                    'Full results available as JSON file',
+                    'Total length:',
+                    'TRUNCATED - DATA TOO LONG',
+                    '───────────────────────',
+                    '━━━━━━━━━━━━━━━━━━━━━━━━',
+                    'Service: leak',
+                    'Requested by:',
+                    '👤 ʀᴇǫᴜᴇꜱᴛᴇᴅ ʙʏ:',
+                    '🔍 ǫᴜᴇʀʏ:',
+                    '⏰ ᴛɪᴍᴇ:'
+                ]
             
-            indicator_count = 0
-            for indicator in txt_indicators:
-                if indicator in text:
-                    indicator_count += 1
+                indicator_count = 0
+                for indicator in txt_indicators:
+                    if indicator in text:
+                        indicator_count += 1
             
-            # If multiple indicators found, treat as TXT file
-            if indicator_count >= 3:
-                logger.info(f"📄 Detected TXT file content in message text ({indicator_count} indicators)")
+                # If multiple indicators found, treat as TXT file
+                if indicator_count >= 3:
+                    logger.info(f"📄 Detected TXT file content in message text ({indicator_count} indicators)")
                 
-                # Clean the text content
-                cleaned_content = TextProcessor.clean_content(text, search_info["search_type"])
+                    # Clean the text content
+                    cleaned_content = TextProcessor.clean_content(text, search_info["search_type"])
                 
-                result = {
-                    "success": True,
-                    "result": None,
-                    "has_file": True,
-                    "content": cleaned_content,
-                    "raw_bytes": cleaned_content.encode('utf-8'),
-                    "filename": f"leak_{search_info['query']}_{int(time.time())}.txt",
-                    "is_text_based": True
-                }
+                    result = {
+                        "success": True,
+                        "result": None,
+                        "has_file": True,
+                        "content": cleaned_content,
+                        "raw_bytes": cleaned_content.encode('utf-8'),
+                        "filename": f"leak_{search_info['query']}_{int(time.time())}.txt",
+                        "is_text_based": True
+                    }
                 
-                # For non-leak searches, format the result
-                if search_info["search_type"] != "leak":
-                    formatted_result = PremiumFormatter.format_result(
-                        cleaned_content,
-                        search_info["search_type"],
-                        search_info["query"],
-                        search_info["group"]["name"]
-                    )
-                    result["result"] = formatted_result
+                    # For non-leak searches, format the result
+                    if search_info["search_type"] != "leak":
+                        formatted_result = PremiumFormatter.format_result(
+                            cleaned_content,
+                            search_info["search_type"],
+                            search_info["query"],
+                            search_info["group"]["name"]
+                        )
+                        result["result"] = formatted_result
                 
-                logger.info(f"✅ Processed TXT content with {len(cleaned_content)} characters")
-                return result
+                    logger.info(f"✅ Processed TXT content with {len(cleaned_content)} characters")
+                    return result
         
-        return None
+            return None
         
     except Exception as e:
         logger.error(f"❌ Error checking for file: {e}")
         return None
-
     async def _process_search_response(self, search_id: str, search_info: Dict, message):
         """Process a search response message"""
         try:
