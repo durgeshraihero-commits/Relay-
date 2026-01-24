@@ -68,7 +68,6 @@ class BotConfig:
     GROUP_TIMEOUT: int = int(os.getenv("GROUP_TIMEOUT", "45"))
     FETCH_WAIT_TIME: int = int(os.getenv("FETCH_WAIT_TIME", "3"))
     MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "20"))
-    LEAK_SEARCH_TIMEOUT: int = int(os.getenv("LEAK_SEARCH_TIMEOUT", "30"))
     
     # Credits and rewards
     NEW_USER_CREDITS: int = int(os.getenv("NEW_USER_CREDITS", "1"))
@@ -216,7 +215,8 @@ SEARCH_COMMANDS = {
         "cost": 1,
         "priority": "primary",
         "icon": "📱",
-        "category": "identity"
+        "category": "identity",
+        "groups": ["primary", "secondary", "tertiary"]
     },
     "family": {
         "name": "👨‍👩‍👧‍👦 Family Network",
@@ -227,7 +227,8 @@ SEARCH_COMMANDS = {
         "cost": 1,
         "priority": "primary",
         "icon": "👨‍👩‍👧‍👦",
-        "category": "identity"
+        "category": "identity",
+        "groups": ["primary", "secondary"]
     },
     "aadhar": {
         "name": "🆔 Aadhar Comprehensive",
@@ -238,7 +239,8 @@ SEARCH_COMMANDS = {
         "cost": 2,
         "priority": "primary",
         "icon": "🆔",
-        "category": "finance"
+        "category": "finance",
+        "groups": ["primary", "secondary", "tertiary"]
     },
     "vehicle": {
         "name": "🚗 Vehicle Intelligence",
@@ -249,7 +251,8 @@ SEARCH_COMMANDS = {
         "cost": 2,
         "priority": "secondary",
         "icon": "🚗",
-        "category": "assets"
+        "category": "assets",
+        "groups": ["primary", "secondary"]
     },
     "upi": {
         "name": "💳 UPI Financial Intelligence",
@@ -260,7 +263,8 @@ SEARCH_COMMANDS = {
         "cost": 1,
         "priority": "secondary",
         "icon": "💳",
-        "category": "finance"
+        "category": "finance",
+        "groups": ["primary", "secondary"]
     },
     "email": {
         "name": "📧 Email Intelligence",
@@ -271,7 +275,8 @@ SEARCH_COMMANDS = {
         "cost": 1,
         "priority": "secondary",
         "icon": "📧",
-        "category": "digital"
+        "category": "digital",
+        "groups": ["primary", "secondary", "tertiary"]
     },
     "telegram": {
         "name": "📲 Telegram Intelligence",
@@ -283,7 +288,8 @@ SEARCH_COMMANDS = {
         "cost": 2,
         "priority": "primary",
         "icon": "📲",
-        "category": "digital"
+        "category": "digital",
+        "groups": ["primary", "secondary"]
     },
     "imei": {
         "name": "📱 Device Intelligence",
@@ -294,7 +300,8 @@ SEARCH_COMMANDS = {
         "cost": 2,
         "priority": "secondary",
         "icon": "📱",
-        "category": "assets"
+        "category": "assets",
+        "groups": ["primary", "secondary"]
     },
     "gst": {
         "name": "🏢 Business Intelligence",
@@ -305,7 +312,8 @@ SEARCH_COMMANDS = {
         "cost": 1,
         "priority": "secondary",
         "icon": "🏢",
-        "category": "business"
+        "category": "business",
+        "groups": ["primary", "secondary"]
     },
     "insta": {
         "name": "📸 Instagram Intelligence",
@@ -316,7 +324,8 @@ SEARCH_COMMANDS = {
         "cost": 1,
         "priority": "tertiary",
         "icon": "📸",
-        "category": "social"
+        "category": "social",
+        "groups": ["primary", "secondary", "tertiary"]
     },
     "pak": {
         "name": "🌐 Pakistan Intelligence",
@@ -327,7 +336,8 @@ SEARCH_COMMANDS = {
         "cost": 3,
         "priority": "tertiary",
         "icon": "🌐",
-        "category": "international"
+        "category": "international",
+        "groups": ["primary", "tertiary"]
     },
     "ip": {
         "name": "🌍 IP Location",
@@ -338,7 +348,8 @@ SEARCH_COMMANDS = {
         "cost": 1,
         "priority": "secondary",
         "icon": "🌍",
-        "category": "digital"
+        "category": "digital",
+        "groups": ["primary", "secondary"]
     },
     "ifsc": {
         "name": "🏦 IFSC Code Lookup",
@@ -349,7 +360,8 @@ SEARCH_COMMANDS = {
         "cost": 1,
         "priority": "secondary",
         "icon": "🏦",
-        "category": "finance"
+        "category": "finance",
+        "groups": ["primary", "secondary"]
     },
     "leak": {
         "name": "🚀 ADVANCED OSINT TOOL",
@@ -361,7 +373,7 @@ SEARCH_COMMANDS = {
         "priority": "advanced",
         "icon": "🚀",
         "category": "advanced",
-        "group": "advanced"
+        "groups": ["advanced"]
     }
 }
 
@@ -520,8 +532,29 @@ class TextProcessor:
         return any(keyword in text_lower for keyword in keywords)
     
     @staticmethod
+    def is_leak_result_message(text: str) -> bool:
+        """Check if message is a leak search result"""
+        if not text:
+            return False
+        
+        indicators = [
+            '🔓 ʟᴇᴀᴋᴇᴅ ᴅᴀᴛᴀ ꜱᴇᴀʀᴄʜ',
+            'TRUNCATED - DATA TOO LONG',
+            'Full results available as JSON file',
+            '📁 Full JSON results for',
+            'Service: leak',
+            '👤 ʀᴇǫᴜᴇꜱᴛᴇᴅ ʙʏ:',
+            '"List":',
+            '"HiTeckGroop',
+            '"TrueCaller'
+        ]
+        
+        count = sum(1 for ind in indicators if ind in text)
+        return count >= 2
+    
+    @staticmethod
     def clean_content(content: str, search_type: str = None) -> str:
-        """Clean and format content - remove links, usernames, and promotional content"""
+        """Clean and format content - remove usernames and links"""
         if not content:
             return ""
         
@@ -565,56 +598,6 @@ class TextProcessor:
         content = re.sub(r' {2,}', ' ', content)
         
         return content.strip()
-    
-    @staticmethod
-    def clean_leak_content(content: str) -> str:
-        """Special cleaning for leak search results - removes links and usernames but preserves data"""
-        if not content:
-            return ""
-        
-        # Patterns to remove (links and usernames)
-        remove_patterns = [
-            r'https?://\S+',
-            r'www\.\S+',
-            r't\.me/\S+',
-            r'tg://\S+',
-            r'@[a-zA-Z0-9_]+',
-            r'powered by.*',
-            r'developed by.*',
-            r'created by.*',
-            r'designed by.*',
-            r'©.*',
-            r'copyright.*',
-            r'join.*channel',
-            r'subscribe.*',
-            r'follow.*',
-            r'contact.*admin',
-            r'auto-delete.*',
-            r'file generated.*',
-            r'download.*file',
-            r'click.*download',
-            r'designed & powered.*',
-        ]
-        
-        for pattern in remove_patterns:
-            content = re.sub(pattern, '', content, flags=re.IGNORECASE)
-        
-        # Clean up empty lines but preserve structure
-        content = re.sub(r'\n{4,}', '\n\n\n', content)
-        content = re.sub(r' {3,}', '  ', content)
-        
-        # Remove lines that only contain special characters
-        lines = content.split('\n')
-        cleaned_lines = []
-        for line in lines:
-            stripped = line.strip()
-            # Keep lines that have actual content
-            if stripped and not re.match(r'^[─━═┌┐└┘├┤┬┴┼│║╔╗╚╝╠╣╦╩╬\s]+$', stripped):
-                cleaned_lines.append(line)
-            elif not stripped:
-                cleaned_lines.append('')  # Keep empty lines for structure
-        
-        return '\n'.join(cleaned_lines).strip()
     
     @staticmethod
     def split_long_text(text: str, max_length: int = 4000) -> List[str]:
@@ -1079,7 +1062,7 @@ class DatabaseManager:
                         "$set": {
                             "subscription": plan_id,
                             "subscription_expiry": expiry_date.isoformat(),
-                            "searches_remaining": 0  # Reset as unlimited
+                            "searches_remaining": 0
                         }
                     }
                 )
@@ -1221,13 +1204,12 @@ class OneLineKeyboard:
             "phone", "family", "aadhar", "vehicle", 
             "upi", "email", "telegram", "imei",
             "gst", "insta", "pak", "ip", "ifsc",
-            "leak"  # Advanced OSINT tool - placed at the end for emphasis
+            "leak"
         ]
         
         for cmd_key in commands_in_order:
             if cmd_key in SEARCH_COMMANDS:
                 cmd = SEARCH_COMMANDS[cmd_key]
-                # Special emphasis for leak command
                 if cmd_key == "leak":
                     button_text = f"🚀 ADVANCED OSINT TOOL"
                 else:
@@ -1388,7 +1370,6 @@ class AdminPanelHandler:
         self.bot = bot_client
         self.admin_users = set()
         
-        # Load admin users from database
         asyncio.create_task(self.load_admin_users())
     
     async def load_admin_users(self):
@@ -1419,91 +1400,65 @@ class AdminPanelHandler:
             
             if data == "admin_panel":
                 await self.show_admin_panel(event)
-            
             elif data == "admin_today":
                 await self.show_today_stats(event)
-            
             elif data.startswith("admin_user_list_"):
                 page = int(data.split("_")[-1])
                 await self.show_user_list(event, page)
-            
             elif data == "admin_users":
                 await self.show_user_management(event)
-            
             elif data == "admin_top_users":
                 await self.show_top_users(event)
-            
             elif data == "admin_referrals":
                 await self.show_referral_stats(event)
-            
             elif data == "admin_analytics":
                 await self.show_analytics_panel(event)
-            
             elif data == "admin_command_stats":
                 await self.show_command_stats(event)
-            
             elif data == "admin_top_commands":
                 await self.show_top_commands(event)
-            
             elif data == "admin_user_activity":
                 await self.show_user_activity(event)
-            
             elif data == "admin_graph_daily":
                 await self.generate_daily_graph(event)
-            
             elif data == "admin_payments":
                 await self.show_payment_panel(event)
-            
             elif data == "admin_today_payments":
                 await self.show_today_payments(event)
-            
             elif data == "admin_total_revenue":
                 await self.show_total_revenue(event)
-            
             elif data == "admin_graph_revenue":
                 await self.generate_revenue_graph(event)
-            
             elif data == "admin_search_user":
                 await self.ask_for_user_search(event)
-            
             elif data == "admin_broadcast":
                 await self.ask_for_broadcast(event)
-            
             elif data == "admin_ban":
                 await self.ask_for_ban_user(event)
-            
             elif data == "admin_admin":
                 await self.ask_for_admin_management(event)
-            
             elif data == "admin_add_credits":
                 await self.ask_for_add_credits(event)
-            
             elif data == "admin_settings":
                 await self.show_bot_settings(event)
-            
             elif data == "admin_export":
                 await self.export_data(event)
-            
             elif data.startswith("confirm_ban_"):
                 target_id = int(data.split("_")[-1])
                 await self.confirm_ban_user(event, target_id)
-            
             elif data.startswith("confirm_unban_"):
                 target_id = int(data.split("_")[-1])
                 await self.confirm_unban_user(event, target_id)
-            
             elif data.startswith("confirm_add_admin_"):
                 target_id = int(data.split("_")[-1])
                 await self.confirm_add_admin(event, target_id)
-            
             elif data.startswith("confirm_remove_admin_"):
                 target_id = int(data.split("_")[-1])
                 await self.confirm_remove_admin(event, target_id)
-            
             elif data.startswith("user_detail_"):
                 target_id = int(data.split("_")[-1])
                 await self.show_user_detail(event, target_id)
-            
+                
         except Exception as e:
             logger.error(f"❌ Error in admin callback: {e}")
             await event.answer("❌ Error processing request", alert=True)
@@ -1515,7 +1470,6 @@ class AdminPanelHandler:
             "📊 **Quick Stats**\n"
         )
         
-        # Get quick stats
         try:
             today_stats = await self.db.admin_db.get_today_stats()
             admin_text += f"├─ Today's Users: {today_stats['new_users']}\n"
@@ -1689,7 +1643,6 @@ class AdminPanelHandler:
             stats_text = "🔍 **COMMAND USAGE STATISTICS**\n"
             stats_text += "═══════════════════════\n\n"
             
-            # All-time stats
             stats_text += "📊 **ALL-TIME STATS**\n"
             total_searches = sum(cmd['count'] for cmd in command_stats['all_time'])
             stats_text += f"Total Searches: {total_searches}\n\n"
@@ -1704,7 +1657,6 @@ class AdminPanelHandler:
                     f"  └─ Usage: {percentage:.1f}%\n\n"
                 )
             
-            # Today's stats
             if command_stats['today']:
                 stats_text += "📅 **TODAY'S STATS**\n"
                 for cmd in command_stats['today'][:5]:
@@ -1721,19 +1673,14 @@ class AdminPanelHandler:
         try:
             command_stats = await self.db.admin_db.get_command_stats()
             
-            top_text = "🎯 **MOST USED COMMANDS**\n"
-            top_text += "═══════════════════════\n\n"
-            
-            # Prepare data for bar chart
             commands = []
             counts = []
             
             for cmd in command_stats['all_time'][:8]:
                 cmd_name = SEARCH_COMMANDS.get(cmd['command'], {}).get('name', cmd['command'])
-                commands.append(cmd_name[:15])  # Truncate long names
+                commands.append(cmd_name[:15])
                 counts.append(cmd['count'])
             
-            # Create bar chart
             plt.figure(figsize=(10, 6))
             bars = plt.bar(commands, counts, color='skyblue')
             plt.title('Most Used Commands', fontsize=14, fontweight='bold')
@@ -1741,7 +1688,6 @@ class AdminPanelHandler:
             plt.ylabel('Number of Searches', fontsize=12)
             plt.xticks(rotation=45, ha='right')
             
-            # Add value labels on bars
             for bar in bars:
                 height = bar.get_height()
                 plt.text(bar.get_x() + bar.get_width()/2., height,
@@ -1749,13 +1695,11 @@ class AdminPanelHandler:
             
             plt.tight_layout()
             
-            # Save to bytes
             buf = BytesIO()
             plt.savefig(buf, format='png', dpi=100)
             buf.seek(0)
             plt.close()
             
-            # Send image
             await event.delete()
             await self.bot.send_file(
                 event.chat_id,
@@ -1771,7 +1715,6 @@ class AdminPanelHandler:
     async def show_user_activity(self, event):
         """Show user activity patterns"""
         try:
-            # Get activity data for last 7 days
             seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
             
             pipeline = [
@@ -1798,8 +1741,7 @@ class AdminPanelHandler:
                                buttons=OneLineKeyboard.back_to_admin())
                 return
             
-            # Create visualization
-            dates = [data['date'][5:] for data in activity_data]  # Remove year
+            dates = [data['date'][5:] for data in activity_data]
             searches = [data['searches'] for data in activity_data]
             users = [data['unique_users'] for data in activity_data]
             
@@ -1819,20 +1761,17 @@ class AdminPanelHandler:
             plt.grid(True, alpha=0.3)
             plt.tight_layout()
             
-            # Add value labels
             for i, (s, u) in enumerate(zip(searches, users)):
                 plt.text(i - width/2, s + max(searches)*0.01, str(s), 
                         ha='center', va='bottom', fontsize=8)
                 plt.text(i + width/2, u + max(users)*0.01, str(u), 
                         ha='center', va='bottom', fontsize=8)
             
-            # Save to bytes
             buf = BytesIO()
             plt.savefig(buf, format='png', dpi=100)
             buf.seek(0)
             plt.close()
             
-            # Calculate totals
             total_searches = sum(searches)
             total_users = sum(users)
             avg_searches = total_searches / len(activity_data)
@@ -1846,7 +1785,6 @@ class AdminPanelHandler:
                 f"└─ Peak Day: {dates[searches.index(max(searches))]} ({max(searches)} searches)"
             )
             
-            # Send image
             await event.delete()
             await self.bot.send_file(
                 event.chat_id,
@@ -1863,7 +1801,6 @@ class AdminPanelHandler:
     async def generate_daily_graph(self, event):
         """Generate daily activity graph"""
         try:
-            # Get daily stats for last 30 days
             thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
             
             pipeline = [
@@ -1890,11 +1827,9 @@ class AdminPanelHandler:
                                buttons=OneLineKeyboard.back_to_admin())
                 return
             
-            # Prepare data
-            dates = [data['date'][5:] for data in daily_data]  # Remove year
+            dates = [data['date'][5:] for data in daily_data]
             searches = [data['searches'] for data in daily_data]
             
-            # Create line chart
             plt.figure(figsize=(14, 7))
             plt.plot(dates, searches, marker='o', linewidth=2, markersize=6, color='royalblue')
             plt.fill_between(dates, searches, alpha=0.3, color='skyblue')
@@ -1905,7 +1840,6 @@ class AdminPanelHandler:
             plt.xticks(rotation=45, ha='right')
             plt.grid(True, alpha=0.3)
             
-            # Highlight max point
             max_idx = searches.index(max(searches))
             plt.plot(dates[max_idx], searches[max_idx], 'ro', markersize=10)
             plt.annotate(f'Peak: {searches[max_idx]}', 
@@ -1915,12 +1849,10 @@ class AdminPanelHandler:
             
             plt.tight_layout()
             
-            # Calculate statistics
             total_searches = sum(searches)
             avg_searches = total_searches / len(searches)
             growth = ((searches[-1] - searches[0]) / searches[0] * 100) if searches[0] > 0 else 0
             
-            # Save to bytes
             buf = BytesIO()
             plt.savefig(buf, format='png', dpi=100)
             buf.seek(0)
@@ -1941,7 +1873,6 @@ class AdminPanelHandler:
             else:
                 caption += "📉 Negative growth trend detected\n"
             
-            # Send image
             await event.delete()
             await self.bot.send_file(
                 event.chat_id,
@@ -1974,9 +1905,7 @@ class AdminPanelHandler:
         """Show today's payment statistics"""
         try:
             today_stats = await self.db.admin_db.get_today_stats()
-            payment_stats = await self.db.admin_db.get_payment_stats()
             
-            # Get today's payments
             today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             today_payments = await asyncio.get_running_loop().run_in_executor(
                 None, lambda: list(self.db.db.payments.find({
@@ -1991,8 +1920,10 @@ class AdminPanelHandler:
             payment_text += f"📊 **Summary**\n"
             payment_text += f"├─ Total Revenue: ₹{today_stats['total_payments']}\n"
             payment_text += f"├─ Number of Payments: {today_stats['payment_count']}\n"
-            avg_payment = today_stats['total_payments'] / today_stats['payment_count'] if today_stats['payment_count'] > 0 else 0
-            payment_text += f"└─ Average Payment: ₹{avg_payment:.2f}\n\n"
+            if today_stats['payment_count'] > 0:
+                payment_text += f"└─ Average Payment: ₹{today_stats['total_payments']/today_stats['payment_count']:.2f}\n\n"
+            else:
+                payment_text += f"└─ Average Payment: ₹0\n\n"
             
             if today_payments:
                 payment_text += "📋 **Recent Payments**\n"
@@ -2057,15 +1988,12 @@ class AdminPanelHandler:
                                buttons=OneLineKeyboard.back_to_admin())
                 return
             
-            # Prepare data
-            dates = [day['_id'][5:] for day in payment_stats['daily_stats']]  # Remove year
+            dates = [day['_id'][5:] for day in payment_stats['daily_stats']]
             amounts = [day['total_amount'] for day in payment_stats['daily_stats']]
             counts = [day['count'] for day in payment_stats['daily_stats']]
             
-            # Create figure with two subplots
             fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
             
-            # Revenue line chart
             ax1.plot(dates, amounts, marker='o', linewidth=2, markersize=6, color='green')
             ax1.fill_between(dates, amounts, alpha=0.3, color='lightgreen')
             ax1.set_title('Daily Revenue (Last 30 Days)', fontsize=14, fontweight='bold')
@@ -2073,7 +2001,6 @@ class AdminPanelHandler:
             ax1.grid(True, alpha=0.3)
             ax1.tick_params(axis='x', rotation=45)
             
-            # Add value labels for peaks
             for i, (date, amount) in enumerate(zip(dates, amounts)):
                 if amount == max(amounts):
                     ax1.annotate(f'₹{amount}', xy=(date, amount),
@@ -2081,7 +2008,6 @@ class AdminPanelHandler:
                                 fontsize=10, color='red', fontweight='bold',
                                 ha='center')
             
-            # Payment count bar chart
             bars = ax2.bar(dates, counts, color='orange', alpha=0.7)
             ax2.set_title('Daily Payment Count', fontsize=14, fontweight='bold')
             ax2.set_xlabel('Date', fontsize=12)
@@ -2089,7 +2015,6 @@ class AdminPanelHandler:
             ax2.grid(True, alpha=0.3)
             ax2.tick_params(axis='x', rotation=45)
             
-            # Add value labels on bars
             for bar in bars:
                 height = bar.get_height()
                 if height > 0:
@@ -2098,12 +2023,11 @@ class AdminPanelHandler:
             
             plt.tight_layout()
             
-            # Calculate statistics
             total_revenue = sum(amounts)
             total_payments = sum(counts)
-            avg_revenue = total_revenue / len(amounts)
-            avg_payments = total_payments / len(counts)
-                        # Save to bytes
+            avg_revenue = total_revenue / len(amounts) if amounts else 0
+            avg_payments = total_payments / len(counts) if counts else 0
+            
             buf = BytesIO()
             plt.savefig(buf, format='png', dpi=100)
             buf.seek(0)
@@ -2116,7 +2040,7 @@ class AdminPanelHandler:
                 f"├─ Total Payments: {total_payments}\n"
                 f"├─ Average Daily Revenue: ₹{avg_revenue:.2f}\n"
                 f"├─ Average Daily Payments: {avg_payments:.1f}\n"
-                f"└─ Average Payment Value: ₹{total_revenue/total_payments:.2f}\n\n"
+                f"└─ Average Payment Value: ₹{total_revenue/total_payments:.2f}\n\n" if total_payments > 0 else ""
                 f"📈 **Insights:**\n"
             )
             
@@ -2127,7 +2051,6 @@ class AdminPanelHandler:
             else:
                 caption += "• ⚠️ Revenue needs improvement\n"
             
-            # Send image
             await event.delete()
             await self.bot.send_file(
                 event.chat_id,
@@ -2153,7 +2076,6 @@ class AdminPanelHandler:
             buttons=OneLineKeyboard.back_to_admin()
         )
         
-        # Set state for message handler
         user_states[event.sender_id] = {"action": "admin_search_user"}
     
     async def ask_for_broadcast(self, event):
@@ -2234,7 +2156,6 @@ class AdminPanelHandler:
         try:
             await event.edit("📥 **EXPORTING DATA...**\n\nThis may take a moment...")
             
-            # Get all data
             users = await asyncio.get_running_loop().run_in_executor(
                 None, lambda: list(self.db.db.users.find({}, {
                     "user_id": 1, "username": 1, "first_name": 1, 
@@ -2257,11 +2178,9 @@ class AdminPanelHandler:
                 }).limit(10000))
             )
             
-            # Create CSV data
             import csv
             from io import StringIO
             
-            # Users CSV
             users_csv = StringIO()
             users_writer = csv.writer(users_csv)
             users_writer.writerow(['User ID', 'Username', 'Name', 'Joined', 'Searches', 'Credits', 'Subscription', 'Referrals', 'Banned'])
@@ -2280,7 +2199,6 @@ class AdminPanelHandler:
             
             users_csv.seek(0)
             
-            # Payments CSV
             payments_csv = StringIO()
             payments_writer = csv.writer(payments_csv)
             payments_writer.writerow(['User ID', 'Amount', 'Plan', 'Date', 'Status'])
@@ -2295,7 +2213,6 @@ class AdminPanelHandler:
             
             payments_csv.seek(0)
             
-            # Prepare message
             export_text = (
                 "📊 **DATA EXPORT COMPLETE**\n\n"
                 f"✅ **Exported Data:**\n"
@@ -2313,7 +2230,6 @@ class AdminPanelHandler:
                 [Button.inline("« Admin Panel", "admin_panel")]
             ]
             
-            # Store export data temporarily
             export_data_storage[event.sender_id] = {
                 "users": users_csv.getvalue(),
                 "payments": payments_csv.getvalue(),
@@ -2351,7 +2267,6 @@ class AdminPanelHandler:
             detail_text += f"├─ Referrals: {user_stats['referrals']}\n"
             detail_text += f"└─ Banned: {'Yes' if user.get('is_banned') else 'No'}\n\n"
             
-            # Subscription info
             if user.get('subscription'):
                 expiry = user.get('subscription_expiry', '')
                 if expiry:
@@ -2361,7 +2276,6 @@ class AdminPanelHandler:
                     detail_text += f"├─ Plan: {user['subscription']}\n"
                     detail_text += f"└─ Expires in: {days_left} days\n\n"
             
-            # Recent searches
             if user_stats.get('last_searches'):
                 detail_text += "🔍 **Recent Searches**\n"
                 for search in user_stats['last_searches'][:5]:
@@ -2374,7 +2288,6 @@ class AdminPanelHandler:
                     detail_text += f"   ├─ Query: `{search.get('query', 'N/A')}`\n"
                     detail_text += f"   └─ Time: {time_str}\n\n"
             
-            # Action buttons
             buttons = []
             if user.get('is_banned'):
                 buttons.append([Button.inline("🔓 Unban User", f"confirm_unban_{user_id}")])
@@ -2452,242 +2365,258 @@ class AdminPanelHandler:
             logger.error(f"Error removing admin: {e}")
             await event.answer("❌ Error removing admin", alert=True)
 
-# ================== SEARCH ENGINE WITH PRIORITY MANAGEMENT ==================
+# ================== SEARCH ENGINE WITH MULTI-GROUP & MULTI-RESULT SUPPORT ==================
 
 class SearchEngine:
     def __init__(self, db_manager, user_manager):
         self.db = db_manager
         self.user_manager = user_manager
         self.active_searches = {}
-        self.waiting_for_files = {}
         self.group_performance = {}
     
     async def perform_search(self, search_type: str, query: str, user_id: int) -> Dict:
-        """Perform cascading search with priority management"""
+        """Perform search across ALL groups and collect ALL results"""
         logger.info(f"🚀 Starting {search_type} search: {query} (User: {user_id})")
         
-        # Check for leak search
-        if search_type == "leak":
-            return await self.perform_leak_search(query, user_id)
-        
-        # Get command priority
         cmd = SEARCH_COMMANDS.get(search_type, {})
-        preferred_priority = cmd.get("priority", "primary")
+        groups_to_search = cmd.get("groups", ["primary"])
         
-        # Sort groups based on command priority and performance
-        sorted_groups = self._get_priority_groups(preferred_priority)
+        # Create a master search ID for this user's search
+        master_search_id = f"{user_id}_{int(time.time())}_{search_type}"
         
-        for group in sorted_groups:
-            if not group.get("entity"):
-                logger.warning(f"⚠️ Group {group['name']} not resolved")
+        # Store all results from all groups
+        all_results = []
+        all_files = []
+        
+        # Create tasks for all groups
+        search_tasks = []
+        
+        for group_key in groups_to_search:
+            group = GROUP_PRIORITIES.get(group_key)
+            if not group or not group.get("enabled") or not group.get("entity"):
+                logger.warning(f"⚠️ Group {group_key} not available")
                 continue
             
-            # Get appropriate command for this group
-            command_list = cmd["commands"]
-            primary_command = command_list[0]
-            
-            logger.info(f"📤 Trying {group['name']}: {primary_command} {query}")
-            
-            try:
-                # Send message to group
-                sent_msg = await user_client.send_message(group["entity"], f"{primary_command} {query}")
-                
-                # Create search tracking
-                search_id = f"{user_id}_{int(time.time())}_{group['name']}"
-                future = asyncio.get_running_loop().create_future()
-                
-                self.active_searches[search_id] = {
-                    "user_id": user_id,
-                    "future": future,
-                    "start_time": time.time(),
-                    "group": group,
-                    "message_id": sent_msg.id,
-                    "search_type": search_type,
-                    "query": query,
-                    "chat_id": group["entity"].id if hasattr(group["entity"], 'id') else str(group["entity"]),
-                    "expecting_file": False,
-                    "file_wait_start": None,
-                    "priority": group["weight"]
-                }
-                
-                # Wait for response
-                try:
-                    result = await asyncio.wait_for(future, timeout=group["timeout"])
-                    
-                    if result["success"]:
-                        self._update_group_performance(group["name"], True)
-                        logger.info(f"✅ Success from {group['name']}")
-                        return result
-                    else:
-                        self._update_group_performance(group["name"], False)
-                        logger.info(f"⚠️ No result from {group['name']}, trying next...")
-                        continue
-                        
-                except asyncio.TimeoutError:
-                    self._update_group_performance(group["name"], False)
-                    logger.info(f"⏱️ Timeout from {group['name']}")
-                    continue
-                    
-            except Exception as e:
-                logger.error(f"❌ Error sending to {group['name']}: {e}")
-                self._update_group_performance(group["name"], False)
+            # Get command for this group
+            command_list = cmd.get("commands", [])
+            if not command_list:
                 continue
+            
+            # Use different command if available for variety
+            group_idx = groups_to_search.index(group_key)
+            command_idx = group_idx % len(command_list)
+            primary_command = command_list[command_idx]
+            
+            # Special handling for leak command
+            if search_type == "leak" and group_key == "advanced":
+                primary_command = group.get("leak_command", "/leak")
+            
+            # Create search task for this group
+            task = asyncio.create_task(
+                self._search_single_group(
+                    search_type, query, user_id, group, primary_command, group_key
+                )
+            )
+            search_tasks.append((group_key, task))
         
-        # All groups failed
-        await self._notify_admin(user_id, search_type, query)
-        return {
-            "success": False,
-            "error": f"🔍 **INTELLIGENCE GATHERING FAILED**\n\nQuery: `{query}`\n\n⚠️ **Premium Notice:** Your query has been escalated to our premium database.\nAdministrator will review and respond within 24 hours.\n\n💎 **For instant access, upgrade to:**\n• 👑 Premium Tier: Unlimited searches (30 days)\n• 🚀 Standard Tier: 30 searches (15 days)\n\nContact @darkboxesAdmin for immediate assistance."
-        }
-    
-    async def perform_leak_search(self, query: str, user_id: int) -> Dict:
-        """Perform advanced leak search (Search Anything)"""
+        if not search_tasks:
+            return {
+                "success": False,
+                "error": "❌ No search groups available. Please try again later."
+            }
+        
+        # Wait for ALL groups to complete (with timeout)
+        timeout = max(g.get("timeout", 30) for g in GROUP_PRIORITIES.values() if g.get("enabled"))
+        
         try:
-            logger.info(f"🚀 ADVANCED LEAK SEARCH: {query} (User: {user_id})")
+            # Use asyncio.gather to run all searches concurrently
+            results = await asyncio.wait_for(
+                asyncio.gather(*[task for _, task in search_tasks], return_exceptions=True),
+                timeout=timeout + 10  # Extra buffer time
+            )
             
-            # Get the advanced group
-            advanced_group = GROUP_PRIORITIES["advanced"]
-            if not advanced_group.get("entity"):
-                logger.error("❌ Advanced group not resolved")
-                return {
-                    "success": False,
-                    "error": "❌ Advanced search engine is currently unavailable. Please try again later."
-                }
+            # Process results from all groups
+            for (group_key, _), result in zip(search_tasks, results):
+                if isinstance(result, Exception):
+                    logger.error(f"❌ Error from {group_key}: {result}")
+                    continue
+                
+                if result and result.get("success"):
+                    all_results.append({
+                        "group": group_key,
+                        "result": result
+                    })
+                    
+                    # Collect files
+                    if result.get("files"):
+                        for file_data in result["files"]:
+                            file_data["source_group"] = group_key
+                            all_files.append(file_data)
+                    elif result.get("has_file") and result.get("raw_bytes"):
+                        file_data = {
+                            "raw_bytes": result["raw_bytes"],
+                            "content": result.get("content", ""),
+                            "filename": result.get("filename", f"result_{int(time.time())}.txt"),
+                            "file_type": result.get("file_type", "txt"),
+                            "source_group": group_key
+                        }
+                        all_files.append(file_data)
+        
+        except asyncio.TimeoutError:
+            logger.warning(f"⏱️ Overall timeout for search {master_search_id}")
+        
+        # Compile final result
+        if all_results or all_files:
+            return self._compile_results(search_type, query, all_results, all_files)
+        else:
+            await self._notify_admin(user_id, search_type, query)
+            return {
+                "success": False,
+                "error": f"🔍 **INTELLIGENCE GATHERING FAILED**\n\nQuery: `{query}`\n\n⚠️ **Premium Notice:** Your query has been escalated to our premium database.\nAdministrator will review and respond within 24 hours.\n\n💎 **For instant access, upgrade to:**\n• 👑 Premium Tier: Unlimited searches (30 days)\n• 🚀 Standard Tier: 30 searches (15 days)\n\nContact @darkboxesAdmin for immediate assistance."
+            }
+    
+    async def _search_single_group(self, search_type: str, query: str, user_id: int, 
+                                    group: Dict, command: str, group_key: str) -> Dict:
+        """Search a single group and collect all results (text + files)"""
+        try:
+            logger.info(f"📤 Searching {group['name']}: {command} {query}")
             
-            # Send leak command
-            leak_command = advanced_group.get("leak_command", "/leak")
-            sent_msg = await user_client.send_message(advanced_group["entity"], f"{leak_command} {query}")
+            # Send message to group
+            sent_msg = await user_client.send_message(group["entity"], f"{command} {query}")
             
-            # Create search tracking with extended timeout
-            search_id = f"{user_id}_{int(time.time())}_leak"
+            # Create search tracking
+            search_id = f"{user_id}_{int(time.time())}_{group_key}"
             future = asyncio.get_running_loop().create_future()
             
             self.active_searches[search_id] = {
                 "user_id": user_id,
                 "future": future,
                 "start_time": time.time(),
-                "group": advanced_group,
+                "group": group,
+                "group_key": group_key,
                 "message_id": sent_msg.id,
-                "search_type": "leak",
+                "search_type": search_type,
                 "query": query,
-                "chat_id": advanced_group["entity"].id if hasattr(advanced_group["entity"], 'id') else str(advanced_group["entity"]),
+                "chat_id": group["entity"].id if hasattr(group["entity"], 'id') else str(group["entity"]),
                 "expecting_file": True,
-                "file_wait_start": None,
-                "priority": advanced_group["weight"],
-                "expect_multiple_files": True,
                 "files_received": [],
-                "file_types_received": set(),
+                "text_results": [],
                 "processed_message_ids": set(),
-                "json_content": None,
-                "txt_content": None,
-                "completed": False
+                "last_activity": time.time()
             }
             
-            # Wait for response with extended timeout
+            # Wait for response with group timeout
             try:
-                result = await asyncio.wait_for(future, timeout=config.LEAK_SEARCH_TIMEOUT)
-                
-                if result.get("success"):
-                    logger.info(f"✅ Advanced leak search successful")
-                    return result
-                else:
-                    # Check if we have partial results
-                    search_info = self.active_searches.get(search_id)
-                    if search_info and search_info.get("files_received"):
-                        logger.info(f"📦 Returning partial results ({len(search_info['files_received'])} files)")
-                        return await self._build_leak_result(search_info)
-                    
-                    logger.info(f"⚠️ No result from advanced search")
-                    return {
-                        "success": False,
-                        "error": "❌ No information found in our advanced databases.\n\n⚠️ **Note:** For phone searches, include country code (e.g., 917204764637)\n💎 **Try our premium sources for better results.**"
-                    }
-                    
+                result = await asyncio.wait_for(future, timeout=group["timeout"])
+                self._update_group_performance(group['name'], result.get("success", False))
+                return result
             except asyncio.TimeoutError:
-                logger.info(f"⏱️ Timeout from advanced search, checking partial results...")
+                # Return partial results if any
+                search_info = self.active_searches.get(search_id, {})
+                if search_info.get("files_received") or search_info.get("text_results"):
+                    return self._compile_group_results(search_info)
                 
-                # Check for partial results on timeout
-                search_info = self.active_searches.get(search_id)
-                if search_info and search_info.get("files_received"):
-                    logger.info(f"📦 Returning partial results on timeout ({len(search_info['files_received'])} files)")
-                    result = await self._build_leak_result(search_info)
-                    # Clean up
-                    self.active_searches.pop(search_id, None)
-                    return result
-                
-                # Clean up
+                self._update_group_performance(group['name'], False)
+                return {"success": False}
+            finally:
+                # Cleanup
                 self.active_searches.pop(search_id, None)
                 
-                return {
-                    "success": False,
-                    "error": "⏱️ **ADVANCED SEARCH TIMEOUT**\n\nOur advanced engine is processing your query.\nResults will be delivered shortly if available.\n\n⚠️ **For immediate results:**\n• Use specific search types (Phone, Email, etc.)\n• Ensure phone numbers include country code\n• Contact @darkboxesAdmin for premium support"
-                }
-                
         except Exception as e:
-            logger.error(f"❌ Error in leak search: {e}")
-            traceback.print_exc()
-            return {
-                "success": False,
-                "error": "❌ Advanced search engine error. Please try again or use specific search types."
-            }
+            logger.error(f"❌ Error searching {group['name']}: {e}")
+            return {"success": False}
     
-    async def _build_leak_result(self, search_info: Dict) -> Dict:
-        """Build result from collected leak search files"""
-        try:
-            files_received = search_info.get("files_received", [])
-            query = search_info.get("query", "")
-            
-            if not files_received:
-                return {"success": False, "error": "No data found"}
-            
-            # Build summary
-            summary = f"🔮 **ADVANCED UNIVERSAL SEARCH RESULT**\n"
-            summary += f"═══════════════════════════════════\n\n"
-            summary += f"🔍 **Query:** `{query}`\n"
-            summary += f"🚀 **Source:** Advanced OSINT Engine\n"
-            summary += f"⚡ **Files Found:** {len(files_received)}\n\n"
-            
-            json_data = search_info.get("json_content")
-            txt_data = search_info.get("txt_content")
-            
-            if json_data and txt_data:
-                summary += f"📊 **Includes:** JSON + TXT data\n\n"
-            elif json_data:
-                summary += f"📊 **Includes:** JSON data\n\n"
-            elif txt_data:
-                summary += f"📊 **Includes:** TXT data\n\n"
-            
-            summary += f"⚡ **Powered by DarkBoxes Advanced Intelligence**\n"
-            
-            return {
-                "success": True,
-                "result": summary,
-                "files": files_received,
-                "has_multiple_files": len(files_received) > 1,
-                "json_content": json_data,
-                "txt_content": txt_data
-            }
-            
-        except Exception as e:
-            logger.error(f"❌ Error building leak result: {e}")
-            return {"success": False, "error": "Error processing results"}
-    
-    def _get_priority_groups(self, preferred_priority: str) -> List:
-        """Get groups sorted by priority and performance"""
-        sorted_groups = []
+    def _compile_group_results(self, search_info: Dict) -> Dict:
+        """Compile results from a single group"""
+        files = search_info.get("files_received", [])
+        text_results = search_info.get("text_results", [])
         
-        # Add preferred group first
-        for group in DESTINATION_GROUPS:
-            if group.get("name") == GROUP_PRIORITIES.get(preferred_priority, {}).get("name"):
-                sorted_groups.append(group)
+        if not files and not text_results:
+            return {"success": False}
+        
+        result = {
+            "success": True,
+            "files": files,
+            "text_results": text_results,
+            "has_file": len(files) > 0,
+            "result": ""
+        }
+        
+        # Combine text results
+        if text_results:
+            result["result"] = "\n\n".join(text_results)
+        
+        # If we have files, also include content
+        for file_data in files:
+            if file_data.get("content"):
+                result["content"] = file_data["content"]
+                result["raw_bytes"] = file_data.get("raw_bytes")
+                result["filename"] = file_data.get("filename")
                 break
         
-        # Add remaining groups by weight
-        remaining_groups = [g for g in DESTINATION_GROUPS if g not in sorted_groups]
-        remaining_groups.sort(key=lambda x: x["weight"], reverse=True)
+        return result
+    
+    def _compile_results(self, search_type: str, query: str, 
+                         all_results: List[Dict], all_files: List[Dict]) -> Dict:
+        """Compile all results from all groups into final response"""
+        cmd = SEARCH_COMMANDS.get(search_type, {})
         
-        sorted_groups.extend(remaining_groups)
-        return sorted_groups
+        # Create summary header
+        summary = f"{cmd.get('icon', '🔍')} **{cmd.get('name', 'Search Result')}**\n"
+        summary += f"🔍 **Query:** `{query}`\n"
+        summary += f"📊 **Sources:** {len(all_results)} database(s)\n"
+        summary += "═" * 40 + "\n\n"
+        
+        # Add text results from all groups
+        seen_content = set()  # Avoid duplicates
+        
+        for result_data in all_results:
+            group_key = result_data["group"]
+            result = result_data["result"]
+            group_name = GROUP_PRIORITIES.get(group_key, {}).get("name", group_key)
+            
+            # Add text results
+            if result.get("result"):
+                content = result["result"]
+                # Clean content
+                cleaned = TextProcessor.clean_content(content, search_type)
+                
+                # Check for duplicate
+                content_hash = hash(cleaned[:200] if len(cleaned) > 200 else cleaned)
+                if content_hash in seen_content:
+                    continue
+                seen_content.add(content_hash)
+                
+                summary += f"📡 **Source: {group_name}**\n"
+                summary += "─" * 30 + "\n"
+                summary += cleaned[:2000] + ("\n...(truncated)" if len(cleaned) > 2000 else "") + "\n\n"
+            
+            # Add text from files
+            for text in result.get("text_results", []):
+                cleaned = TextProcessor.clean_content(text, search_type)
+                content_hash = hash(cleaned[:200] if len(cleaned) > 200 else cleaned)
+                if content_hash in seen_content:
+                    continue
+                seen_content.add(content_hash)
+                
+                summary += f"📄 **Data from {group_name}**\n"
+                summary += cleaned[:1500] + ("\n...(truncated)" if len(cleaned) > 1500 else "") + "\n\n"
+        
+        # Footer
+        summary += "═" * 40 + "\n"
+        summary += "⚡ **Powered by DarkBoxes Intelligence System**\n"
+        summary += f"🕒 {datetime.now().strftime('%I:%M %p | %d %b %Y')}"
+        
+        # Compile final result
+        final_result = {
+            "success": True,
+            "result": summary,
+            "files": all_files,
+            "has_multiple_files": len(all_files) > 0,
+            "total_sources": len(all_results)
+        }
+        
+        return final_result
     
     def _update_group_performance(self, group_name: str, success: bool):
         """Update group performance tracking"""
@@ -2701,9 +2630,8 @@ class SearchEngine:
     async def handle_incoming_message(self, event):
         """Handle incoming messages for search responses"""
         try:
-            message = event.message
+                        message = event.message
             chat_id = event.chat_id
-            message_id = message.id
             text = message.text or message.raw_text or ""
             
             # Find matching active search
@@ -2712,207 +2640,142 @@ class SearchEngine:
             
             for search_id, search_info in list(self.active_searches.items()):
                 try:
-                    search_chat_id = None
+                    # Check if message is from the same chat
+                    search_chat_id = search_info.get("chat_id")
                     if hasattr(search_info["group"]["entity"], 'id'):
                         search_chat_id = search_info["group"]["entity"].id
-                    elif search_info.get("chat_id"):
-                        search_chat_id = search_info["chat_id"]
                     
-                    if search_chat_id and chat_id == search_chat_id:
-                        # Check if already processed
-                        if message_id in search_info.get("processed_message_ids", set()):
+                    if chat_id == search_chat_id:
+                        # Check if we already processed this message
+                        if message.id in search_info.get("processed_message_ids", set()):
                             continue
                         
                         matching_search = search_info
                         matching_search_id = search_id
                         break
-                except Exception as e:
-                    logger.error(f"Error matching search: {e}")
+                except:
                     continue
             
             if not matching_search:
                 return
             
             # Mark message as processed
-            if "processed_message_ids" not in matching_search:
-                matching_search["processed_message_ids"] = set()
-            matching_search["processed_message_ids"].add(message_id)
+            matching_search["processed_message_ids"].add(message.id)
+            matching_search["last_activity"] = time.time()
             
-            logger.info(f"📨 Processing message {message_id} for search {matching_search_id}")
+            # Check for file/document
+            file_result = await self._process_file_message(message, matching_search)
+            if file_result:
+                matching_search["files_received"].append(file_result)
+                logger.info(f"📁 Received file from {matching_search['group']['name']}")
             
-            # Handle based on search type
-            if matching_search["search_type"] == "leak":
-                await self._process_leak_message(matching_search_id, matching_search, message)
-            else:
-                await self._process_regular_message(matching_search_id, matching_search, message)
-                    
+            # Check for text result
+            if text and len(text.strip()) > 50:
+                # Skip processing messages
+                if TextProcessor.is_processing_message(text):
+                    logger.info(f"⏳ Processing message from {matching_search['group']['name']}")
+                    return
+                
+                # Check for no-info messages
+                if TextProcessor.is_no_info_message(text):
+                    logger.info(f"🚫 No info from {matching_search['group']['name']}")
+                    # Complete the search with failure if no other results
+                    if not matching_search["files_received"] and not matching_search["text_results"]:
+                        self._complete_search(matching_search_id, {"success": False})
+                    return
+                
+                # Check if this looks like leak result data
+                if TextProcessor.is_leak_result_message(text) or len(text) > 500:
+                    cleaned_text = TextProcessor.clean_content(text, matching_search["search_type"])
+                    if cleaned_text and len(cleaned_text) > 50:
+                        matching_search["text_results"].append(cleaned_text)
+                        logger.info(f"📝 Received text result from {matching_search['group']['name']} ({len(cleaned_text)} chars)")
+            
+            # Check if we should complete the search
+            # Complete if we have files OR substantial text results
+            files_received = matching_search.get("files_received", [])
+            text_results = matching_search.get("text_results", [])
+            
+            # Wait a bit more for additional files
+            time_elapsed = time.time() - matching_search["start_time"]
+            
+            # Complete conditions:
+            # 1. Have both JSON and TXT files
+            # 2. Have at least one file and one text result
+            # 3. Time elapsed > 5 seconds and have any result
+            should_complete = False
+            
+            file_types = [f.get("file_type", "") for f in files_received]
+            has_json = "json" in file_types
+            has_txt = "txt" in file_types
+            
+            if has_json and has_txt:
+                should_complete = True
+            elif len(files_received) >= 2:
+                should_complete = True
+            elif (files_received or text_results) and time_elapsed > 5:
+                # Wait a bit more for additional files
+                await asyncio.sleep(2)
+                should_complete = True
+            
+            if should_complete:
+                result = self._compile_group_results(matching_search)
+                self._complete_search(matching_search_id, result)
+                
         except Exception as e:
             logger.error(f"❌ Error handling incoming message: {e}")
-            traceback.print_exc()
     
-    async def _process_leak_message(self, search_id: str, search_info: Dict, message):
-        """Process incoming message for leak search"""
+    async def _process_file_message(self, message, search_info: Dict) -> Optional[Dict]:
+        """Process a file/document from message"""
         try:
-            text = message.text or message.raw_text or ""
-            query = search_info.get("query", "")
-            
-            # Skip processing messages
-            if TextProcessor.is_processing_message(text) and len(text) < 200:
-                logger.info(f"⏳ Skipping processing message")
-                return
-            
-            # Check for no-info messages
-            if TextProcessor.is_no_info_message(text):
-                logger.info(f"🚫 No info message detected")
-                if not search_info.get("files_received"):
-                    await self._complete_leak_search_with_result(search_id, search_info, {"success": False})
-                return
-            
-            # Check for actual file/document
-            file_result = None
-            file_type = None
+            # Check for document/file
+            has_file = False
             
             if message.media and hasattr(message.media, 'document'):
-                logger.info(f"📁 Processing document attachment")
-                file_result = await self._download_and_process_file(message, search_info)
-                if file_result:
-                    # Determine file type from filename
-                    filename = ""
-                    if hasattr(message.file, 'name') and message.file.name:
-                        filename = message.file.name.lower()
-                    
-                    if '.json' in filename or 'json' in filename:
-                        file_type = "json"
-                    elif '.txt' in filename or 'text' in filename:
-                        file_type = "txt"
-                    else:
-                        file_type = "txt"  # Default to txt
-                    
-                    file_result["file_type"] = file_type
+                has_file = True
+            elif hasattr(message, 'document') and message.document:
+                has_file = True
+            elif hasattr(message, 'file') and message.file:
+                has_file = True
             
-            # Check for JSON/TXT content in text message
-            elif text and len(text) > 100:
-                # Check if this is JSON content (first message usually)
-                if self._is_json_result(text):
-                    logger.info(f"📄 Detected JSON content in text message")
-                    file_type = "json"
-                    cleaned_content = TextProcessor.clean_leak_content(text)
-                    file_result = {
-                        "success": True,
-                        "has_file": True,
-                        "content": cleaned_content,
-                        "raw_bytes": cleaned_content.encode('utf-8'),
-                        "filename": f"leak_{query}_{int(time.time())}.json",
-                        "file_type": "json",
-                        "is_text_message": True
-                    }
-                    search_info["json_content"] = cleaned_content
-                
-                # Check if this is TXT content (second message usually)
-                elif self._is_txt_result(text):
-                    logger.info(f"📄 Detected TXT content in text message")
-                    file_type = "txt"
-                    cleaned_content = TextProcessor.clean_leak_content(text)
-                    file_result = {
-                        "success": True,
-                        "has_file": True,
-                        "content": cleaned_content,
-                        "raw_bytes": cleaned_content.encode('utf-8'),
-                        "filename": f"leak_{query}_{int(time.time())}.txt",
+            if not has_file:
+                # Check if text message looks like TXT file content
+                text = message.text or message.raw_text or ""
+                if TextProcessor.is_leak_result_message(text) and len(text) > 1000:
+                    # Treat as TXT file content
+                    cleaned = TextProcessor.clean_content(text, search_info["search_type"])
+                    return {
+                        "raw_bytes": cleaned.encode('utf-8'),
+                        "content": cleaned,
+                        "filename": f"result_{search_info['query']}_{int(time.time())}.txt",
                         "file_type": "txt",
-                        "is_text_message": True
+                        "is_text_based": True
                     }
-                    search_info["txt_content"] = cleaned_content
+                return None
             
-            # Store file result if found
-            if file_result and file_result.get("success"):
-                if "files_received" not in search_info:
-                    search_info["files_received"] = []
-                if "file_types_received" not in search_info:
-                    search_info["file_types_received"] = set()
-                
-                search_info["files_received"].append(file_result)
-                search_info["file_types_received"].add(file_type)
-                
-                # Store content by type
-                if file_type == "json" and not search_info.get("json_content"):
-                    search_info["json_content"] = file_result.get("content", "")
-                elif file_type == "txt" and not search_info.get("txt_content"):
-                    search_info["txt_content"] = file_result.get("content", "")
-                
-                logger.info(f"✅ Added {file_type} file. Total: {len(search_info['files_received'])}, Types: {search_info['file_types_received']}")
-                
-                # Check if we should complete the search
-                should_complete = False
-                
-                # Complete if we have both types
-                if "json" in search_info["file_types_received"] and "txt" in search_info["file_types_received"]:
-                    should_complete = True
-                    logger.info(f"✅ Both file types received, completing search")
-                
-                # Complete if we have 2+ files
-                elif len(search_info["files_received"]) >= 2:
-                    should_complete = True
-                    logger.info(f"✅ Multiple files received, completing search")
-                
-                # Complete if enough time passed with at least 1 file
-                elif time.time() - search_info["start_time"] > 15 and len(search_info["files_received"]) >= 1:
-                    should_complete = True
-                    logger.info(f"✅ Timeout with files, completing search")
-                
-                if should_complete:
-                    result = await self._build_leak_result(search_info)
-                    await self._complete_leak_search_with_result(search_id, search_info, result)
-            
-        except Exception as e:
-            logger.error(f"❌ Error processing leak message: {e}")
-            traceback.print_exc()
-    
-    def _is_json_result(self, text: str) -> bool:
-        """Check if text is a JSON result"""
-        indicators = [
-            '"List"',
-            '"Data"',
-            '"HiTeckGroop',
-            '"TrueCaller',
-            '"NumOfResults"',
-            '"InfoLeak"',
-            '🔓 ʟᴇᴀᴋᴇᴅ ᴅᴀᴛᴀ',
-            'TRUNCATED - DATA TOO LONG',
-            'Full results available as JSON file'
-        ]
-        
-        count = sum(1 for ind in indicators if ind in text)
-        return count >= 2
-    
-    def _is_txt_result(self, text: str) -> bool:
-        """Check if text is a TXT result"""
-        indicators = [
-            '📁 Full JSON results for',
-            'Service: leak',
-            'Requested by:',
-            '👤 ʀᴇǫᴜᴇꜱᴛᴇᴅ ʙʏ:',
-            '🔍 ǫᴜᴇʀʏ:',
-            '⏰ ᴛɪᴍᴇ:',
-            '───────────────────────'
-        ]
-        
-        count = sum(1 for ind in indicators if ind in text)
-        return count >= 2
-    
-    async def _download_and_process_file(self, message, search_info: Dict) -> Optional[Dict]:
-        """Download and process file attachment"""
-        try:
+            # Check file size
             if hasattr(message.file, 'size') and message.file.size > config.MAX_FILE_SIZE_MB * 1024 * 1024:
                 logger.warning(f"📁 File too large: {message.file.size} bytes")
                 return None
             
-            logger.info(f"⬇️ Downloading file...")
+            # Download file
+            logger.info(f"⬇️ Downloading file from {search_info['group']['name']}")
             file_bytes = await message.download_media(bytes)
             
             if not file_bytes:
                 logger.error("❌ Failed to download file")
                 return None
+            
+            # Determine file type
+            filename = ""
+            if hasattr(message.file, 'name') and message.file.name:
+                filename = message.file.name.lower()
+            
+            file_type = "unknown"
+            if '.json' in filename or 'json' in filename:
+                file_type = "json"
+            elif '.txt' in filename or 'text' in filename:
+                file_type = "txt"
             
             # Decode content
             content = None
@@ -2921,6 +2784,7 @@ class SearchEngine:
             for encoding in encodings:
                 try:
                     content = file_bytes.decode(encoding)
+                    logger.info(f"✅ Decoded file with {encoding}")
                     break
                 except UnicodeDecodeError:
                     continue
@@ -2929,123 +2793,39 @@ class SearchEngine:
                 logger.error("❌ Could not decode file")
                 return None
             
-            # Clean content
-            cleaned_content = TextProcessor.clean_leak_content(content)
-            
-            filename = ""
-            if hasattr(message.file, 'name') and message.file.name:
-                filename = message.file.name
-            else:
-                filename = f"result_{int(time.time())}.txt"
-            
-            logger.info(f"✅ Processed file: {filename} ({len(cleaned_content)} chars)")
+            # Clean content (remove usernames and links)
+            cleaned_content = TextProcessor.clean_content(content, search_info["search_type"])
             
             return {
-                "success": True,
-                "has_file": True,
+                "raw_bytes": file_bytes,
                 "content": cleaned_content,
-                "raw_bytes": cleaned_content.encode('utf-8'),
-                "filename": filename
+                "filename": filename or f"result_{int(time.time())}.{file_type}",
+                "file_type": file_type,
+                "original_content": content
             }
             
         except Exception as e:
             logger.error(f"❌ Error processing file: {e}")
             return None
     
-    async def _complete_leak_search_with_result(self, search_id: str, search_info: Dict, result: Dict):
-        """Complete leak search and set result"""
-        try:
-            if search_info.get("completed"):
-                return
-            
-            search_info["completed"] = True
-            
-            if search_id in self.active_searches:
-                future = self.active_searches[search_id]["future"]
-                if not future.done():
-                    future.set_result(result)
-                
-                logger.info(f"✅ Leak search {search_id} completed")
-        except Exception as e:
-            logger.error(f"❌ Error completing leak search: {e}")
-    
-    async def _process_regular_message(self, search_id: str, search_info: Dict, message):
-        """Process incoming message for regular search"""
-        try:
-            text = message.text or message.raw_text or ""
-            
-            # Check for file
-            if message.media and hasattr(message.media, 'document'):
-                file_result = await self._download_and_process_file(message, search_info)
-                if file_result and file_result.get("success"):
-                    formatted_result = PremiumFormatter.format_result(
-                        file_result["content"],
-                        search_info["search_type"],
-                        search_info["query"],
-                        search_info["group"]["name"]
-                    )
-                    file_result["result"] = formatted_result
-                    
-                    if search_id in self.active_searches:
-                        future = self.active_searches[search_id]["future"]
-                        if not future.done():
-                            future.set_result(file_result)
-                        del self.active_searches[search_id]
-                    return
-            
-            # Check for file generation message
-            if TextProcessor.is_file_generated_message(text):
-                logger.info(f"📄 File generation message detected, waiting for file...")
-                search_info["expecting_file"] = True
-                search_info["file_wait_start"] = time.time()
-                return
-            
-            # Check for processing message
-            if TextProcessor.is_processing_message(text):
-                logger.info(f"⏳ Processing message, waiting...")
-                return
-            
-            # Check for no-info message
-            if TextProcessor.is_no_info_message(text):
-                logger.info(f"🚫 No-info message")
-                if search_id in self.active_searches:
-                    future = self.active_searches[search_id]["future"]
-                    if not future.done():
-                        future.set_result({"success": False})
-                    del self.active_searches[search_id]
-                return
-            
-            # Process text response
-            if text and len(text.strip()) > 20:
-                cleaned = TextProcessor.clean_content(text, search_info["search_type"])
-                
-                if len(cleaned) > 20:
-                    formatted = PremiumFormatter.format_result(
-                        cleaned,
-                        search_info["search_type"],
-                        search_info["query"],
-                        search_info["group"]["name"]
-                    )
-                    
-                    result = {
-                        "success": True,
-                        "result": formatted,
-                        "has_file": False
-                    }
-                    
-                    if search_id in self.active_searches:
-                        future = self.active_searches[search_id]["future"]
-                        if not future.done():
-                            future.set_result(result)
-                        del self.active_searches[search_id]
-                    
-        except Exception as e:
-            logger.error(f"❌ Error processing regular message: {e}")
+    def _complete_search(self, search_id: str, result: Dict):
+        """Complete a search and set the result"""
+        if search_id not in self.active_searches:
+            return
+        
+        search_info = self.active_searches[search_id]
+        future = search_info.get("future")
+        
+        if future and not future.done():
+            try:
+                future.set_result(result)
+            except:
+                pass
     
     async def _notify_admin(self, user_id: int, search_type: str, query: str):
         """Notify admin about failed search"""
         try:
-            user_info = await self.user_manager.get_user(user_id)
+            user_info = await self.db.get_user(user_id)
             username = user_info.get('username', 'N/A') if user_info else 'N/A'
             first_name = user_info.get('first_name', 'N/A') if user_info else 'N/A'
             
@@ -3077,39 +2857,29 @@ async def cleanup_expired_searches():
             expired = []
             
             for search_id, search_info in list(search_engine.active_searches.items()):
-                timeout = search_info["group"]["timeout"]
+                timeout = search_info["group"]["timeout"] + 15
                 
-                # Extended timeout for leak searches
-                if search_info["search_type"] == "leak":
-                    timeout = config.LEAK_SEARCH_TIMEOUT + 10
-                
-                if search_info.get("expecting_file") and search_info.get("file_wait_start"):
-                    file_wait_time = current_time - search_info["file_wait_start"]
-                    if file_wait_time < 20:
-                        continue
-                    else:
-                        logger.info(f"⏱️ File wait timeout in {search_info['group']['name']}")
-                
+                # Check if search has timed out
                 if current_time - search_info["start_time"] > timeout:
-                    # For leak searches with partial results, complete them
-                    if search_info["search_type"] == "leak" and search_info.get("files_received"):
-                        logger.info(f"📦 Completing expired leak search with partial results")
-                        result = await search_engine._build_leak_result(search_info)
-                        future = search_info["future"]
-                        if not future.done():
-                            future.set_result(result)
-                    
                     expired.append(search_id)
             
             for search_id in expired:
                 search_info = search_engine.active_searches.pop(search_id, None)
                 if search_info:
-                    future = search_info["future"]
-                    if not future.done():
-                        try:
-                            future.set_result({"success": False})
-                        except:
-                            pass
+                    future = search_info.get("future")
+                    if future and not future.done():
+                        # Return partial results if any
+                        result = search_engine._compile_group_results(search_info)
+                        if result.get("success"):
+                            try:
+                                future.set_result(result)
+                            except:
+                                pass
+                        else:
+                            try:
+                                future.set_result({"success": False})
+                            except:
+                                pass
                     logger.info(f"🧹 Cleaned expired search: {search_id}")
             
             if expired:
@@ -3188,6 +2958,7 @@ async def start_handler(event):
         # Send welcome message
         welcome_text = PremiumFormatter.format_welcome(user.first_name, user_doc)
         
+        # Get keyboard
         buttons = OneLineKeyboard.main_menu(is_admin)
         
         await event.respond(
@@ -3273,7 +3044,7 @@ async def search_callback(event):
                 f"{cmd['description']}\n\n"
                 f"⚡ **ULTRA-FAST PROCESSING** (5 seconds)\n"
                 f"💎 **Cost:** {cmd['cost']} credits\n"
-                f"📁 **Returns:** JSON + TXT data\n"
+                f"📁 **Returns:** JSON + TXT files\n"
                 f"🌐 **Best For:** Phone numbers with country code (e.g., 917204764637)\n\n"
                 f"📝 **Enter your query below:**\n"
                 f"(Email, Phone with country code, Name, Document, Username, etc.)"
@@ -3312,6 +3083,7 @@ async def profile_callback(event):
             await event.answer("❌ User not found", alert=True)
             return
         
+        # Format profile
         profile_text = (
             f"👤 **USER PROFILE**\n"
             f"═══════════════════════\n\n"
@@ -3323,6 +3095,7 @@ async def profile_callback(event):
             f"└─ Last Seen: {user_doc.get('last_seen', 'N/A')[:16]}\n\n"
         )
         
+        # Credits and subscription
         profile_text += f"💰 **Account Status**\n"
         
         if user_doc.get('subscription') and user_doc.get('subscription_expiry'):
@@ -3340,12 +3113,14 @@ async def profile_callback(event):
             profile_text += f"├─ Credits: {user_doc.get('searches_remaining', 0)}\n"
             profile_text += f"└─ Subscription: None\n\n"
         
+        # Statistics
         profile_text += f"📊 **Statistics**\n"
         profile_text += f"├─ Total Searches: {user_doc.get('total_searches', 0)}\n"
         profile_text += f"├─ Referral Code: `{user_doc.get('referral_code', 'N/A')}`\n"
         profile_text += f"├─ Referrals: {user_doc.get('referrals', 0)}\n"
         profile_text += f"└─ Referral Credits: {user_doc.get('referral_credits', 0)}\n\n"
         
+        # Referral link
         referral_link = f"https://t.me/{bot_info.username}?start={user_doc.get('referral_code')}"
         profile_text += f"📢 **Referral Link**\n"
         profile_text += f"🔗 {referral_link}\n\n"
@@ -3511,6 +3286,11 @@ async def support_callback(event):
             f"• Account issues\n"
             f"• Bug reports\n"
             f"• Feature requests\n\n"
+            f"⚠️ **Before Contacting:**\n"
+            f"1. Check if you have sufficient credits\n"
+            f"2. Verify your query format\n"
+            f"3. Wait 30 seconds for search results\n"
+            f"4. Check @darkboxesv1 for announcements\n\n"
             f"💳 **Payment Support:**\n"
             f"UPI: `{config.UPI_ID}`\n"
             f"Send screenshot after payment\n\n"
@@ -3555,167 +3335,387 @@ async def main_menu_callback(event):
     except Exception as e:
         logger.error(f"❌ Error in main_menu_callback: {e}")
 
-@bot_client.on(events.CallbackQuery(pattern=r'^my_referrals$'))
-async def my_referrals_callback(event):
-    """Handle my referrals callback"""
+@bot_client.on(events.NewMessage(func=lambda e: e.is_private and not e.text.startswith('/')))
+async def private_message_handler(event):
+    """Handle private messages (queries and admin actions)"""
     try:
         user_id = event.sender_id
-        user_doc = await db_manager.get_user(user_id)
         
-        if not user_doc:
-            await event.answer("❌ User not found", alert=True)
+        if user_id not in user_states:
             return
         
-        referral_code = user_doc.get('referral_code', '')
-        referrals = []
+        state = user_states[user_id]
         
-        if referral_code:
-            referrals = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: list(db_manager.db.users.find(
-                    {"referred_by": referral_code},
-                    {"user_id": 1, "username": 1, "first_name": 1, "joined_at": 1}
-                ).limit(20))
+        if state.get("action") == "search":
+            await handle_search_query(event, state)
+        elif state.get("action") == "admin_search_user":
+            await handle_admin_search_user(event)
+        elif state.get("action") == "admin_broadcast":
+            await handle_admin_broadcast(event)
+        elif state.get("action") == "admin_ban":
+            await handle_admin_ban(event)
+        elif state.get("action") == "admin_management":
+            await handle_admin_management(event)
+        elif state.get("action") == "admin_add_credits":
+            await handle_admin_add_credits(event)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in private_message_handler: {e}")
+
+async def handle_search_query(event, state):
+    """Handle search queries"""
+    try:
+        user_id = event.sender_id
+        search_type = state["type"]
+        query = event.text.strip()
+        
+        if not query:
+            await event.respond("❌ Please enter a valid query.")
+            return
+        
+        # Validate query
+        cmd = SEARCH_COMMANDS[search_type]
+        validation = cmd.get("validation")
+        if validation and not re.match(validation, query):
+            await event.respond(f"❌ Invalid format. Example: `{cmd['example']}`")
+            return
+        
+        # Show processing message
+        if search_type == "leak":
+            processing_msg = (
+                "🚀 **ADVANCED OSINT SEARCH INITIATED**\n\n"
+                f"🔍 **Query:** `{query}`\n"
+                f"⚡ **Processing:** Searching all databases...\n"
+                f"📁 **Output:** JSON + TXT files\n"
+                f"💎 **Cost:** 3 credits\n\n"
+                f"⏳ Processing your advanced search..."
+            )
+        else:
+            processing_msg = PremiumFormatter.format_processing(search_type, query)
+        
+        status = await event.respond(processing_msg, parse_mode="md")
+        
+        # Check access
+        user_doc = await db_manager.get_user(user_id)
+        can_search = False
+        
+        if user_doc.get('subscription') and user_doc.get('subscription_expiry'):
+            expiry_date = datetime.fromisoformat(user_doc['subscription_expiry'])
+            if expiry_date > datetime.now(timezone.utc):
+                can_search = True
+        
+        if not can_search and user_doc.get('searches_remaining', 0) <= 0:
+            await status.delete()
+            await event.respond(
+                "🔒 **INSUFFICIENT CREDITS**\n\n"
+                "Upgrade to Premium for unlimited access:\n\n"
+                "👑 **Premium Tier** - ₹499\n"
+                "• Unlimited searches (30 days)\n"
+                "• All premium databases\n"
+                "• Priority processing\n\n"
+                "Contact @darkboxesAdmin for assistance.",
+                buttons=OneLineKeyboard.subscription_plans()
+            )
+            user_states.pop(user_id, None)
+            return
+        
+        # Perform search
+        result = await search_engine.perform_search(search_type, query, user_id)
+        
+        # Delete status message
+        try:
+            await status.delete()
+        except:
+            pass
+        
+        if result["success"]:
+            # Send main text result
+            if result.get("result"):
+                # Split long messages
+                result_text = result["result"]
+                chunks = TextProcessor.split_long_text(result_text, 4000)
+                
+                for i, chunk in enumerate(chunks):
+                    if i == 0:
+                        await event.respond(chunk, parse_mode="md")
+                    else:
+                        await event.respond(f"📄 **Continued ({i+1}/{len(chunks)})**\n\n{chunk}", parse_mode="md")
+            
+            # Send files
+            if result.get("files"):
+                for file_data in result["files"]:
+                    await send_file_to_user(event, file_data, query, search_type)
+            
+            # Update search count
+            await db_manager.update_searches(user_id, search_type, query, True)
+        else:
+            await event.respond(result.get("error", "❌ Search failed"), parse_mode="md")
+            await db_manager.update_searches(user_id, search_type, query, False)
+        
+        # Clear state
+        user_states.pop(user_id, None)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in handle_search_query: {e}")
+        await event.respond("❌ An error occurred during processing.")
+        user_states.pop(event.sender_id, None)
+
+async def send_file_to_user(event, file_data: Dict, query: str, search_type: str):
+    """Send file to user with proper formatting"""
+    try:
+        file_type = file_data.get("file_type", "txt")
+        content = file_data.get("content", "")
+        raw_bytes = file_data.get("raw_bytes")
+        source_group = file_data.get("source_group", "Unknown")
+        
+        # First, send cleaned content as text message
+        if content and len(content) > 100:
+            cleaned_content = TextProcessor.clean_content(content, search_type)
+            
+            if len(cleaned_content) > 100:
+                # Split if too long
+                chunks = TextProcessor.split_long_text(cleaned_content, 3500)
+                
+                for i, chunk in enumerate(chunks):
+                    header = f"📄 **{file_type.upper()} DATA** (Source: {GROUP_PRIORITIES.get(source_group, {}).get('name', source_group)})\n"
+                    header += "─" * 30 + "\n\n"
+                    
+                    if len(chunks) > 1:
+                        header = f"📄 **{file_type.upper()} DATA** (Part {i+1}/{len(chunks)})\n"
+                        header += "─" * 30 + "\n\n"
+                    
+                    await event.respond(header + chunk, parse_mode="md")
+        
+        # Then send as file (if it's a file type)
+        if raw_bytes and file_type in ["json", "txt"]:
+            filename = file_data.get("filename", f"result_{query}_{int(time.time())}.{file_type}")
+            caption = f"📁 **{file_type.upper()} File**\n🔍 Query: `{query}`"
+            
+            await event.respond(
+                file=raw_bytes,
+                caption=caption,
+                parse_mode="md"
+            )
+            logger.info(f"✅ Sent {file_type} file to user")
+        
+    except Exception as e:
+        logger.error(f"❌ Error sending file to user: {e}")
+
+async def handle_admin_search_user(event):
+    """Handle admin user search"""
+    try:
+        query = event.text.strip()
+        if not query:
+            await event.respond("❌ Please enter a search query.")
+            return
+        
+        users = await db_manager.admin_db.search_users(query)
+        
+        if not users:
+            await event.respond("❌ No users found matching your query.")
+            user_states.pop(event.sender_id, None)
+            return
+        
+        result_text = f"🔍 **SEARCH RESULTS** ({len(users)} users found)\n\n"
+        
+        for i, user in enumerate(users[:10], 1):
+            username = f"@{user['username']}" if user.get('username') else "No username"
+            joined = user.get('joined_at', '')[:10]
+            searches = user.get('total_searches', 0)
+            
+            result_text += (
+                f"{i}. **{user['first_name']}**\n"
+                f"   ├─ {username}\n"
+                f"   ├─ ID: `{user['user_id']}`\n"
+                f"   ├─ Joined: {joined}\n"
+                f"   └─ Searches: {searches}\n\n"
             )
         
-        referrals_text = (
-            f"📋 **MY REFERRALS**\n"
-            f"═══════════════════════\n\n"
+        buttons = [[Button.inline("« Back to Admin", "admin_panel")]]
+        
+        await event.respond(result_text, buttons=buttons, parse_mode="md")
+        user_states.pop(event.sender_id, None)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in handle_admin_search_user: {e}")
+        await event.respond("❌ Error searching users.")
+
+async def handle_admin_broadcast(event):
+    """Handle admin broadcast"""
+    try:
+        message = event.text.strip()
+        if not message or len(message) < 5:
+            await event.respond("❌ Message too short. Minimum 5 characters required.")
+            return
+        
+        user_states[event.sender_id] = {
+            "action": "confirm_broadcast",
+            "message": message
+        }
+        
+        buttons = [
+            [Button.inline("✅ Yes, Send Broadcast", "confirm_broadcast_yes")],
+            [Button.inline("❌ Cancel", "admin_panel")]
+        ]
+        
+        await event.respond(
+            f"📢 **BROADCAST CONFIRMATION**\n\n"
+            f"**Message:**\n{message[:500]}...\n\n"
+            f"Are you sure you want to send this to all users?",
+            buttons=buttons,
+            parse_mode="md"
         )
         
-        if referrals:
-            referrals_text += f"👥 **Total Referrals:** {len(referrals)}\n\n"
-            
-            for i, ref in enumerate(referrals[:10], 1):
-                username = f"@{ref['username']}" if ref.get('username') else "No username"
-                joined = ref.get('joined_at', '')[:10]
-                
-                referrals_text += (
-                    f"{i}. **{ref['first_name']}**\n"
-                    f"   ├─ {username}\n"
-                    f"   └─ Joined: {joined}\n\n"
-                )
+    except Exception as e:
+        logger.error(f"❌ Error in handle_admin_broadcast: {e}")
+        await event.respond("❌ Error processing broadcast message.")
+
+async def handle_admin_ban(event):
+    """Handle admin ban user"""
+    try:
+        user_input = event.text.strip()
+        if not user_input.isdigit():
+            await event.respond("❌ Please enter a valid numeric user ID.")
+            return
+        
+        target_id = int(user_input)
+        user = await db_manager.get_user(target_id)
+        
+        if not user:
+            await event.respond(f"❌ User with ID {target_id} not found.")
+            user_states.pop(event.sender_id, None)
+            return
+        
+        if user.get('is_banned'):
+            buttons = OneLineKeyboard.confirm_buttons("unban", target_id)
+            await event.respond(
+                f"🚫 **USER IS ALREADY BANNED**\n\n"
+                f"👤 User: {user.get('first_name', 'N/A')}\n"
+                f"🆔 ID: `{target_id}`\n\n"
+                f"Do you want to unban this user?",
+                buttons=buttons,
+                parse_mode="md"
+            )
         else:
-            referrals_text += "📭 No referrals yet.\n\n"
-            referrals_text += f"🔗 **Your Referral Code:** `{user_doc.get('referral_code', 'N/A')}`\n"
-            referrals_text += "💡 Share your referral link to earn credits!"
+            buttons = OneLineKeyboard.confirm_buttons("ban", target_id)
+            await event.respond(
+                f"🚫 **BAN USER CONFIRMATION**\n\n"
+                f"👤 User: {user.get('first_name', 'N/A')}\n"
+                f"🆔 ID: `{target_id}`\n\n"
+                f"Are you sure you want to ban this user?",
+                buttons=buttons,
+                parse_mode="md"
+            )
         
-        buttons = [
-            [Button.inline("📢 Share Referral", "share_referral")],
-            [Button.inline("« Refer & Earn", "referrals")],
-            [Button.inline("« Main Menu", "main_menu")]
-        ]
-        
-        await event.edit(referrals_text, buttons=buttons, parse_mode="md")
+        user_states.pop(event.sender_id, None)
         
     except Exception as e:
-        logger.error(f"❌ Error in my_referrals_callback: {e}")
-        await event.answer("❌ Error loading referrals", alert=True)
+        logger.error(f"❌ Error in handle_admin_ban: {e}")
+        await event.respond("❌ Error processing ban request.")
 
-@bot_client.on(events.CallbackQuery(pattern=r'^share_referral$'))
-async def share_referral_callback(event):
-    """Handle share referral callback"""
+async def handle_admin_management(event):
+    """Handle admin management"""
     try:
-        user_id = event.sender_id
-        user_doc = await db_manager.get_user(user_id)
-        
-        if not user_doc:
-            await event.answer("❌ User not found", alert=True)
+        user_input = event.text.strip()
+        if not user_input.isdigit():
+            await event.respond("❌ Please enter a valid numeric user ID.")
             return
         
-        referral_code = user_doc.get('referral_code', '')
-        referral_link = f"https://t.me/{bot_info.username}?start={referral_code}"
+        target_id = int(user_input)
+        user = await db_manager.get_user(target_id)
         
-        share_text = (
-            f"📢 **SHARE REFERRAL LINK**\n"
-            f"═══════════════════════\n\n"
-            f"🔗 **Your Referral Link:**\n"
-            f"{referral_link}\n\n"
-            f"💰 **Earn {config.REFERRAL_REWARD} credit for each successful referral!**"
-        )
-        
-        buttons = [
-            [Button.inline("« Back to Referrals", "referrals")],
-            [Button.inline("« Main Menu", "main_menu")]
-        ]
-        
-        await event.edit(share_text, buttons=buttons, parse_mode="md")
-        
-    except Exception as e:
-        logger.error(f"❌ Error in share_referral_callback: {e}")
-        await event.answer("❌ Error loading share referral", alert=True)
-
-@bot_client.on(events.CallbackQuery(pattern=r'^contact_admin$'))
-async def contact_admin_callback(event):
-    """Handle contact admin callback"""
-    try:
-        contact_text = (
-            f"📞 **CONTACT ADMINISTRATOR**\n"
-            f"═══════════════════════\n\n"
-            f"👤 **Official Admin:** @darkboxesAdmin\n\n"
-            f"⏰ **Response Time:**\n"
-            f"• General: Within 1 hour\n"
-            f"• Urgent: 15-30 minutes\n"
-            f"• Payment: 5-10 minutes\n\n"
-            f"💳 **Payment Issues:**\n"
-            f"1. Send payment to: `{config.UPI_ID}`\n"
-            f"2. Take screenshot\n"
-            f"3. Send to @darkboxesAdmin\n"
-            f"4. Include your User ID: `{event.sender_id}`\n\n"
-            f"⚠️ **Important:**\n"
-            f"• Never share passwords/OTPs\n"
-            f"• Official admin ONLY: @darkboxesAdmin"
-        )
-        
-        buttons = [
-            [Button.inline("« Support", "support")],
-            [Button.inline("« Main Menu", "main_menu")]
-        ]
-        
-        await event.edit(contact_text, buttons=buttons, parse_mode="md")
-        
-    except Exception as e:
-        logger.error(f"❌ Error in contact_admin_callback: {e}")
-        await event.answer("❌ Error loading contact info", alert=True)
-
-@bot_client.on(events.CallbackQuery(pattern=r'^user_detail_(\d+)$'))
-async def user_detail_callback(event):
-    """Handle user detail callback"""
-    try:
-        user_id = int(event.data.decode().split('_')[-1])
-        await admin_panel.show_user_detail(event, user_id)
-    except Exception as e:
-        logger.error(f"❌ Error in user_detail_callback: {e}")
-        await event.answer("❌ Error loading user details", alert=True)
-
-@bot_client.on(events.CallbackQuery(pattern=r'^export_'))
-async def export_data_callback(event):
-    """Handle export data callbacks"""
-    try:
-        data_type = event.data.decode().split('_', 1)[1]
-        user_id = event.sender_id
-        
-        if user_id not in export_data_storage:
-            await event.answer("❌ No export data available", alert=True)
+        if not user:
+            await event.respond(f"❌ User with ID {target_id} not found.")
+            user_states.pop(event.sender_id, None)
             return
         
-        data = export_data_storage[user_id].get(data_type)
-        if not data:
-            await event.answer("❌ No data available for export", alert=True)
-            return
+        if user.get('is_admin'):
+            buttons = OneLineKeyboard.confirm_buttons("remove_admin", target_id)
+            await event.respond(
+                f"👑 **REMOVE ADMIN PRIVILEGES**\n\n"
+                f"👤 User: {user.get('first_name', 'N/A')}\n"
+                f"🆔 ID: `{target_id}`\n\n"
+                f"Do you want to remove admin privileges?",
+                buttons=buttons,
+                parse_mode="md"
+            )
+        else:
+            buttons = OneLineKeyboard.confirm_buttons("add_admin", target_id)
+            await event.respond(
+                f"👑 **ADD ADMIN PRIVILEGES**\n\n"
+                f"👤 User: {user.get('first_name', 'N/A')}\n"
+                f"🆔 ID: `{target_id}`\n\n"
+                f"Are you sure you want to add this user as admin?",
+                buttons=buttons,
+                parse_mode="md"
+            )
         
-        filename = f"darkboxes_{data_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        
-        await event.delete()
-        await bot_client.send_file(
-            event.chat_id,
-            bytes(data, 'utf-8'),
-            filename=filename,
-            caption=f"📊 **{data_type.upper()} DATA EXPORT**\n\nExported on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        )
+        user_states.pop(event.sender_id, None)
         
     except Exception as e:
-        logger.error(f"❌ Error in export_data_callback: {e}")
-        await event.answer("❌ Error exporting data", alert=True)
+        logger.error(f"❌ Error in handle_admin_management: {e}")
+        await event.respond("❌ Error processing admin management request.")
+
+async def handle_admin_add_credits(event):
+    """Handle admin add credits"""
+    try:
+        user_input = event.text.strip()
+        parts = user_input.split()
+        
+        if len(parts) != 2:
+            await event.respond("❌ Invalid format. Use: `user_id credits`")
+            return
+        
+        if not parts[0].isdigit() or not parts[1].isdigit():
+            await event.respond("❌ Both user ID and credits must be numbers.")
+            return
+        
+        target_id = int(parts[0])
+        credits = int(parts[1])
+        
+        if credits <= 0 or credits > 1000:
+            await event.respond("❌ Credits must be between 1 and 1000.")
+            return
+        
+        user = await db_manager.get_user(target_id)
+        if not user:
+            await event.respond(f"❌ User with ID {target_id} not found.")
+            user_states.pop(event.sender_id, None)
+            return
+        
+        # Add credits
+        success = await db_manager.add_credits(target_id, credits)
+        
+        if success:
+            await event.respond(
+                f"✅ **CREDITS ADDED SUCCESSFULLY**\n\n"
+                f"👤 User: {user.get('first_name', 'N/A')}\n"
+                f"🆔 ID: `{target_id}`\n"
+                f"🎯 Credits Added: {credits}\n"
+                f"💰 New Balance: {user.get('searches_remaining', 0) + credits}",
+                parse_mode="md"
+            )
+            
+            # Notify user
+            try:
+                await bot_client.send_message(
+                    target_id,
+                    f"🎁 **CREDITS ADDED**\n\n"
+                    f"Administrator has added {credits} credits to your account.\n"
+                    f"💰 New Balance: {user.get('searches_remaining', 0) + credits}\n\n"
+                    f"Thank you for using DarkBoxes!",
+                    parse_mode="md"
+                )
+            except:
+                pass
+        else:
+            await event.respond("❌ Failed to add credits.")
+        
+        user_states.pop(event.sender_id, None)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in handle_admin_add_credits: {e}")
+        await event.respond("❌ Error adding credits.")
 
 @bot_client.on(events.CallbackQuery(pattern=r'^confirm_broadcast_yes$'))
 async def confirm_broadcast_handler(event):
@@ -3753,455 +3753,74 @@ async def confirm_broadcast_handler(event):
                 )
                 sent += 1
                 await asyncio.sleep(0.1)
-            except Exception as e:
+            except:
                 failed += 1
         
         user_states.pop(user_id, None)
         
-        result_text = (
+        await event.edit(
             f"✅ **BROADCAST COMPLETE**\n\n"
             f"📊 **Results:**\n"
-            f"├─ Total Users: {len(users)}\n"
             f"├─ Successfully Sent: {sent}\n"
-            f"└─ Failed: {failed}"
+            f"└─ Failed: {failed}",
+            buttons=OneLineKeyboard.back_to_admin(),
+            parse_mode="md"
         )
-        
-        await event.edit(result_text, buttons=OneLineKeyboard.back_to_admin(), parse_mode="md")
         
     except Exception as e:
         logger.error(f"❌ Error in confirm_broadcast_handler: {e}")
         await event.answer("❌ Error sending broadcast", alert=True)
 
-@bot_client.on(events.NewMessage(func=lambda e: e.is_private and not e.text.startswith('/')))
-async def private_message_handler(event):
-    """Handle private messages (queries and admin actions)"""
+@bot_client.on(events.CallbackQuery(pattern=r'^confirm_'))
+async def confirm_action_handler(event):
+    """Handle confirmation actions"""
     try:
-        user_id = event.sender_id
+        data = event.data.decode()
+        parts = data.split('_')
         
-        if user_id not in user_states:
+        if len(parts) < 3:
             return
         
-        state = user_states[user_id]
+        action = parts[1]
+        target_id = int(parts[2])
         
-        if state.get("action") == "search":
-            await handle_search_query(event, state)
-        
-        elif state.get("action") == "admin_search_user":
-            await handle_admin_search_user(event)
-        
-        elif state.get("action") == "admin_broadcast":
-            await handle_admin_broadcast(event)
-        
-        elif state.get("action") == "admin_ban":
-            await handle_admin_ban(event)
-        
-        elif state.get("action") == "admin_management":
-            await handle_admin_management(event)
-        
-        elif state.get("action") == "admin_add_credits":
-            await handle_admin_add_credits(event)
-        
-    except Exception as e:
-        logger.error(f"❌ Error in private_message_handler: {e}")
-
-async def handle_search_query(event, state):
-    """Handle search queries"""
-    try:
-        user_id = event.sender_id
-        search_type = state["type"]
-        query = event.text.strip()
-        
-        if not query:
-            await event.respond("❌ Please enter a valid query.")
-            return
-        
-        # Validate query
-        cmd = SEARCH_COMMANDS[search_type]
-        validation = cmd.get("validation")
-        if validation and not re.match(validation, query):
-            await event.respond(f"❌ Invalid format. Example: `{cmd['example']}`")
-            return
-        
-        # Show processing message
-        if search_type == "leak":
-            processing_text = (
-                "🚀 **ADVANCED OSINT SEARCH INITIATED**\n\n"
-                f"🔍 **Query:** `{query}`\n"
-                f"⚡ **Processing:** Ultra-fast\n"
-                f"📁 **Output:** JSON + TXT data\n"
-                f"💎 **Cost:** 3 credits\n\n"
-                f"⏳ Processing your advanced search..."
-            )
-        else:
-            processing_text = PremiumFormatter.format_processing(search_type, query)
-        
-        status = await event.respond(processing_text, parse_mode="md")
-        
-        # Check access
-        user_doc = await db_manager.get_user(user_id)
-        can_search = False
-        
-        if user_doc.get('subscription') and user_doc.get('subscription_expiry'):
-            expiry_date = datetime.fromisoformat(user_doc['subscription_expiry'])
-            if expiry_date > datetime.now(timezone.utc):
-                can_search = True
-        
-        if not can_search and user_doc.get('searches_remaining', 0) <= 0:
-            await status.delete()
-            await event.respond(
-                "🔒 **INSUFFICIENT CREDITS**\n\n"
-                "Upgrade to Premium for unlimited access:\n\n"
-                "👑 **Premium Tier** - ₹499\n"
-                "• Unlimited searches (30 days)\n"
-                "• All premium databases\n"
-                "• Priority processing\n\n"
-                "Contact @darkboxesAdmin for assistance.",
-                buttons=OneLineKeyboard.subscription_plans()
-            )
-            user_states.pop(user_id, None)
-            return
-        
-        # Perform search
-        result = await search_engine.perform_search(search_type, query, user_id)
-        
-        # Delete status
-        try:
-            await status.delete()
-        except:
-            pass
-        
-        if result.get("success"):
-            # Send summary first
-            if result.get("result"):
-                await event.respond(result["result"], parse_mode="md")
-            
-            # Handle leak search with multiple files
-            if search_type == "leak":
-                # Send JSON as file if available
-                json_content = result.get("json_content")
-                if json_content:
-                    json_bytes = json_content.encode('utf-8')
-                    await event.respond(
-                        file=json_bytes,
-                        caption=f"📁 **JSON DATA**\nQuery: `{query}`"
-                    )
-                    logger.info(f"✅ Sent JSON file to user")
-                
-                # Send TXT as text message (cleaned) if available
-                txt_content = result.get("txt_content")
-                if txt_content:
-                    # Clean the TXT content
-                    cleaned_txt = TextProcessor.clean_leak_content(txt_content)
-                    
-                    # Send as text message (split if too long)
-                    chunks = TextProcessor.split_long_text(cleaned_txt, 4000)
-                    for i, chunk in enumerate(chunks):
-                        if i == 0:
-                            header = f"📄 **TXT DATA RESULTS**\n🔍 Query: `{query}`\n{'─' * 30}\n\n"
-                            await event.respond(header + chunk, parse_mode="md")
-                        else:
-                            await event.respond(chunk)
-                    logger.info(f"✅ Sent TXT content as text to user")
-                
-                # Also send any additional files
-                for file_data in result.get("files", []):
-                    if file_data.get("raw_bytes") and not file_data.get("is_text_message"):
-                        file_type = file_data.get("file_type", "data")
-                        filename = file_data.get("filename", f"result_{int(time.time())}.{file_type}")
-                        
-                        await event.respond(
-                            file=file_data["raw_bytes"],
-                            caption=f"📁 **{file_type.upper()} DATA**\nQuery: `{query}`"
-                        )
+        if action == "ban":
+            success = await db_manager.ban_user(target_id, "Admin action")
+            if success:
+                await event.answer("✅ User banned successfully", alert=True)
             else:
-                # Regular search - just send result
-                pass
-            
-            await db_manager.update_searches(user_id, search_type, query, True)
-        else:
-            error_msg = result.get("error", "❌ Search failed. Please try again.")
-            await event.respond(error_msg, parse_mode="md")
-            await db_manager.update_searches(user_id, search_type, query, False)
+                await event.answer("❌ Failed to ban user", alert=True)
         
-        # Clear state
-        user_states.pop(user_id, None)
+        elif action == "unban":
+            success = await db_manager.unban_user(target_id)
+            if success:
+                await event.answer("✅ User unbanned successfully", alert=True)
+            else:
+                await event.answer("❌ Failed to unban user", alert=True)
         
-    except Exception as e:
-        logger.error(f"❌ Error in handle_search_query: {e}")
-        traceback.print_exc()
-        await event.respond("❌ An error occurred during processing.")
-        user_states.pop(event.sender_id, None)
-
-async def handle_admin_search_user(event):
-    """Handle admin user search"""
-    try:
-        query = event.text.strip()
-        if not query:
-            await event.respond("❌ Please enter a search query.")
-            return
+        elif action == "add" and len(parts) > 3 and parts[2] == "admin":
+            target_id = int(parts[3])
+            success = await db_manager.add_admin(target_id)
+            if success:
+                admin_panel.admin_users.add(target_id)
+                await event.answer("✅ User added as admin", alert=True)
+            else:
+                await event.answer("❌ Failed to add admin", alert=True)
         
-        users = await db_manager.admin_db.search_users(query)
+        elif action == "remove" and len(parts) > 3 and parts[2] == "admin":
+            target_id = int(parts[3])
+            success = await db_manager.remove_admin(target_id)
+            if success:
+                admin_panel.admin_users.discard(target_id)
+                await event.answer("✅ Admin privileges removed", alert=True)
+            else:
+                await event.answer("❌ Failed to remove admin", alert=True)
         
-        if not users:
-            await event.respond("❌ No users found matching your query.")
-            user_states.pop(event.sender_id, None)
-            return
-        
-        if len(users) == 1:
-            user = users[0]
-            user_stats = await db_manager.admin_db.get_user_stats(user['user_id'])
-            
-            detail_text = f"👤 **USER FOUND**\n\n"
-            detail_text += f"├─ Name: {user.get('first_name', 'N/A')}\n"
-            detail_text += f"├─ Username: @{user.get('username', 'N/A')}\n"
-            detail_text += f"├─ ID: `{user['user_id']}`\n"
-            detail_text += f"└─ Searches: {user.get('total_searches', 0)}\n"
-            
-            buttons = [
-                [Button.inline(f"👤 View Full Details", f"user_detail_{user['user_id']}")],
-                [Button.inline("« Admin Panel", "admin_panel")]
-            ]
-            
-            await event.respond(detail_text, buttons=buttons, parse_mode="md")
-        else:
-            result_text = f"🔍 **SEARCH RESULTS** ({len(users)} users found)\n\n"
-            
-            for i, user in enumerate(users[:10], 1):
-                username = f"@{user['username']}" if user.get('username') else "No username"
-                result_text += (
-                    f"{i}. **{user['first_name']}**\n"
-                    f"   ├─ {username}\n"
-                    f"   └─ ID: `{user['user_id']}`\n\n"
-                )
-            
-            buttons = []
-            for user in users[:5]:
-                buttons.append([Button.inline(
-                    f"👤 {user['first_name']} ({user['user_id']})",
-                    f"user_detail_{user['user_id']}"
-                )])
-            
-            buttons.append([Button.inline("« Admin Panel", "admin_panel")])
-            
-            await event.respond(result_text, buttons=buttons, parse_mode="md")
-        
-        user_states.pop(event.sender_id, None)
+        await admin_panel.show_admin_panel(event)
         
     except Exception as e:
-        logger.error(f"❌ Error in handle_admin_search_user: {e}")
-        await event.respond("❌ Error searching users.")
-        user_states.pop(event.sender_id, None)
-
-async def handle_admin_broadcast(event):
-    """Handle admin broadcast"""
-    try:
-        message = event.text.strip()
-        if not message or len(message) < 5:
-            await event.respond("❌ Message too short. Minimum 5 characters required.")
-            return
-        
-        user_states[event.sender_id] = {
-            "action": "confirm_broadcast",
-            "message": message
-        }
-        
-        confirm_text = (
-            f"📢 **BROADCAST CONFIRMATION**\n\n"
-            f"**Message:**\n{message[:500]}...\n\n"
-            f"Are you sure you want to send this to all users?"
-        )
-        
-        buttons = [
-            [Button.inline("✅ Yes, Send Broadcast", "confirm_broadcast_yes")],
-            [Button.inline("❌ Cancel", "admin_panel")]
-        ]
-        
-        await event.respond(confirm_text, buttons=buttons, parse_mode="md")
-        
-    except Exception as e:
-        logger.error(f"❌ Error in handle_admin_broadcast: {e}")
-        await event.respond("❌ Error processing broadcast message.")
-        user_states.pop(event.sender_id, None)
-
-async def handle_admin_ban(event):
-    """Handle admin ban user"""
-    try:
-        user_input = event.text.strip()
-        if not user_input.isdigit():
-            await event.respond("❌ Please enter a valid numeric user ID.")
-            return
-        
-        user_id = int(user_input)
-        user = await db_manager.get_user(user_id)
-        
-        if not user:
-            await event.respond(f"❌ User with ID {user_id} not found.")
-            user_states.pop(event.sender_id, None)
-            return
-        
-        if user.get('is_banned'):
-            buttons = OneLineKeyboard.confirm_buttons("unban", user_id)
-            await event.respond(
-                f"🚫 **USER IS ALREADY BANNED**\n\n"
-                f"👤 User: {user.get('first_name', 'N/A')}\n"
-                f"🆔 ID: `{user_id}`\n\n"
-                f"Do you want to unban this user?",
-                buttons=buttons,
-                parse_mode="md"
-            )
-        else:
-            buttons = OneLineKeyboard.confirm_buttons("ban", user_id)
-            await event.respond(
-                f"🚫 **BAN USER CONFIRMATION**\n\n"
-                f"👤 User: {user.get('first_name', 'N/A')}\n"
-                f"🆔 ID: `{user_id}`\n\n"
-                f"Are you sure you want to ban this user?",
-                buttons=buttons,
-                parse_mode="md"
-            )
-        
-        user_states.pop(event.sender_id, None)
-        
-    except Exception as e:
-        logger.error(f"❌ Error in handle_admin_ban: {e}")
-        await event.respond("❌ Error processing ban request.")
-        user_states.pop(event.sender_id, None)
-
-async def handle_admin_management(event):
-    """Handle admin management"""
-    try:
-        user_input = event.text.strip()
-        if not user_input.isdigit():
-            await event.respond("❌ Please enter a valid numeric user ID.")
-            return
-        
-        user_id = int(user_input)
-        user = await db_manager.get_user(user_id)
-        
-        if not user:
-            await event.respond(f"❌ User with ID {user_id} not found.")
-            user_states.pop(event.sender_id, None)
-            return
-        
-        if user.get('is_admin'):
-            buttons = OneLineKeyboard.confirm_buttons("remove_admin", user_id)
-            await event.respond(
-                f"👑 **REMOVE ADMIN PRIVILEGES**\n\n"
-                f"👤 User: {user.get('first_name', 'N/A')}\n"
-                f"🆔 ID: `{user_id}`\n\n"
-                f"Do you want to remove admin privileges?",
-                buttons=buttons,
-                parse_mode="md"
-            )
-        else:
-            buttons = OneLineKeyboard.confirm_buttons("add_admin", user_id)
-            await event.respond(
-                f"👑 **ADD ADMIN PRIVILEGES**\n\n"
-                f"👤 User: {user.get('first_name', 'N/A')}\n"
-                f"🆔 ID: `{user_id}`\n\n"
-                f"Are you sure you want to add this user as admin?",
-                buttons=buttons,
-                parse_mode="md"
-            )
-        
-        user_states.pop(event.sender_id, None)
-        
-    except Exception as e:
-        logger.error(f"❌ Error in handle_admin_management: {e}")
-        await event.respond("❌ Error processing admin management request.")
-        user_states.pop(event.sender_id, None)
-
-async def handle_admin_add_credits(event):
-    """Handle admin add credits"""
-    try:
-        user_input = event.text.strip()
-        parts = user_input.split()
-        
-        if len(parts) != 2:
-            await event.respond("❌ Invalid format. Use: `user_id credits`")
-            return
-        
-        if not parts[0].isdigit() or not parts[1].isdigit():
-            await event.respond("❌ Both user ID and credits must be numbers.")
-            return
-        
-        user_id = int(parts[0])
-        credits = int(parts[1])
-        
-        if credits <= 0 or credits > 1000:
-            await event.respond("❌ Credits must be between 1 and 1000.")
-            return
-        
-        user = await db_manager.get_user(user_id)
-        if not user:
-            await event.respond(f"❌ User with ID {user_id} not found.")
-            user_states.pop(event.sender_id, None)
-            return
-        
-        success = await db_manager.add_credits(user_id, credits)
-        
-        if success:
-            await event.respond(
-                f"✅ **CREDITS ADDED SUCCESSFULLY**\n\n"
-                f"👤 User: {user.get('first_name', 'N/A')}\n"
-                f"🆔 ID: `{user_id}`\n"
-                f"🎯 Credits Added: {credits}\n"
-                f"💰 New Balance: {user.get('searches_remaining', 0) + credits}",
-                parse_mode="md"
-            )
-            
-            try:
-                await bot_client.send_message(
-                    user_id,
-                    f"🎁 **CREDITS ADDED**\n\n"
-                    f"Administrator has added {credits} credits to your account.\n"
-                    f"💰 New Balance: {user.get('searches_remaining', 0) + credits}\n\n"
-                    f"Thank you for using DarkBoxes!",
-                    parse_mode="md"
-                )
-            except:
-                pass
-        else:
-            await event.respond("❌ Failed to add credits.")
-        
-        user_states.pop(event.sender_id, None)
-        
-    except Exception as e:
-        logger.error(f"❌ Error in handle_admin_add_credits: {e}")
-        await event.respond("❌ Error adding credits.")
-        user_states.pop(event.sender_id, None)
-
-# ================== ADMIN COMMANDS ==================
-
-@bot_client.on(events.NewMessage(pattern=r'/admin'))
-async def admin_command_handler(event):
-    """Handle /admin command"""
-    try:
-        user_id = event.sender_id
-        
-        if not admin_panel.is_admin(user_id):
-            await event.respond("❌ Access denied. Admin privileges required.")
-            return
-        
-        admin_text = (
-            "⚙️ **DARKBOXES ADMIN PANEL**\n\n"
-            "📊 **Quick Stats**\n"
-        )
-        
-        try:
-            today_stats = await db_manager.admin_db.get_today_stats()
-            admin_text += f"├─ Today's Users: {today_stats['new_users']}\n"
-            admin_text += f"├─ Today's Searches: {today_stats['total_searches']}\n"
-            admin_text += f"└─ Today's Payments: ₹{today_stats['total_payments']}\n"
-        except:
-            admin_text += "⚠️ Error loading stats\n"
-        
-        admin_text += "\n🔧 **Select an option below:**"
-        
-        await event.respond(admin_text, buttons=OneLineKeyboard.admin_panel(), parse_mode="md")
-        
-    except Exception as e:
-        logger.error(f"❌ Error in admin_command_handler: {e}")
+        logger.error(f"❌ Error in confirm_action_handler: {e}")
+        await event.answer("❌ Error processing action", alert=True)
 
 @bot_client.on(events.NewMessage(pattern=r'/reply (\d+) (.+)'))
 async def admin_reply_handler(event):
@@ -4210,18 +3829,20 @@ async def admin_reply_handler(event):
         if not admin_panel.is_admin(event.sender_id):
             return
         
-        user_id = int(event.pattern_match.group(1))
+        target_id = int(event.pattern_match.group(1))
         message = event.pattern_match.group(2)
         
         await bot_client.send_message(
-            user_id,
-            f"👤 **ADMINISTRATOR RESPONSE**\n\n{message}\n\n— DarkBoxes Support Team"
+            target_id,
+            f"👤 **ADMINISTRATOR RESPONSE**\n\n{message}\n\n— DarkBoxes Support Team",
+            parse_mode="md"
         )
         
-        await event.respond(f"✅ Reply sent to user {user_id}")
+        await event.respond(f"✅ Reply sent to user {target_id}")
         
     except Exception as e:
         logger.error(f"❌ Error in admin_reply_handler: {e}")
+        await event.respond("❌ Error sending reply")
 
 @bot_client.on(events.NewMessage(pattern=r'/addcredits (\d+) (\d+)'))
 async def add_credits_command(event):
@@ -4230,111 +3851,27 @@ async def add_credits_command(event):
         if not admin_panel.is_admin(event.sender_id):
             return
         
-        user_id = int(event.pattern_match.group(1))
+        target_id = int(event.pattern_match.group(1))
         credits = int(event.pattern_match.group(2))
         
-        user = await db_manager.get_user(user_id)
-        if not user:
-            await event.respond(f"❌ User {user_id} not found.")
-            return
-        
-        success = await db_manager.add_credits(user_id, credits)
+        success = await db_manager.add_credits(target_id, credits)
         
         if success:
-            await event.respond(
-                f"✅ Added {credits} credits to user {user_id}\n"
-                f"New balance: {user.get('searches_remaining', 0) + credits}"
-            )
+            await event.respond(f"✅ Added {credits} credits to user {target_id}")
+            try:
+                await bot_client.send_message(
+                    target_id,
+                    f"🎁 **CREDITS ADDED**\n\nAdministrator added {credits} credits to your account.",
+                    parse_mode="md"
+                )
+            except:
+                pass
         else:
-            await event.respond("❌ Failed to add credits.")
-            
+            await event.respond("❌ Failed to add credits")
+        
     except Exception as e:
         logger.error(f"❌ Error in add_credits_command: {e}")
-
-@bot_client.on(events.NewMessage(pattern=r'/leak (.+)'))
-async def leak_command_handler(event):
-    """Handle /leak command directly"""
-    try:
-        user_id = event.sender_id
-        query = event.pattern_match.group(1).strip()
-        
-        if not query:
-            await event.respond("❌ Please provide a query. Example: `/leak 917204764637`")
-            return
-        
-        user_doc = await db_manager.get_user(user_id)
-        if user_doc and user_doc.get('is_banned'):
-            await event.respond("🚫 Your account has been banned.")
-            return
-        
-        if not user_doc:
-            await event.respond("❌ User not found. Please use /start first.")
-            return
-        
-        # Check access
-        can_search = False
-        if user_doc.get('subscription') and user_doc.get('subscription_expiry'):
-            expiry_date = datetime.fromisoformat(user_doc['subscription_expiry'])
-            if expiry_date > datetime.now(timezone.utc):
-                can_search = True
-        
-        if not can_search and user_doc.get('searches_remaining', 0) < 3:
-            await event.respond(
-                "🔒 **INSUFFICIENT CREDITS**\n\n"
-                "You need 3 credits for advanced search.\n\n"
-                "Contact @darkboxesAdmin for assistance.",
-                buttons=OneLineKeyboard.subscription_plans()
-            )
-            return
-        
-        # Show processing
-        status = await event.respond(
-            "🚀 **ADVANCED OSINT SEARCH INITIATED**\n\n"
-            f"🔍 **Query:** `{query}`\n"
-            f"⏳ Processing your advanced search..."
-        )
-        
-        result = await search_engine.perform_search("leak", query, user_id)
-        
-        try:
-            await status.delete()
-        except:
-            pass
-        
-        if result.get("success"):
-            if result.get("result"):
-                await event.respond(result["result"], parse_mode="md")
-            
-            # Send JSON as file
-            json_content = result.get("json_content")
-            if json_content:
-                json_bytes = json_content.encode('utf-8')
-                await event.respond(
-                    file=json_bytes,
-                    caption=f"📁 **JSON DATA**\nQuery: `{query}`"
-                )
-            
-            # Send TXT as text message (cleaned)
-            txt_content = result.get("txt_content")
-            if txt_content:
-                cleaned_txt = TextProcessor.clean_leak_content(txt_content)
-                chunks = TextProcessor.split_long_text(cleaned_txt, 4000)
-                for i, chunk in enumerate(chunks):
-                    if i == 0:
-                        header = f"📄 **TXT DATA RESULTS**\n🔍 Query: `{query}`\n{'─' * 30}\n\n"
-                        await event.respond(header + chunk, parse_mode="md")
-                    else:
-                        await event.respond(chunk)
-            
-            await db_manager.update_searches(user_id, "leak", query, True)
-        else:
-            await event.respond(result.get("error", "❌ Search failed."), parse_mode="md")
-            await db_manager.update_searches(user_id, "leak", query, False)
-        
-    except Exception as e:
-        logger.error(f"❌ Error in leak_command_handler: {e}")
-        traceback.print_exc()
-        await event.respond("❌ An error occurred during advanced search.")
+        await event.respond("❌ Error adding credits")
 
 @user_client.on(events.NewMessage())
 async def handle_all_messages(event):
@@ -4405,8 +3942,9 @@ async def main():
         logger.info("🛑 Shutting down...")
     except Exception as e:
         logger.error(f"💀 Fatal error: {e}")
-        traceback.print_exc()
+        logger.error(traceback.format_exc())
     finally:
+        # Clean shutdown
         try:
             await bot_client.disconnect()
             if USE_USER_ACCOUNT:
@@ -4417,7 +3955,10 @@ async def main():
             pass
 
 if __name__ == "__main__":
+    # Set event loop policy for Windows if needed
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     
+    # Run the bot
     asyncio.run(main())
+            
