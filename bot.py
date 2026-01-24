@@ -2696,7 +2696,7 @@ class SearchEngine:
     except Exception as e:
         logger.error(f"❌ Error checking for file: {e}")
         return None
-    
+
     async def _process_search_response(self, search_id: str, search_info: Dict, message):
         """Process a search response message"""
         try:
