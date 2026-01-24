@@ -2693,9 +2693,10 @@ class SearchEngine:
         
             return None
         
-    except Exception as e:
-        logger.error(f"❌ Error checking for file: {e}")
-        return None
+        except Exception as e:
+            logger.error(f"❌ Error checking for file: {e}")
+            return None
+    
     async def _process_search_response(self, search_id: str, search_info: Dict, message):
         """Process a search response message"""
         try:
@@ -2765,234 +2766,234 @@ class SearchEngine:
             logger.error(f"❌ Error processing search response: {e}")
     
     async def _process_leak_response(self, search_id: str, search_info: Dict, message):
-    """Process leak search response"""
-    try:
-        # First, check if this is a file
-        file_result = await self._check_and_process_file(message, search_info)
-        
-        if file_result is not None:
-            logger.info(f"📁 Processing leak search file")
+        """Process leak search response"""
+        try:
+            # First, check if this is a file
+            file_result = await self._check_and_process_file(message, search_info)
             
-            # Check if we've already processed this file (prevent duplicate processing)
-            message_id = message.id
-            if "processed_files" not in search_info:
-                search_info["processed_files"] = []
-            
-            if message_id in search_info["processed_files"]:
-                logger.info(f"⚠️ Already processed file with ID {message_id}, skipping")
+            if file_result is not None:
+                logger.info(f"📁 Processing leak search file")
+                
+                # Check if we've already processed this file (prevent duplicate processing)
+                message_id = message.id
+                if "processed_files" not in search_info:
+                    search_info["processed_files"] = []
+                
+                if message_id in search_info["processed_files"]:
+                    logger.info(f"⚠️ Already processed file with ID {message_id}, skipping")
+                    return
+                
+                search_info["processed_files"].append(message_id)
+                
+                # Add file to received files
+                if "files_received" not in search_info:
+                    search_info["files_received"] = []
+                
+                # Determine file type
+                filename = ""
+                if hasattr(message.file, 'name') and message.file.name:
+                    filename = message.file.name.lower()
+                elif hasattr(message, 'file') and message.file and hasattr(message.file, 'name'):
+                    filename = message.file.name.lower()
+                
+                file_type = "unknown"
+                if '.json' in filename:
+                    file_type = "json"
+                elif '.txt' in filename:
+                    file_type = "txt"
+                elif '.text' in filename:
+                    file_type = "txt"
+                elif 'json' in filename:
+                    file_type = "json"
+                
+                file_result["file_type"] = file_type
+                file_result["message_id"] = message_id
+                search_info["files_received"].append(file_result)
+                
+                logger.info(f"✅ Added {file_type} file to leak search results. Total files: {len(search_info['files_received'])}")
+                
+                # Check if we should complete the search
+                received_types = [f["file_type"] for f in search_info["files_received"]]
+                has_json = "json" in received_types
+                has_txt = "txt" in received_types
+                has_enough_files = len(search_info["files_received"]) >= 2
+                time_elapsed = time.time() - search_info["start_time"]
+                
+                # Complete if we have both file types OR enough files OR timeout
+                if (has_json and has_txt) or has_enough_files or time_elapsed > 10:
+                    await self._complete_leak_search(search_id, search_info)
                 return
             
-            search_info["processed_files"].append(message_id)
+            # Check for text message that might be a TXT file content
+            text = message.text or message.raw_text or ""
             
-            # Add file to received files
-            if "files_received" not in search_info:
-                search_info["files_received"] = []
+            # Check if this looks like a TXT file result
+            is_txt_result = False
             
-            # Determine file type
-            filename = ""
-            if hasattr(message.file, 'name') and message.file.name:
-                filename = message.file.name.lower()
-            elif hasattr(message, 'file') and message.file and hasattr(message.file, 'name'):
-                filename = message.file.name.lower()
+            # Patterns that indicate this is a TXT file result
+            txt_patterns = [
+                r'Full results available as JSON file',
+                r'📁 Full JSON results for',
+                r'Service: leak',
+                r'Requested by:',
+                r'───────────────────────',
+                r'━━━━━━━━━━━━━━━━━━━━━━━━',
+                r'Total length: \d+ characters',
+                r'\.\.\. \[TRUNCATED - DATA TOO LONG\] \.\.\.',
+                r'👤 ʀᴇǫᴜᴇꜱᴛᴇᴅ ʙʏ:',
+                r'🔍 ǫᴜᴇʀʏ:',
+                r'⏰ ᴛɪᴍᴇ:'
+            ]
             
-            file_type = "unknown"
-            if '.json' in filename:
-                file_type = "json"
-            elif '.txt' in filename:
-                file_type = "txt"
-            elif '.text' in filename:
-                file_type = "txt"
-            elif 'json' in filename:
-                file_type = "json"
+            # Check if text contains TXT result patterns
+            pattern_count = 0
+            for pattern in txt_patterns:
+                if re.search(pattern, text, re.IGNORECASE):
+                    pattern_count += 1
             
-            file_result["file_type"] = file_type
-            file_result["message_id"] = message_id
-            search_info["files_received"].append(file_result)
+            # If at least 3 patterns match, consider it a TXT file
+            if pattern_count >= 3 and len(text) > 500:
+                is_txt_result = True
+                logger.info(f"📄 Detected TXT file content in message (matched {pattern_count} patterns)")
             
-            logger.info(f"✅ Added {file_type} file to leak search results. Total files: {len(search_info['files_received'])}")
-            
-            # Check if we should complete the search
-            received_types = [f["file_type"] for f in search_info["files_received"]]
-            has_json = "json" in received_types
-            has_txt = "txt" in received_types
-            has_enough_files = len(search_info["files_received"]) >= 2
-            time_elapsed = time.time() - search_info["start_time"]
-            
-            # Complete if we have both file types OR enough files OR timeout
-            if (has_json and has_txt) or has_enough_files or time_elapsed > 10:
-                await self._complete_leak_search(search_id, search_info)
-            return
-        
-        # Check for text message that might be a TXT file content
-        text = message.text or message.raw_text or ""
-        
-        # Check if this looks like a TXT file result
-        is_txt_result = False
-        
-        # Patterns that indicate this is a TXT file result
-        txt_patterns = [
-            r'Full results available as JSON file',
-            r'📁 Full JSON results for',
-            r'Service: leak',
-            r'Requested by:',
-            r'───────────────────────',
-            r'━━━━━━━━━━━━━━━━━━━━━━━━',
-            r'Total length: \d+ characters',
-            r'\.\.\. \[TRUNCATED - DATA TOO LONG\] \.\.\.',
-            r'👤 ʀᴇǫᴜᴇꜱᴛᴇᴅ ʙʏ:',
-            r'🔍 ǫᴜᴇʀʏ:',
-            r'⏰ ᴛɪᴍᴇ:'
-        ]
-        
-        # Check if text contains TXT result patterns
-        pattern_count = 0
-        for pattern in txt_patterns:
-            if re.search(pattern, text, re.IGNORECASE):
-                pattern_count += 1
-        
-        # If at least 3 patterns match, consider it a TXT file
-        if pattern_count >= 3 and len(text) > 500:
-            is_txt_result = True
-            logger.info(f"📄 Detected TXT file content in message (matched {pattern_count} patterns)")
-        
-        if text and (is_txt_result or len(text.strip()) > 1000):
-            logger.info(f"📝 Processing text message as potential TXT file ({len(text)} chars)")
-            
-            # Check if we've already processed this message
-            message_id = message.id
-            if "processed_files" not in search_info:
-                search_info["processed_files"] = []
-            
-            if message_id in search_info["processed_files"]:
-                logger.info(f"⚠️ Already processed message with ID {message_id}, skipping")
+            if text and (is_txt_result or len(text.strip()) > 1000):
+                logger.info(f"📝 Processing text message as potential TXT file ({len(text)} chars)")
+                
+                # Check if we've already processed this message
+                message_id = message.id
+                if "processed_files" not in search_info:
+                    search_info["processed_files"] = []
+                
+                if message_id in search_info["processed_files"]:
+                    logger.info(f"⚠️ Already processed message with ID {message_id}, skipping")
+                    return
+                
+                search_info["processed_files"].append(message_id)
+                
+                # Create a file result from the text
+                txt_result = {
+                    "success": True,
+                    "has_file": True,
+                    "content": text,
+                    "raw_bytes": text.encode('utf-8'),
+                    "file_type": "txt",
+                    "filename": f"leak_{search_info['query']}_{int(time.time())}.txt",
+                    "message_id": message_id,
+                    "is_text_message": True
+                }
+                
+                # Add to received files
+                if "files_received" not in search_info:
+                    search_info["files_received"] = []
+                
+                search_info["files_received"].append(txt_result)
+                logger.info(f"✅ Added TXT content from message to leak search results. Total files: {len(search_info['files_received'])}")
+                
+                # Check if we should complete the search
+                received_types = [f["file_type"] for f in search_info["files_received"]]
+                has_json = "json" in received_types
+                has_txt = "txt" in received_types
+                has_enough_files = len(search_info["files_received"]) >= 2
+                time_elapsed = time.time() - search_info["start_time"]
+                
+                # Complete if we have both file types OR enough files OR timeout
+                if (has_json and has_txt) or has_enough_files or time_elapsed > 10:
+                    await self._complete_leak_search(search_id, search_info)
                 return
             
-            search_info["processed_files"].append(message_id)
+            # Check for processing or no-info messages
+            if TextProcessor.is_processing_message(text):
+                logger.info(f"⏳ Processing message for leak search")
+                return
             
-            # Create a file result from the text
-            txt_result = {
+            if TextProcessor.is_no_info_message(text):
+                logger.info(f"🚫 No info for leak search")
+                if search_id in self.active_searches:
+                    future = self.active_searches[search_id]["future"]
+                    if not future.done():
+                        future.set_result({"success": False})
+                    del self.active_searches[search_id]
+            
+        except Exception as e:
+            logger.error(f"❌ Error processing leak response: {e}")
+    
+    async def _complete_leak_search(self, search_id: str, search_info: Dict):
+        """Complete leak search and send results"""
+        try:
+            logger.info(f"✅ Completing leak search with {len(search_info.get('files_received', []))} files")
+            
+            if "files_received" not in search_info or not search_info["files_received"]:
+                logger.warning("⚠️ No files received for leak search")
+                if search_id in self.active_searches:
+                    future = self.active_searches[search_id]["future"]
+                    if not future.done():
+                        future.set_result({
+                            "success": False,
+                            "error": "❌ No results found in our advanced databases."
+                        })
+                    del self.active_searches[search_id]
+                return
+            
+            # Combine results
+            combined_result = {
                 "success": True,
-                "has_file": True,
-                "content": text,
-                "raw_bytes": text.encode('utf-8'),
-                "file_type": "txt",
-                "filename": f"leak_{search_info['query']}_{int(time.time())}.txt",
-                "message_id": message_id,
-                "is_text_message": True
+                "result": "🚀 **ADVANCED OSINT SEARCH COMPLETE**\n\n",
+                "files": search_info["files_received"],
+                "has_multiple_files": len(search_info["files_received"]) > 1
             }
             
-            # Add to received files
-            if "files_received" not in search_info:
-                search_info["files_received"] = []
+            # Create summary
+            json_data = None
+            txt_data = None
             
-            search_info["files_received"].append(txt_result)
-            logger.info(f"✅ Added TXT content from message to leak search results. Total files: {len(search_info['files_received'])}")
+            for file in search_info["files_received"]:
+                if file["file_type"] == "json" and json_data is None:
+                    json_data = file.get("content", "")
+                elif file["file_type"] == "txt" and txt_data is None:
+                    txt_data = file.get("content", "")
             
-            # Check if we should complete the search
-            received_types = [f["file_type"] for f in search_info["files_received"]]
-            has_json = "json" in received_types
-            has_txt = "txt" in received_types
-            has_enough_files = len(search_info["files_received"]) >= 2
-            time_elapsed = time.time() - search_info["start_time"]
+            # Format result summary
+            summary = f"🔮 **ADVANCED UNIVERSAL SEARCH RESULT**\n"
+            summary += f"═══════════════════════════════════\n\n"
+            summary += f"🔍 **Query:** `{search_info['query']}`\n"
+            summary += f"🚀 **Source:** Advanced OSINT Engine\n"
+            summary += f"⚡ **Files Found:** {len(search_info['files_received'])}\n"
             
-            # Complete if we have both file types OR enough files OR timeout
-            if (has_json and has_txt) or has_enough_files or time_elapsed > 10:
-                await self._complete_leak_search(search_id, search_info)
-            return
-        
-        # Check for processing or no-info messages
-        if TextProcessor.is_processing_message(text):
-            logger.info(f"⏳ Processing message for leak search")
-            return
-        
-        if TextProcessor.is_no_info_message(text):
-            logger.info(f"🚫 No info for leak search")
+            if json_data and txt_data:
+                summary += f"📊 **Includes:** JSON + TXT files\n\n"
+            elif json_data:
+                summary += f"📊 **Includes:** JSON file\n\n"
+            elif txt_data:
+                summary += f"📊 **Includes:** TXT file\n\n"
+            
+            if txt_data:
+                # Extract preview from TXT data
+                txt_preview = txt_data[:300].replace('\n', '\n')
+                summary += f"📄 **PREVIEW:**\n"
+                summary += f"─────────────────────────────\n"
+                summary += f"{txt_preview}\n"
+                if len(txt_data) > 300:
+                    summary += f"... (see full TXT file below)\n\n"
+            
+            summary += f"📁 **Files available for download below**\n"
+            summary += f"⚡ **Powered by DarkBoxes Advanced Intelligence**\n"
+            
+            combined_result["result"] = summary
+            
+            if search_id in self.active_searches:
+                future = self.active_searches[search_id]["future"]
+                if not future.done():
+                    future.set_result(combined_result)
+                del self.active_searches[search_id]
+                logger.info(f"✅ Leak search completed successfully")
+            
+        except Exception as e:
+            logger.error(f"❌ Error completing leak search: {e}")
             if search_id in self.active_searches:
                 future = self.active_searches[search_id]["future"]
                 if not future.done():
                     future.set_result({"success": False})
                 del self.active_searches[search_id]
-            
-    except Exception as e:
-        logger.error(f"❌ Error processing leak response: {e}")
-
-async def _complete_leak_search(self, search_id: str, search_info: Dict):
-    """Complete leak search and send results"""
-    try:
-        logger.info(f"✅ Completing leak search with {len(search_info.get('files_received', []))} files")
-        
-        if "files_received" not in search_info or not search_info["files_received"]:
-            logger.warning("⚠️ No files received for leak search")
-            if search_id in self.active_searches:
-                future = self.active_searches[search_id]["future"]
-                if not future.done():
-                    future.set_result({
-                        "success": False,
-                        "error": "❌ No results found in our advanced databases."
-                    })
-                del self.active_searches[search_id]
-            return
-        
-        # Combine results
-        combined_result = {
-            "success": True,
-            "result": "🚀 **ADVANCED OSINT SEARCH COMPLETE**\n\n",
-            "files": search_info["files_received"],
-            "has_multiple_files": len(search_info["files_received"]) > 1
-        }
-        
-        # Create summary
-        json_data = None
-        txt_data = None
-        
-        for file in search_info["files_received"]:
-            if file["file_type"] == "json" and json_data is None:
-                json_data = file.get("content", "")
-            elif file["file_type"] == "txt" and txt_data is None:
-                txt_data = file.get("content", "")
-        
-        # Format result summary
-        summary = f"🔮 **ADVANCED UNIVERSAL SEARCH RESULT**\n"
-        summary += f"═══════════════════════════════════\n\n"
-        summary += f"🔍 **Query:** `{search_info['query']}`\n"
-        summary += f"🚀 **Source:** Advanced OSINT Engine\n"
-        summary += f"⚡ **Files Found:** {len(search_info['files_received'])}\n"
-        
-        if json_data and txt_data:
-            summary += f"📊 **Includes:** JSON + TXT files\n\n"
-        elif json_data:
-            summary += f"📊 **Includes:** JSON file\n\n"
-        elif txt_data:
-            summary += f"📊 **Includes:** TXT file\n\n"
-        
-        if txt_data:
-            # Extract preview from TXT data
-            txt_preview = txt_data[:300].replace('\n', '\n')
-            summary += f"📄 **PREVIEW:**\n"
-            summary += f"─────────────────────────────\n"
-            summary += f"{txt_preview}\n"
-            if len(txt_data) > 300:
-                summary += f"... (see full TXT file below)\n\n"
-        
-        summary += f"📁 **Files available for download below**\n"
-        summary += f"⚡ **Powered by DarkBoxes Advanced Intelligence**\n"
-        
-        combined_result["result"] = summary
-        
-        if search_id in self.active_searches:
-            future = self.active_searches[search_id]["future"]
-            if not future.done():
-                future.set_result(combined_result)
-            del self.active_searches[search_id]
-            logger.info(f"✅ Leak search completed successfully")
-            
-    except Exception as e:
-        logger.error(f"❌ Error completing leak search: {e}")
-        if search_id in self.active_searches:
-            future = self.active_searches[search_id]["future"]
-            if not future.done():
-                future.set_result({"success": False})
-            del self.active_searches[search_id]
     
     async def _process_file(self, message, search_info: Dict) -> Dict:
         """Process file message"""
