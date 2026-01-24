@@ -128,7 +128,7 @@ USE_USER_ACCOUNT = config.USER_API_ID != 0 and config.USER_API_HASH and config.U
 GROUP_PRIORITIES = {
     "primary": {
         "name": "⚡ Premium Database",
-        "identifier": -1003596998816,
+        "identifier": "infobot_66",
         "timeout": 30,
         "weight": 10,
         "enabled": True,
