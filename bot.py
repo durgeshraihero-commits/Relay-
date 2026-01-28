@@ -2482,9 +2482,6 @@ class APIHandler:
                 status=500
             )
 
-# ================== API SERVER ==================
-
-
 # ================== ADMIN PANEL HANDLER ==================
 
 class AdminPanelHandler:
@@ -4093,7 +4090,6 @@ async def cleanup_expired_searches():
 
 # ================== WEB SERVER ==================
 
-
 async def start_web_server(api_handler):
     """Start consolidated web server with API endpoints"""
     app = web.Application()
@@ -4269,6 +4265,7 @@ async def start_web_server(api_handler):
     except Exception as e:
         logger.error(f"❌ Web server failed: {e}")
         raise
+
 # ================== GLOBAL VARIABLES ==================
 
 bot_client = TelegramClient(config.BOT_SESSION_FILE, config.BOT_API_ID, config.BOT_API_HASH)
@@ -5299,3 +5296,12 @@ async def main():
                 db_manager.client.close()
         except:
             pass
+
+# ================== ENTRY POINT ==================
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("👋 Received shutdown signal")
+    except Exception as e:
+        logger.error(f"💀 Main crashed: {e}")
