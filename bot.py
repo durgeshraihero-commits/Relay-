@@ -4093,14 +4093,10 @@ async def cleanup_expired_searches():
 
 # ================== WEB SERVER ==================
 
-# ================== SINGLE CONSOLIDATED WEB/API SERVER ==================
 
-async def start_web_server():
+async def start_web_server(api_handler):
     """Start consolidated web server with API endpoints"""
     app = web.Application()
-    
-    # Create API handler
-    api_handler = APIHandler(db_manager, search_engine)
     
     # Health check endpoint
     async def health_check(request):
@@ -4264,17 +4260,15 @@ async def start_web_server():
     try:
         await site.start()
         logger.info(f"🌐 Consolidated Web/API server running on port {port}")
-        logger.info(f"📚 API Documentation: https://{os.getenv('RENDER_EXTERNAL_HOSTNAME', 'relay-wzlz.onrender.com')}/api/v1/docs")
-        logger.info(f"🔑 Authentication: Use X-API-Key header or api_key query parameter")
         
-        # Update the config.API_BASE_URL to use Render's URL
-        config.API_BASE_URL = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME', 'relay-wzlz.onrender.com')}"
-        logger.info(f"🌐 API Base URL: {config.API_BASE_URL}")
+        render_hostname = os.getenv('RENDER_EXTERNAL_HOSTNAME', 'relay-wzlz.onrender.com')
+        logger.info(f"📚 API Documentation: https://{render_hostname}/api/v1/docs")
+        logger.info(f"🔑 Authentication: Use X-API-Key header or api_key query parameter")
+        logger.info(f"🌐 API Base URL: https://{render_hostname}")
         
     except Exception as e:
         logger.error(f"❌ Web server failed: {e}")
         raise
-
 # ================== GLOBAL VARIABLES ==================
 
 bot_client = TelegramClient(config.BOT_SESSION_FILE, config.BOT_API_ID, config.BOT_API_HASH)
@@ -5183,7 +5177,7 @@ async def extend_api_command(event):
 # ================== MAIN FUNCTION ==================
 async def main():
     """Main function"""
-    global search_engine, admin_panel, bot_info, api_handler  # Add api_handler here
+    global search_engine, admin_panel, bot_info, api_handler
     
     try:
         logger.info("🚀 Starting DarkBoxes Intelligence System with API Support...")
@@ -5231,7 +5225,8 @@ async def main():
         asyncio.create_task(cleanup_expired_searches())
         
         # Start consolidated web server (includes API endpoints)
-        asyncio.create_task(start_web_server())
+        # Pass the api_handler as parameter
+        asyncio.create_task(start_web_server(api_handler))
         
         # Get the actual port from Render
         port = int(os.getenv("PORT", "10000"))
