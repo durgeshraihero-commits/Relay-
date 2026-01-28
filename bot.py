@@ -83,6 +83,7 @@ class BotConfig:
     API_PORT: int = int(os.getenv("API_PORT", "8000"))
     API_RATE_LIMIT: int = int(os.getenv("API_RATE_LIMIT", "100"))
     API_SECRET_KEY: str = os.getenv("API_SECRET_KEY", secrets.token_hex(32))
+    API_BASE_URL: str = os.getenv("API_BASE_URL", "https://relay-wzlz.onrender.com")
 
 config = BotConfig()
 
@@ -140,7 +141,7 @@ class APIKeyManager:
         """Generate a new API key"""
         timestamp = int(time.time())
         random_part = secrets.token_hex(16)
-        data = f"{user_id}:{timestamp}:{random_part}"
+        data = f"{user_id}:{timestamp}:{random_part}:{secrets.token_hex(8)}"
         api_key = hashlib.sha256(data.encode()).hexdigest()
         return api_key
     
@@ -183,7 +184,7 @@ GROUP_PRIORITIES = {
     },
     "advanced": {
         "name": "🚀 Advanced OSINT Engine",
-        "identifier": "IntelXGroup",  # Replace with your advanced group ID
+        "identifier": "IntelXGroup",
         "timeout": 25,
         "weight": 15,
         "enabled": True,
@@ -244,7 +245,8 @@ API_PLANS = {
         "validity_days": 30,
         "concurrent": 1,
         "rate_limit": 10,
-        "features": ["1000 API requests", "30-day access", "Basic endpoints", "Email support"]
+        "features": ["1000 API requests", "30-day access", "Basic endpoints", "Email support"],
+        "unlimited": False
     },
     "professional": {
         "name": "⚡ Professional API",
@@ -253,7 +255,8 @@ API_PLANS = {
         "validity_days": 30,
         "concurrent": 3,
         "rate_limit": 30,
-        "features": ["5000 API requests", "30-day access", "All endpoints", "Priority support", "Webhook support"]
+        "features": ["5000 API requests", "30-day access", "All endpoints", "Priority support", "Webhook support"],
+        "unlimited": False
     },
     "enterprise": {
         "name": "🏢 Enterprise API",
@@ -262,7 +265,18 @@ API_PLANS = {
         "validity_days": 30,
         "concurrent": 10,
         "rate_limit": 100,
-        "features": ["Unlimited requests", "30-day access", "All endpoints", "24/7 support", "Custom endpoints", "Bulk processing"]
+        "features": ["Unlimited requests", "30-day access", "All endpoints", "24/7 support", "Custom endpoints", "Bulk processing"],
+        "unlimited": True
+    },
+    "unlimited": {
+        "name": "🚀 Unlimited API",
+        "price": 999,
+        "requests": "Unlimited",
+        "validity_days": 30,
+        "concurrent": 5,
+        "rate_limit": 50,
+        "features": ["Unlimited searches (30 days)", "All endpoints", "Priority processing", "Email support"],
+        "unlimited": True
     }
 }
 
@@ -430,23 +444,24 @@ SEARCH_COMMANDS = {
 # ================== API COMMANDS ==================
 
 API_COMMANDS = {
-    "phone": {"endpoint": "/api/v1/search/phone", "method": "POST"},
-    "family": {"endpoint": "/api/v1/search/family", "method": "POST"},
-    "aadhar": {"endpoint": "/api/v1/search/aadhar", "method": "POST"},
-    "vehicle": {"endpoint": "/api/v1/search/vehicle", "method": "POST"},
-    "upi": {"endpoint": "/api/v1/search/upi", "method": "POST"},
-    "email": {"endpoint": "/api/v1/search/email", "method": "POST"},
-    "telegram": {"endpoint": "/api/v1/search/telegram", "method": "POST"},
-    "imei": {"endpoint": "/api/v1/search/imei", "method": "POST"},
-    "gst": {"endpoint": "/api/v1/search/gst", "method": "POST"},
-    "insta": {"endpoint": "/api/v1/search/instagram", "method": "POST"},
-    "pak": {"endpoint": "/api/v1/search/pakistan", "method": "POST"},
-    "ip": {"endpoint": "/api/v1/search/ip", "method": "POST"},
-    "ifsc": {"endpoint": "/api/v1/search/ifsc", "method": "POST"},
-    "leak": {"endpoint": "/api/v1/search/leak", "method": "POST"},
+    "phone": {"endpoint": "/api/v1/search/phone", "method": "POST", "cost": 1},
+    "family": {"endpoint": "/api/v1/search/family", "method": "POST", "cost": 1},
+    "aadhar": {"endpoint": "/api/v1/search/aadhar", "method": "POST", "cost": 2},
+    "vehicle": {"endpoint": "/api/v1/search/vehicle", "method": "POST", "cost": 2},
+    "upi": {"endpoint": "/api/v1/search/upi", "method": "POST", "cost": 1},
+    "email": {"endpoint": "/api/v1/search/email", "method": "POST", "cost": 1},
+    "telegram": {"endpoint": "/api/v1/search/telegram", "method": "POST", "cost": 2},
+    "imei": {"endpoint": "/api/v1/search/imei", "method": "POST", "cost": 2},
+    "gst": {"endpoint": "/api/v1/search/gst", "method": "POST", "cost": 1},
+    "insta": {"endpoint": "/api/v1/search/instagram", "method": "POST", "cost": 1},
+    "pak": {"endpoint": "/api/v1/search/pakistan", "method": "POST", "cost": 3},
+    "ip": {"endpoint": "/api/v1/search/ip", "method": "POST", "cost": 1},
+    "ifsc": {"endpoint": "/api/v1/search/ifsc", "method": "POST", "cost": 1},
+    "leak": {"endpoint": "/api/v1/search/leak", "method": "POST", "cost": 3},
     "batch": {"endpoint": "/api/v1/search/batch", "method": "POST"},
     "status": {"endpoint": "/api/v1/status", "method": "GET"},
     "balance": {"endpoint": "/api/v1/balance", "method": "GET"},
+    "usage": {"endpoint": "/api/v1/usage", "method": "GET"},
 }
 
 # ================== PREMIUM TEXT FORMATTER ==================
@@ -774,6 +789,9 @@ class APIDatabaseManager:
             
             expiry_date = datetime.now(timezone.utc) + timedelta(days=days)
             
+            # Get plan details
+            plan = API_PLANS.get(plan_id, API_PLANS["unlimited"])
+            
             api_doc = {
                 "api_key": api_key,
                 "client_token": client_token,
@@ -785,10 +803,11 @@ class APIDatabaseManager:
                 "is_active": True,
                 "total_requests": 0,
                 "requests_used": 0,
-                "requests_remaining": API_PLANS.get(plan_id, {}).get("requests", 1000),
-                "rate_limit": API_PLANS.get(plan_id, {}).get("rate_limit", 10),
-                "concurrent_limit": API_PLANS.get(plan_id, {}).get("concurrent", 1),
-                "last_used": None
+                "requests_remaining": plan.get("requests", "Unlimited") if not plan.get("unlimited") else 999999,
+                "rate_limit": plan.get("rate_limit", 10),
+                "concurrent_limit": plan.get("concurrent", 1),
+                "last_used": None,
+                "unlimited": plan.get("unlimited", False)
             }
             
             await asyncio.get_running_loop().run_in_executor(
@@ -805,7 +824,7 @@ class APIDatabaseManager:
         """Get API key information"""
         try:
             return await asyncio.get_running_loop().run_in_executor(
-                None, self.db.api_keys.find_one, {"api_key": api_key, "is_active": True}
+                None, self.db.api_keys.find_one, {"api_key": api_key}
             )
         except Exception as e:
             logger.error(f"❌ Error getting API key: {e}")
@@ -828,31 +847,42 @@ class APIDatabaseManager:
         if not api_info:
             return False, "Invalid API key"
         
+        if not api_info.get("is_active", True):
+            return False, "API key is inactive"
+        
         # Check expiry
         expires_at = datetime.fromisoformat(api_info["expires_at"])
         if expires_at < datetime.now(timezone.utc):
             return False, "API key expired"
         
-        # Check usage limits
-        if api_info.get("requests_remaining", 0) <= 0:
-            return False, "API request limit exceeded"
+        # Check usage limits (skip for unlimited plans)
+        if not api_info.get("unlimited", False):
+            if api_info.get("requests_remaining", 0) <= 0:
+                return False, "API request limit exceeded"
         
         return True, ""
     
     async def record_api_request(self, api_key: str, endpoint: str, success: bool = True):
         """Record API request"""
         try:
+            api_info = await self.get_api_key(api_key)
+            if not api_info:
+                return
+            
             update_data = {
                 "$inc": {
                     "total_requests": 1,
-                    "requests_used": 1,
-                    "requests_remaining": -1
+                    "requests_used": 1
                 },
                 "$set": {
                     "last_used": datetime.now(timezone.utc).isoformat(),
                     "last_endpoint": endpoint
                 }
             }
+            
+            # Decrease remaining requests for limited plans
+            if not api_info.get("unlimited", False):
+                update_data["$inc"]["requests_remaining"] = -1
             
             await asyncio.get_running_loop().run_in_executor(
                 None, lambda: self.db.api_keys.update_one(
@@ -884,7 +914,7 @@ class APIDatabaseManager:
                     {"user_id": user_id},
                     {"api_key": 1, "plan_id": 1, "created_at": 1, 
                      "expires_at": 1, "description": 1, "is_active": 1,
-                     "requests_used": 1, "requests_remaining": 1}
+                     "requests_used": 1, "requests_remaining": 1, "total_requests": 1}
                 ).sort("created_at", -1))
             )
         except Exception as e:
@@ -1395,7 +1425,9 @@ class DatabaseManager:
                 "subscription_expiry": None,
                 "wallet_balance": 0,
                 "is_banned": False,
-                "is_admin": False
+                "is_admin": False,
+                "has_api_access": False,
+                "api_plan": None
             }
             
             if referral_info:
@@ -1542,6 +1574,45 @@ class DatabaseManager:
             return True
         except Exception as e:
             logger.error(f"❌ Error adding subscription: {e}")
+            return False
+    
+    async def add_api_access(self, user_id: int, plan_id: str, days: int) -> bool:
+        """Add API access to user"""
+        try:
+            plan = API_PLANS.get(plan_id, API_PLANS["unlimited"])
+            expiry_date = datetime.now(timezone.utc) + timedelta(days=days)
+            
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.users.update_one(
+                    {"user_id": user_id},
+                    {
+                        "$set": {
+                            "has_api_access": True,
+                            "api_plan": plan_id,
+                            "api_expiry": expiry_date.isoformat()
+                        }
+                    }
+                )
+            )
+            
+            # Log payment
+            payment_log = {
+                "user_id": user_id,
+                "plan_id": plan_id,
+                "amount": plan["price"],
+                "status": "completed",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "type": "api_access",
+                "admin_added": True
+            }
+            
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.payments.insert_one(payment_log)
+            )
+            
+            return True
+        except Exception as e:
+            logger.error(f"❌ Error adding API access: {e}")
             return False
     
     async def add_referral_credit(self, referrer_id: int, credits: int = 1) -> bool:
@@ -1714,6 +1785,7 @@ class OneLineKeyboard:
     def api_plans() -> List[List[Button]]:
         """API plan selection"""
         buttons = [
+            [Button.inline("🚀 Unlimited API - ₹999", "api_plan_unlimited")],
             [Button.inline("🔑 Basic API - ₹999", "api_plan_basic")],
             [Button.inline("⚡ Professional API - ₹2499", "api_plan_professional")],
             [Button.inline("🏢 Enterprise API - ₹4999", "api_plan_enterprise")],
@@ -1863,9 +1935,17 @@ class OneLineKeyboard:
         """API keys management menu"""
         return [
             [Button.inline("🔄 Refresh", "my_api_keys")],
-            [Button.inline("➕ Create New API Key", "create_api_key")],
+            [Button.inline("➕ Create API Key", "create_api_key")],
             [Button.inline("📊 Usage Stats", "api_usage")],
             [Button.inline("« API Menu", "api_menu")]
+        ]
+    
+    @staticmethod
+    def confirm_api_creation(plan_id: str, days: int) -> List[List[Button]]:
+        """Confirm API key creation"""
+        return [
+            [Button.inline(f"✅ Create {plan_id} API ({days} days)", f"confirm_create_api_{plan_id}_{days}")],
+            [Button.inline("❌ Cancel", "api_menu")]
         ]
 
 # ================== API HANDLER ==================
@@ -1900,9 +1980,10 @@ class APIHandler:
             if expires_at < datetime.now(timezone.utc):
                 return False, None, "API key expired"
             
-            # Check request limits
-            if api_info.get("requests_remaining", 0) <= 0:
-                return False, None, "API request limit exceeded"
+            # Check request limits (skip for unlimited plans)
+            if not api_info.get("unlimited", False):
+                if api_info.get("requests_remaining", 0) <= 0:
+                    return False, None, "API request limit exceeded"
             
             return True, api_info, ""
             
@@ -1957,25 +2038,24 @@ class APIHandler:
                     status=403
                 )
             
-            # Check access
-            can_search = False
-            searches_remaining = user_doc.get('searches_remaining', 0)
-            subscription = user_doc.get('subscription')
-            subscription_expiry = user_doc.get('subscription_expiry')
-            
-            if subscription and subscription_expiry:
-                expiry_date = datetime.fromisoformat(subscription_expiry)
-                if expiry_date > datetime.now(timezone.utc):
-                    can_search = True
-            
-            if not can_search and searches_remaining <= 0:
-                await self.db.api_db.record_api_request(api_info["api_key"], f"/api/v1/search/{search_type}", False)
+            # Check if user has API access
+            if not user_doc.get('has_api_access'):
                 return web.json_response(
-                    APIResponseFormatter.error("Insufficient credits", "INSUFFICIENT_CREDITS"),
-                    status=402
+                    APIResponseFormatter.error("API access not enabled for this account", "API_ACCESS_DENIED"),
+                    status=403
                 )
             
-            logger.info(f"🔍 API Search: {search_type} - {query} (User: {user_id})")
+            # Check API access expiry
+            api_expiry = user_doc.get('api_expiry')
+            if api_expiry:
+                expiry_date = datetime.fromisoformat(api_expiry)
+                if expiry_date < datetime.now(timezone.utc):
+                    return web.json_response(
+                        APIResponseFormatter.error("API access expired", "API_ACCESS_EXPIRED"),
+                        status=403
+                    )
+            
+            logger.info(f"🔍 API Search: {search_type} - {query} (User: {user_id}, API: {api_info['api_key'][:8]}...)")
             
             # Perform search
             result = await self.search_engine.perform_search(search_type, query, user_id)
@@ -2076,29 +2156,36 @@ class APIHandler:
                     status=403
                 )
             
-            # Check access and calculate total cost
-            total_cost = 0
-            for search in searches:
-                search_type = search.get("type")
-                if search_type in SEARCH_COMMANDS:
-                    total_cost += SEARCH_COMMANDS[search_type].get("cost", 1)
-            
-            can_search = False
-            searches_remaining = user_doc.get('searches_remaining', 0)
-            subscription = user_doc.get('subscription')
-            subscription_expiry = user_doc.get('subscription_expiry')
-            
-            if subscription and subscription_expiry:
-                expiry_date = datetime.fromisoformat(subscription_expiry)
-                if expiry_date > datetime.now(timezone.utc):
-                    can_search = True
-            
-            if not can_search and searches_remaining < total_cost:
-                await self.db.api_db.record_api_request(api_info["api_key"], "/api/v1/search/batch", False)
+            # Check if user has API access
+            if not user_doc.get('has_api_access'):
                 return web.json_response(
-                    APIResponseFormatter.error(f"Insufficient credits. Required: {total_cost}", "INSUFFICIENT_CREDITS"),
-                    status=402
+                    APIResponseFormatter.error("API access not enabled for this account", "API_ACCESS_DENIED"),
+                    status=403
                 )
+            
+            # Check API access expiry
+            api_expiry = user_doc.get('api_expiry')
+            if api_expiry:
+                expiry_date = datetime.fromisoformat(api_expiry)
+                if expiry_date < datetime.now(timezone.utc):
+                    return web.json_response(
+                        APIResponseFormatter.error("API access expired", "API_ACCESS_EXPIRED"),
+                        status=403
+                    )
+            
+            # Calculate total cost for limited plans
+            if not api_info.get("unlimited", False):
+                total_cost = 0
+                for search in searches:
+                    search_type = search.get("type")
+                    if search_type in API_COMMANDS:
+                        total_cost += API_COMMANDS[search_type].get("cost", 1)
+                
+                if api_info.get("requests_remaining", 0) < total_cost:
+                    return web.json_response(
+                        APIResponseFormatter.error(f"Insufficient API requests. Required: {total_cost}, Available: {api_info.get('requests_remaining', 0)}", "INSUFFICIENT_API_REQUESTS"),
+                        status=402
+                    )
             
             logger.info(f"🔍 API Batch Search: {len(searches)} queries (User: {user_id})")
             
@@ -2223,22 +2310,25 @@ class APIHandler:
                 "requests": {
                     "total": api_info.get("total_requests", 0),
                     "used": api_info.get("requests_used", 0),
-                    "remaining": api_info.get("requests_remaining", 0)
+                    "remaining": api_info.get("requests_remaining", 999999) if api_info.get("unlimited") else api_info.get("requests_remaining", 0)
                 },
                 "limits": {
                     "rate_limit": api_info.get("rate_limit", 10),
                     "concurrent_limit": api_info.get("concurrent_limit", 1)
                 },
+                "unlimited": api_info.get("unlimited", False),
                 "user": {
                     "id": user_id,
                     "username": user_doc.get("username") if user_doc else None,
-                    "credits": user_doc.get("searches_remaining", 0) if user_doc else 0,
-                    "subscription": user_doc.get("subscription") if user_doc else None
+                    "has_api_access": user_doc.get("has_api_access", False) if user_doc else False,
+                    "api_plan": user_doc.get("api_plan") if user_doc else None,
+                    "api_expiry": user_doc.get("api_expiry") if user_doc else None
                 },
                 "server": {
                     "status": "online",
                     "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "version": "2.0.0"
+                    "version": "2.0.0",
+                    "base_url": config.API_BASE_URL
                 }
             }
             
@@ -2277,11 +2367,19 @@ class APIHandler:
             
             balance_data = {
                 "user_id": user_id,
-                "credits": user_doc.get("searches_remaining", 0),
+                "api_key": api_info["api_key"][:8] + "..." + api_info["api_key"][-4:],
+                "api_plan": api_info.get("plan_id", "unknown"),
+                "api_expires": api_info.get("expires_at"),
+                "api_requests": {
+                    "total": api_info.get("total_requests", 0),
+                    "used": api_info.get("requests_used", 0),
+                    "remaining": api_info.get("requests_remaining", 999999) if api_info.get("unlimited") else api_info.get("requests_remaining", 0)
+                },
+                "telegram_credits": user_doc.get("searches_remaining", 0),
                 "total_searches": user_doc.get("total_searches", 0),
                 "subscription": user_doc.get("subscription"),
                 "subscription_expiry": user_doc.get("subscription_expiry"),
-                "api_requests_remaining": api_info.get("requests_remaining", 0),
+                "has_api_access": user_doc.get("has_api_access", False),
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
             
@@ -2296,6 +2394,89 @@ class APIHandler:
             
         except Exception as e:
             logger.error(f"❌ API balance error: {e}")
+            return web.json_response(
+                APIResponseFormatter.error("Internal server error", "INTERNAL_ERROR"),
+                status=500
+            )
+    
+    async def handle_usage_request(self, request: web.Request) -> web.Response:
+        """Handle usage API request"""
+        try:
+            # Authenticate
+            auth_result, api_info, error = await self.authenticate_request(request)
+            if not auth_result:
+                return web.json_response(
+                    APIResponseFormatter.error(error, "AUTH_FAILED"),
+                    status=401
+                )
+            
+            # Get API usage stats
+            api_key = api_info["api_key"]
+            
+            # Get recent API logs
+            recent_logs = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: list(self.db.db.api_logs.find(
+                    {"api_key": api_key},
+                    {"timestamp": 1, "endpoint": 1, "success": 1}
+                ).sort("timestamp", -1).limit(50))
+            )
+            
+            # Get daily usage for last 7 days
+            seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+            
+            pipeline = [
+                {"$match": {"api_key": api_key, "timestamp": {"$gte": seven_days_ago.isoformat()}}},
+                {"$group": {
+                    "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": {"$toDate": "$timestamp"}}},
+                    "count": {"$sum": 1},
+                    "success": {"$sum": {"$cond": [{"$eq": ["$success", True]}, 1, 0]}},
+                    "failed": {"$sum": {"$cond": [{"$eq": ["$success", False]}, 1, 0]}}
+                }},
+                {"$sort": {"_id": 1}}
+            ]
+            
+            daily_usage = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: list(self.db.db.api_logs.aggregate(pipeline))
+            )
+            
+            # Get endpoint usage
+            endpoint_pipeline = [
+                {"$match": {"api_key": api_key}},
+                {"$group": {
+                    "_id": "$endpoint",
+                    "count": {"$sum": 1},
+                    "success": {"$sum": {"$cond": [{"$eq": ["$success", True]}, 1, 0]}},
+                    "failed": {"$sum": {"$cond": [{"$eq": ["$success", False]}, 1, 0]}}
+                }},
+                {"$sort": {"count": -1}},
+                {"$limit": 10}
+            ]
+            
+            endpoint_usage = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: list(self.db.db.api_logs.aggregate(endpoint_pipeline))
+            )
+            
+            usage_data = {
+                "api_key": api_key[:8] + "..." + api_key[-4:],
+                "plan": api_info.get("plan_id", "unknown"),
+                "total_requests": api_info.get("total_requests", 0),
+                "requests_used": api_info.get("requests_used", 0),
+                "requests_remaining": api_info.get("requests_remaining", 999999) if api_info.get("unlimited") else api_info.get("requests_remaining", 0),
+                "created_at": api_info.get("created_at"),
+                "expires_at": api_info.get("expires_at"),
+                "daily_usage": daily_usage,
+                "endpoint_usage": endpoint_usage,
+                "recent_activity": recent_logs,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            
+            # Record API request
+            await self.db.api_db.record_api_request(api_key, "/api/v1/usage", True)
+            
+            return web.json_response(APIResponseFormatter.success(usage_data, "Usage data retrieved"))
+            
+        except Exception as e:
+            logger.error(f"❌ API usage error: {e}")
             return web.json_response(
                 APIResponseFormatter.error("Internal server error", "INTERNAL_ERROR"),
                 status=500
@@ -2371,8 +2552,12 @@ async def start_api_server():
     async def balance_endpoint(request):
         return await api_handler.handle_balance_request(request)
     
+    async def usage_endpoint(request):
+        return await api_handler.handle_usage_request(request)
+    
     # Add routes
     app.router.add_get('/health', health_check)
+    app.router.add_get('/api/v1/health', health_check)
     
     # Search endpoints
     app.router.add_post('/api/v1/search/phone', phone_search)
@@ -2394,6 +2579,53 @@ async def start_api_server():
     # Utility endpoints
     app.router.add_get('/api/v1/status', status_endpoint)
     app.router.add_get('/api/v1/balance', balance_endpoint)
+    app.router.add_get('/api/v1/usage', usage_endpoint)
+    
+    # Documentation endpoint
+    async def documentation(request):
+        docs = {
+            "service": "DarkBoxes Intelligence API",
+            "version": "2.0.0",
+            "base_url": config.API_BASE_URL,
+            "endpoints": {
+                "search": {
+                    "phone": {"method": "POST", "endpoint": "/api/v1/search/phone", "description": "Phone number intelligence"},
+                    "family": {"method": "POST", "endpoint": "/api/v1/search/family", "description": "Family network analysis"},
+                    "aadhar": {"method": "POST", "endpoint": "/api/v1/search/aadhar", "description": "Aadhar comprehensive search"},
+                    "vehicle": {"method": "POST", "endpoint": "/api/v1/search/vehicle", "description": "Vehicle intelligence"},
+                    "upi": {"method": "POST", "endpoint": "/api/v1/search/upi", "description": "UPI financial intelligence"},
+                    "email": {"method": "POST", "endpoint": "/api/v1/search/email", "description": "Email intelligence"},
+                    "telegram": {"method": "POST", "endpoint": "/api/v1/search/telegram", "description": "Telegram intelligence"},
+                    "imei": {"method": "POST", "endpoint": "/api/v1/search/imei", "description": "Device intelligence"},
+                    "gst": {"method": "POST", "endpoint": "/api/v1/search/gst", "description": "Business intelligence"},
+                    "instagram": {"method": "POST", "endpoint": "/api/v1/search/instagram", "description": "Instagram intelligence"},
+                    "pakistan": {"method": "POST", "endpoint": "/api/v1/search/pakistan", "description": "Pakistan number intelligence"},
+                    "ip": {"method": "POST", "endpoint": "/api/v1/search/ip", "description": "IP location"},
+                    "ifsc": {"method": "POST", "endpoint": "/api/v1/search/ifsc", "description": "IFSC code lookup"},
+                    "leak": {"method": "POST", "endpoint": "/api/v1/search/leak", "description": "Advanced OSINT search"},
+                    "batch": {"method": "POST", "endpoint": "/api/v1/search/batch", "description": "Batch search multiple queries"}
+                },
+                "utility": {
+                    "status": {"method": "GET", "endpoint": "/api/v1/status", "description": "API status and limits"},
+                    "balance": {"method": "GET", "endpoint": "/api/v1/balance", "description": "User credits and balance"},
+                    "usage": {"method": "GET", "endpoint": "/api/v1/usage", "description": "API usage statistics"}
+                }
+            },
+            "authentication": {
+                "header": "X-API-Key: your_api_key",
+                "query_param": "?api_key=your_api_key"
+            },
+            "example_request": {
+                "curl": "curl -X POST -H 'X-API-Key: your_api_key' -H 'Content-Type: application/json' -d '{\"query\": \"9876543210\"}' " + config.API_BASE_URL + "/api/v1/search/phone"
+            },
+            "contact": {
+                "admin": "@darkboxesAdmin",
+                "channel": "@darkboxesv1"
+            }
+        }
+        return web.json_response(docs)
+    
+    app.router.add_get('/api/v1/docs', documentation)
     
     # CORS middleware
     async def cors_middleware(app, handler):
@@ -2418,7 +2650,8 @@ async def start_api_server():
     try:
         await site.start()
         logger.info(f"🌐 API server running on port {config.API_PORT}")
-        logger.info(f"📚 API Documentation available at http://localhost:{config.API_PORT}/api/v1/")
+        logger.info(f"📚 API Documentation: {config.API_BASE_URL}/api/v1/docs")
+        logger.info(f"🔑 Authentication: Use X-API-Key header or api_key query parameter")
     except Exception as e:
         logger.error(f"❌ API server failed: {e}")
 
@@ -2561,6 +2794,18 @@ class AdminPanelHandler:
                 target_id = int(data.split("_")[-1])
                 await self.show_user_detail(event, target_id)
             
+            elif data.startswith("confirm_create_api_"):
+                # Handle API key creation confirmation
+                parts = data.split("_")
+                if len(parts) >= 5:
+                    plan_id = parts[3]
+                    days = int(parts[4])
+                    await self.confirm_create_api_key(event, plan_id, days)
+            
+            elif data.startswith("confirm_revoke_api_"):
+                api_key = data.split("_", 3)[3]
+                await self.confirm_revoke_api_key(event, api_key)
+            
             # API Menu Callbacks
             elif data == "api_menu":
                 await self.show_api_menu(event)
@@ -2582,7 +2827,7 @@ class AdminPanelHandler:
                 await self.show_api_plan_details(event, plan_id)
             
             elif data == "create_api_key":
-                await self.ask_for_create_api_key(event)
+                await self.ask_for_api_plan_selection(event)
             
         except Exception as e:
             logger.error(f"❌ Error in admin callback: {e}")
@@ -2627,9 +2872,10 @@ class AdminPanelHandler:
                     expires = api_key.get("expires_at", "")[:10]
                     requests = api_key.get("requests_used", 0)
                     remaining = api_key.get("requests_remaining", 0)
+                    unlimited = "♾️" if api_key.get("unlimited") else ""
                     
                     api_text += (
-                        f"{i}. **{api_key.get('description', 'Unnamed')}**\n"
+                        f"{i}. **{api_key.get('description', 'Unnamed')}** {unlimited}\n"
                         f"   ├─ Status: {status}\n"
                         f"   ├─ Plan: {api_key.get('plan_id', 'N/A')}\n"
                         f"   ├─ Key: `{api_key['api_key'][:8]}...{api_key['api_key'][-4:]}`\n"
@@ -2640,15 +2886,16 @@ class AdminPanelHandler:
                     )
                 
                 api_text += "📝 **Usage Instructions:**\n"
+                api_text += f"• Base URL: `{config.API_BASE_URL}`\n"
                 api_text += "• Add header: `X-API-Key: your_api_key`\n"
                 api_text += "• Or query param: `?api_key=your_api_key`\n"
-                api_text += "• Base URL: `http://your-server:8000/api/v1/`\n"
+                api_text += "• See /api_docs for endpoint details\n"
             else:
                 api_text += "📭 No API keys found.\n\n"
                 api_text += "💡 **Get started:**\n"
-                api_text += "1. Choose an API plan\n"
-                api_text += "2. Create your first API key\n"
-                api_text += "3. Start integrating!\n"
+                api_text += "1. Purchase API access from @darkboxesAdmin\n"
+                api_text += "2. Once activated, create your API key\n"
+                api_text += "3. Start integrating with your tools!\n"
             
             await event.edit(api_text, buttons=OneLineKeyboard.api_keys_menu(), parse_mode="md")
             
@@ -2682,7 +2929,7 @@ class AdminPanelHandler:
             
             usage_text += "\n📋 **Available Endpoints:**\n"
             for cmd_key, cmd_info in API_COMMANDS.items():
-                if cmd_key not in ['batch', 'status', 'balance']:
+                if cmd_key not in ['batch', 'status', 'balance', 'usage']:
                     usage_text += f"• {cmd_info['endpoint']} ({cmd_info['method']})\n"
             
             await event.edit(usage_text, buttons=OneLineKeyboard.api_keys_menu(), parse_mode="md")
@@ -2697,7 +2944,8 @@ class AdminPanelHandler:
         api_text += "═══════════════════════\n\n"
         
         for plan_id, plan in API_PLANS.items():
-            api_text += f"{plan.get('icon', '🔑')} **{plan['name']}**\n"
+            unlimited_symbol = "♾️" if plan.get('unlimited') else ""
+            api_text += f"{plan.get('icon', '🔑')} **{plan['name']}** {unlimited_symbol}\n"
             api_text += f"💰 **Price:** ₹{plan['price']}\n"
             api_text += f"📊 **Requests:** {plan['requests']}\n"
             api_text += f"📅 **Validity:** {plan['validity_days']} days\n"
@@ -2711,12 +2959,12 @@ class AdminPanelHandler:
             api_text += "\n" + "─" * 30 + "\n\n"
         
         api_text += "📞 **Contact @darkboxesAdmin to purchase API access**\n"
-        api_text += "💳 **UPI ID:** `{config.UPI_ID}`\n\n"
+        api_text += f"💳 **UPI ID:** `{config.UPI_ID}`\n\n"
         api_text += "🔒 **Instructions:**\n"
         api_text += "1. Send payment via UPI\n"
         api_text += "2. Send screenshot to @darkboxesAdmin\n"
-        api_text += "3. Include desired plan and duration\n"
-        api_text += "4. API key will be delivered within 5 minutes"
+        api_text += "3. Include your User ID and desired plan\n"
+        api_text += "4. API access will be activated within 5 minutes"
         
         await event.edit(api_text, buttons=OneLineKeyboard.api_plans(), parse_mode="md")
     
@@ -2727,8 +2975,9 @@ class AdminPanelHandler:
             return
         
         plan = API_PLANS[plan_id]
+        unlimited_symbol = "♾️" if plan.get('unlimited') else ""
         
-        plan_text = f"{plan.get('icon', '🔑')} **{plan['name']}**\n"
+        plan_text = f"{plan.get('icon', '🔑')} **{plan['name']}** {unlimited_symbol}\n"
         plan_text += "═══════════════════════\n\n"
         
         plan_text += f"💰 **Price:** ₹{plan['price']}\n"
@@ -2743,12 +2992,18 @@ class AdminPanelHandler:
         
         plan_text += f"\n🎯 **Perfect For:** {plan.get('for', 'Developers and businesses')}\n\n"
         
+        if plan.get('unlimited'):
+            plan_text += "💡 **Unlimited Plan:**\n"
+            plan_text += "• No request limits\n"
+            plan_text += "• Best for high-volume usage\n"
+            plan_text += "• Perfect for OSINT tools\n\n"
+        
         plan_text += "📞 **To Purchase:**\n"
         plan_text += f"1. Send ₹{plan['price']} to UPI: `{config.UPI_ID}`\n"
         plan_text += f"2. Send payment screenshot to @darkboxesAdmin\n"
         plan_text += f"3. Include your User ID: `{event.sender_id}`\n"
         plan_text += f"4. Specify plan: {plan['name']}\n"
-        plan_text += f"5. API key will be delivered within 5 minutes\n\n"
+        plan_text += f"5. API access will be activated within 5 minutes\n\n"
         
         plan_text += "💡 **Note:** Contact @darkboxesAdmin for custom plans or bulk discounts"
         
@@ -2766,36 +3021,35 @@ class AdminPanelHandler:
         docs_text += "═══════════════════════\n\n"
         
         docs_text += "🚀 **Getting Started**\n"
-        docs_text += "1. Obtain an API key from @darkboxesAdmin\n"
-        docs_text += "2. Use the API key in your requests\n"
-        docs_text += "3. Call the desired endpoint\n\n"
+        docs_text += "1. Purchase API access from @darkboxesAdmin\n"
+        docs_text += "2. Once activated, create your API key\n"
+        docs_text += "3. Use the API key in your requests\n"
+        docs_text += "4. Call the desired endpoint\n\n"
         
         docs_text += "🔐 **Authentication**\n"
         docs_text += "Add to headers:\n"
         docs_text += "```\n"
-        docs_text += "X-API-Key: your_api_key_here\n"
+        docs_text += f"X-API-Key: your_api_key_here\n"
         docs_text += "```\n\n"
         docs_text += "Or as query parameter:\n"
         docs_text += "```\n"
-        docs_text += "?api_key=your_api_key_here\n"
+        docs_text += f"?api_key=your_api_key_here\n"
         docs_text += "```\n\n"
         
-        docs_text += "🌐 **Base URL**\n"
+        docs_text += f"🌐 **Base URL**\n"
         docs_text += "```\n"
-        docs_text += f"http://your-server:{config.API_PORT}/api/v1/\n"
+        docs_text += f"{config.API_BASE_URL}\n"
         docs_text += "```\n\n"
         
         docs_text += "🔍 **Search Endpoints**\n"
         for cmd_key, cmd_info in API_COMMANDS.items():
-            if cmd_key not in ['batch', 'status', 'balance']:
+            if cmd_key not in ['batch', 'status', 'balance', 'usage']:
                 cmd = SEARCH_COMMANDS.get(cmd_key, {})
                 example = cmd.get('example', 'query_value')
-                validation = cmd.get('validation', '.*')
                 
                 docs_text += f"**{cmd_info['endpoint']}**\n"
                 docs_text += f"Method: {cmd_info['method']}\n"
-                docs_text += f"Example: {{\"query\": \"{example}\"}}\n"
-                docs_text += f"Validation: `{validation}`\n\n"
+                docs_text += f"Example: {{\"query\": \"{example}\"}}\n\n"
         
         docs_text += "📦 **Batch Search**\n"
         docs_text += "**Endpoint:** `/api/v1/search/batch`\n"
@@ -2812,7 +3066,8 @@ class AdminPanelHandler:
         
         docs_text += "📊 **Utility Endpoints**\n"
         docs_text += "• `GET /api/v1/status` - API status and limits\n"
-        docs_text += "• `GET /api/v1/balance` - User credits and balance\n\n"
+        docs_text += "• `GET /api/v1/balance` - User credits and balance\n"
+        docs_text += "• `GET /api/v1/usage` - API usage statistics\n\n"
         
         docs_text += "✅ **Response Format**\n"
         docs_text += "```json\n"
@@ -2841,6 +3096,18 @@ class AdminPanelHandler:
         docs_text += '}\n'
         docs_text += "```\n\n"
         
+        docs_text += "💡 **Kali Linux Integration Example:**\n"
+        docs_text += "```bash\n"
+        docs_text += "#!/bin/bash\n"
+        docs_text += 'API_KEY="your_api_key_here"\n'
+        docs_text += 'QUERY="$1"\n'
+        docs_text += 'curl -s -X POST \\\n'
+        docs_text += f'  -H "X-API-Key: $API_KEY" \\\n'
+        docs_text += f'  -H "Content-Type: application/json" \\\n'
+        docs_text += f'  -d \'{{"query": "\'$QUERY\'"}}\' \\\n'
+        docs_text += f'  {config.API_BASE_URL}/api/v1/search/phone\n'
+        docs_text += "```\n\n"
+        
         docs_text += "💡 **Need Help?**\n"
         docs_text += "Contact @darkboxesAdmin for API support"
         
@@ -2852,22 +3119,137 @@ class AdminPanelHandler:
         
         await event.edit(docs_text, buttons=buttons, parse_mode="md")
     
-    async def ask_for_create_api_key(self, event):
-        """Ask for API key creation details"""
-        await event.edit(
-            "🔑 **CREATE API KEY**\n\n"
-            "Enter API key details in format:\n"
-            "`plan_id days description`\n\n"
-            "**Example:** `basic 30 My OSINT Tool`\n\n"
-            "**Available Plans:**\n"
-            "• `basic` - 1000 requests, 30 days\n"
-            "• `professional` - 5000 requests, 30 days\n"
-            "• `enterprise` - Unlimited, 30 days\n\n"
-            "**Note:** Only admins can create API keys. Contact @darkboxesAdmin.",
-            buttons=OneLineKeyboard.api_keys_menu()
-        )
-        
-        user_states[event.sender_id] = {"action": "create_api_key"}
+    async def ask_for_api_plan_selection(self, event):
+        """Ask for API plan selection"""
+        try:
+            user_id = event.sender_id
+            user_doc = await self.db.get_user(user_id)
+            
+            if not user_doc:
+                await event.answer("❌ User not found", alert=True)
+                return
+            
+            # Check if user has API access
+            if not user_doc.get('has_api_access'):
+                await event.edit(
+                    "❌ **API ACCESS REQUIRED**\n\n"
+                    "You need to purchase API access before creating API keys.\n\n"
+                    "💰 **Available Plans:**\n"
+                    "• 🚀 Unlimited API - ₹999 (30 days, unlimited searches)\n"
+                    "• 🔑 Basic API - ₹999 (30 days, 1000 requests)\n"
+                    "• ⚡ Professional API - ₹2499 (30 days, 5000 requests)\n"
+                    "• 🏢 Enterprise API - ₹4999 (30 days, unlimited requests)\n\n"
+                    "📞 **Contact @darkboxesAdmin to purchase API access**\n",
+                    buttons=OneLineKeyboard.api_plans()
+                )
+                return
+            
+            # Check API access expiry
+            api_expiry = user_doc.get('api_expiry')
+            if api_expiry:
+                expiry_date = datetime.fromisoformat(api_expiry)
+                if expiry_date < datetime.now(timezone.utc):
+                    await event.edit(
+                        "❌ **API ACCESS EXPIRED**\n\n"
+                        "Your API access has expired. Please renew your subscription.\n\n"
+                        "📞 **Contact @darkboxesAdmin to renew API access**\n",
+                        buttons=OneLineKeyboard.api_plans()
+                    )
+                    return
+            
+            api_plan = user_doc.get('api_plan', 'unlimited')
+            
+            plan_text = f"🔑 **CREATE API KEY**\n\n"
+            plan_text += f"📊 **Your API Plan:** {API_PLANS.get(api_plan, {}).get('name', 'Unlimited')}\n"
+            plan_text += f"📅 **Access Valid Until:** {user_doc.get('api_expiry', 'N/A')[:10]}\n\n"
+            
+            plan_text += "Select validity period for your new API key:\n\n"
+            
+            buttons = [
+                [Button.inline("🔄 30 Days", f"confirm_create_api_{api_plan}_30")],
+                [Button.inline("📅 60 Days", f"confirm_create_api_{api_plan}_60")],
+                [Button.inline("📆 90 Days", f"confirm_create_api_{api_plan}_90")],
+                [Button.inline("❌ Cancel", "my_api_keys")]
+            ]
+            
+            await event.edit(plan_text, buttons=buttons, parse_mode="md")
+            
+        except Exception as e:
+            logger.error(f"❌ Error in API plan selection: {e}")
+            await event.answer("❌ Error processing request", alert=True)
+    
+    async def confirm_create_api_key(self, event, plan_id: str, days: int):
+        """Confirm and create API key"""
+        try:
+            user_id = event.sender_id
+            user_doc = await self.db.get_user(user_id)
+            
+            if not user_doc:
+                await event.answer("❌ User not found", alert=True)
+                return
+            
+            # Check if user has API access
+            if not user_doc.get('has_api_access'):
+                await event.answer("❌ API access required", alert=True)
+                return
+            
+            # Check API access expiry
+            api_expiry = user_doc.get('api_expiry')
+            if api_expiry:
+                expiry_date = datetime.fromisoformat(api_expiry)
+                if expiry_date < datetime.now(timezone.utc):
+                    await event.answer("❌ API access expired", alert=True)
+                    return
+            
+            # Create API key
+            description = f"{API_PLANS.get(plan_id, {}).get('name', 'API')} - {days} days"
+            api_info = await self.db.api_db.create_api_key(user_id, plan_id, days, description)
+            
+            if api_info:
+                # Send API key details
+                api_key_msg = (
+                    f"✅ **API KEY CREATED SUCCESSFULLY**\n\n"
+                    f"🔑 **API Key:** `{api_info['api_key']}`\n"
+                    f"🔐 **Client Token:** `{api_info['client_token']}`\n"
+                    f"📅 **Expires:** {api_info['expires_at'][:10]}\n"
+                    f"📊 **Plan:** {api_info['plan_id']}\n"
+                    f"📝 **Description:** {description}\n\n"
+                    f"🌐 **Base URL:** `{config.API_BASE_URL}`\n\n"
+                    f"📝 **Usage Example:**\n"
+                    f"```bash\n"
+                    f"curl -X POST \\\n"
+                    f"  -H \"X-API-Key: {api_info['api_key']}\" \\\n"
+                    f"  -H \"Content-Type: application/json\" \\\n"
+                    f"  -d '{{\"query\": \"9876543210\"}}' \\\n"
+                    f"  {config.API_BASE_URL}/api/v1/search/phone\n"
+                    f"```\n\n"
+                    f"⚠️ **Save this information securely!**\n"
+                    f"API key will not be shown again."
+                )
+                
+                await event.edit(api_key_msg, parse_mode="md", buttons=OneLineKeyboard.api_keys_menu())
+                
+                # Also send to user's private chat
+                try:
+                    await self.bot.send_message(
+                        user_id,
+                        f"🔑 **New API Key Created**\n\n"
+                        f"Key: `{api_info['api_key'][:8]}...{api_info['api_key'][-4:]}`\n"
+                        f"Plan: {api_info['plan_id']}\n"
+                        f"Expires: {api_info['expires_at'][:10]}\n\n"
+                        f"Use with: {config.API_BASE_URL}",
+                        parse_mode="md"
+                    )
+                except:
+                    pass
+                
+            else:
+                await event.answer("❌ Failed to create API key", alert=True)
+                await self.show_my_api_keys(event)
+            
+        except Exception as e:
+            logger.error(f"❌ Error creating API key: {e}")
+            await event.answer("❌ Error creating API key", alert=True)
     
     async def show_api_panel(self, event):
         """Show API management panel"""
@@ -2907,8 +3289,9 @@ class AdminPanelHandler:
                 stats_text += "📋 **Plan Distribution**\n"
                 for plan in api_stats['plan_distribution']:
                     plan_name = API_PLANS.get(plan['_id'], {}).get('name', plan['_id'])
+                    unlimited = "♾️" if API_PLANS.get(plan['_id'], {}).get('unlimited') else ""
                     stats_text += (
-                        f"• {plan_name}\n"
+                        f"• {plan_name} {unlimited}\n"
                         f"  ├─ Total Keys: {plan['count']}\n"
                         f"  ├─ Active: {plan['active_keys']}\n"
                         f"  └─ Requests: {plan['total_requests']}\n\n"
@@ -2935,6 +3318,9 @@ class AdminPanelHandler:
                         f"  ├─ Success Rate: {endpoint['success']/endpoint['count']*100:.1f}%\n"
                         f"  └─ Failed: {endpoint['failed']}\n\n"
                     )
+            
+            stats_text += f"🌐 **API Base URL:** `{config.API_BASE_URL}`\n"
+            stats_text += f"🔐 **API Documentation:** {config.API_BASE_URL}/api/v1/docs\n"
             
             await event.edit(stats_text, buttons=OneLineKeyboard.back_to_admin(), parse_mode="md")
             
@@ -3016,7 +3402,8 @@ class AdminPanelHandler:
                 f"├─ Failed: {total_failed}\n"
                 f"├─ Success Rate: {success_rate:.1f}%\n"
                 f"└─ Average Daily: {total_requests/len(dates):.1f}\n\n"
-                f"📅 **Peak Day:** {dates[counts.index(max(counts))]} ({max(counts)} requests)"
+                f"📅 **Peak Day:** {dates[counts.index(max(counts))]} ({max(counts)} requests)\n"
+                f"🌐 **API Base URL:** `{config.API_BASE_URL}`"
             )
             
             # Send image
@@ -3045,8 +3432,40 @@ class AdminPanelHandler:
         
         user_states[event.sender_id] = {"action": "admin_api_revoke"}
     
-    # ... (rest of the admin panel methods remain the same as before, just add API-related handlers)
-
+    async def confirm_revoke_api_key(self, event, api_key: str):
+        """Confirm API key revocation"""
+        try:
+            # Revoke API key
+            success = await self.db.api_db.delete_api_key(api_key)
+            
+            if success:
+                # Get API key info for notification
+                api_info = await self.db.api_db.get_api_key(api_key)
+                if api_info and api_info.get("user_id"):
+                    # Notify user
+                    try:
+                        await self.bot.send_message(
+                            api_info["user_id"],
+                            f"🚫 **API KEY REVOKED**\n\n"
+                            f"Your API key has been revoked by administrator.\n"
+                            f"🔑 Key: `{api_key[:8]}...{api_key[-4:]}`\n"
+                            f"📝 Description: {api_info.get('description', 'N/A')}\n\n"
+                            f"Contact @darkboxesAdmin for more information.",
+                            parse_mode="md"
+                        )
+                    except:
+                        pass
+                
+                await event.answer("✅ API key revoked successfully", alert=True)
+            else:
+                await event.answer("❌ Failed to revoke API key", alert=True)
+            
+            await self.show_api_panel(event)
+            
+        except Exception as e:
+            logger.error(f"❌ Error revoking API key: {e}")
+            await event.answer("❌ Error revoking API key", alert=True)
+    
     async def show_admin_panel(self, event):
         """Show main admin panel"""
         admin_text = (
@@ -3070,11 +3489,26 @@ class AdminPanelHandler:
             logger.error(f"Error getting stats: {e}")
             admin_text += "⚠️ Error loading stats\n"
         
+        admin_text += f"\n🌐 **API Status:** {'✅ Running' if config.API_ENABLED else '❌ Disabled'}\n"
+        admin_text += f"🔗 **API URL:** {config.API_BASE_URL}\n"
+        
         admin_text += "\n🔧 **Select an option below:**"
         
         await event.edit(admin_text, buttons=OneLineKeyboard.admin_panel(), parse_mode="md")
     
-    # ... (all other admin panel methods remain the same)
+    # ... (rest of the admin panel methods remain the same as before, just add API-related handlers)
+
+    async def ask_for_broadcast(self, event):
+        """Ask for broadcast message"""
+        await event.edit(
+            "📢 **BROADCAST MESSAGE**\n\n"
+            "Enter message to broadcast to all users:\n"
+            "(Supports Markdown formatting)\n\n"
+            "Type your message:",
+            buttons=OneLineKeyboard.back_to_admin()
+        )
+        
+        user_states[event.sender_id] = {"action": "admin_broadcast"}
 
 # ================== SEARCH ENGINE WITH PRIORITY MANAGEMENT ==================
 
@@ -3202,12 +3636,12 @@ class SearchEngine:
                 "expect_multiple_files": True,
                 "files_received": [],
                 "file_types": ["json", "txt"],
-                "processed_files": []  # NEW: Track which files we've already processed
+                "processed_files": []
             }
             
             # Wait for response (5 seconds timeout for leak search)
             try:
-                result = await asyncio.wait_for(future, timeout=10)  # Increased timeout to 10 seconds
+                result = await asyncio.wait_for(future, timeout=10)
                 
                 if result["success"]:
                     logger.info(f"✅ Advanced leak search successful")
@@ -4052,6 +4486,25 @@ async def profile_callback(event):
             profile_text += f"├─ Credits: {user_doc.get('searches_remaining', 0)}\n"
             profile_text += f"└─ Subscription: None\n\n"
         
+        # API access status
+        if user_doc.get('has_api_access'):
+            api_expiry = user_doc.get('api_expiry')
+            if api_expiry:
+                expiry_date = datetime.fromisoformat(api_expiry)
+                days_left = (expiry_date - datetime.now(timezone.utc)).days
+                
+                if days_left > 0:
+                    profile_text += f"🔑 **API Access**\n"
+                    profile_text += f"├─ Plan: {user_doc.get('api_plan', 'Unlimited')}\n"
+                    profile_text += f"├─ Status: Active ({days_left} days left)\n"
+                    profile_text += f"└─ URL: {config.API_BASE_URL}\n\n"
+                else:
+                    profile_text += f"🔑 **API Access: Expired**\n\n"
+            else:
+                profile_text += f"🔑 **API Access: Active**\n\n"
+        else:
+            profile_text += f"🔑 **API Access: Not enabled**\n\n"
+        
         # Statistics
         profile_text += f"📊 **Statistics**\n"
         profile_text += f"├─ Total Searches: {user_doc.get('total_searches', 0)}\n"
@@ -4104,7 +4557,7 @@ async def premium_callback(event):
             "├─ Extended Search History\n"
             "└─ 🎯 For: Power users & professionals\n\n"
             "📞 **Contact @darkboxesAdmin to purchase**\n"
-            "💳 **UPI ID:** `{config.UPI_ID}`\n\n"
+            f"💳 **UPI ID:** `{config.UPI_ID}`\n\n"
             "🔒 **Payment Instructions:**\n"
             "1. Send payment via UPI\n"
             "2. Send screenshot to @darkboxesAdmin\n"
@@ -4151,6 +4604,11 @@ async def api_plan_callback(event):
     """Handle API plan selection"""
     plan_id = event.data.decode().split('_', 2)[2]
     await admin_panel.show_api_plan_details(event, plan_id)
+
+@bot_client.on(events.CallbackQuery(pattern=r'^create_api_key$'))
+async def create_api_key_callback(event):
+    """Handle create API key callback"""
+    await admin_panel.ask_for_api_plan_selection(event)
 
 @bot_client.on(events.CallbackQuery(pattern=r'^plan_(.+)$'))
 async def plan_selection_callback(event):
@@ -4302,9 +4760,6 @@ async def private_message_handler(event):
         if state.get("action") == "search":
             await handle_search_query(event, state)
         
-        elif state.get("action") == "create_api_key":
-            await handle_create_api_key(event)
-        
         elif state.get("action") == "admin_search_user":
             await handle_admin_search_user(event)
         
@@ -4436,69 +4891,6 @@ async def handle_search_query(event, state):
         logger.error(f"❌ Error in handle_search_query: {e}")
         await event.respond("❌ An error occurred during processing.")
 
-async def handle_create_api_key(event):
-    """Handle API key creation"""
-    try:
-        user_id = event.sender_id
-        
-        # Only admins can create API keys
-        if not admin_panel.is_admin(user_id):
-            await event.respond("❌ Only administrators can create API keys.")
-            user_states.pop(user_id, None)
-            return
-        
-        input_text = event.text.strip()
-        parts = input_text.split()
-        
-        if len(parts) < 3:
-            await event.respond("❌ Invalid format. Use: `plan_id days description`")
-            return
-        
-        plan_id = parts[0].lower()
-        days = int(parts[1])
-        description = ' '.join(parts[2:])
-        
-        if plan_id not in API_PLANS:
-            await event.respond(f"❌ Invalid plan ID. Available: {', '.join(API_PLANS.keys())}")
-            return
-        
-        if days <= 0 or days > 365:
-            await event.respond("❌ Days must be between 1 and 365")
-            return
-        
-        # Create API key
-        api_info = await db_manager.api_db.create_api_key(user_id, plan_id, days, description)
-        
-        if api_info:
-            api_text = (
-                f"✅ **API KEY CREATED SUCCESSFULLY**\n\n"
-                f"🔑 **API Key:** `{api_info['api_key']}`\n"
-                f"🔐 **Client Token:** `{api_info['client_token']}`\n"
-                f"📅 **Expires:** {api_info['expires_at'][:10]}\n"
-                f"📊 **Plan:** {api_info['plan_id']}\n"
-                f"📝 **Description:** {description}\n\n"
-                f"📋 **Usage Instructions:**\n"
-                f"```\n"
-                f"curl -X POST \\\n"
-                f"  -H \"X-API-Key: {api_info['api_key']}\" \\\n"
-                f"  -H \"Content-Type: application/json\" \\\n"
-                f"  -d '{{\"query\": \"9876543210\"}}' \\\n"
-                f"  http://your-server:{config.API_PORT}/api/v1/search/phone\n"
-                f"```\n\n"
-                f"⚠️ **Save this information securely!**\n"
-                f"API key will not be shown again."
-            )
-            
-            await event.respond(api_text, parse_mode="md")
-        else:
-            await event.respond("❌ Failed to create API key")
-        
-        user_states.pop(user_id, None)
-        
-    except Exception as e:
-        logger.error(f"❌ Error creating API key: {e}")
-        await event.respond("❌ Error creating API key")
-
 async def handle_admin_api_user(event):
     """Handle admin API user management"""
     try:
@@ -4527,9 +4919,10 @@ async def handle_admin_api_user(event):
                 expires = api_key.get("expires_at", "")[:10]
                 requests = api_key.get("requests_used", 0)
                 remaining = api_key.get("requests_remaining", 0)
+                unlimited = "♾️" if api_key.get("unlimited") else ""
                 
                 api_text += (
-                    f"{i}. **{api_key.get('description', 'Unnamed')}**\n"
+                    f"{i}. **{api_key.get('description', 'Unnamed')}** {unlimited}\n"
                     f"   ├─ Status: {status}\n"
                     f"   ├─ Plan: {api_key.get('plan_id', 'N/A')}\n"
                     f"   ├─ Key: `{api_key['api_key'][:8]}...{api_key['api_key'][-4:]}`\n"
@@ -4541,10 +4934,11 @@ async def handle_admin_api_user(event):
         else:
             api_text += "📭 No API keys found for this user.\n"
         
-        api_text += "\n🔧 **Available Actions:**\n"
+        api_text += f"\n🔧 **Available Actions:**\n"
         api_text += f"• Create new API key: /create_api {user_id} plan_id days description\n"
         api_text += f"• Extend API key: /extend_api api_key additional_days\n"
         api_text += f"• Revoke API key: /revoke_api api_key\n"
+        api_text += f"• Add API access: /add_api_access {user_id} plan_id days\n"
         
         await event.respond(api_text, parse_mode="md")
         user_states.pop(event.sender_id, None)
@@ -4654,8 +5048,6 @@ async def confirm_revoke_api_handler(event):
         logger.error(f"❌ Error revoking API key: {e}")
         await event.answer("❌ Error revoking API key", alert=True)
 
-# ... (rest of the handlers remain the same as before, just add API-related commands)
-
 @bot_client.on(events.NewMessage(pattern=r'/create_api (\d+) (\w+) (\d+) (.+)'))
 async def create_api_command(event):
     """Handle /create_api command"""
@@ -4675,6 +5067,16 @@ async def create_api_command(event):
             await event.respond(f"❌ Invalid plan ID. Available: {', '.join(API_PLANS.keys())}")
             return
         
+        # First ensure user has API access
+        user_doc = await db_manager.get_user(target_user_id)
+        if not user_doc:
+            await event.respond(f"❌ User {target_user_id} not found.")
+            return
+        
+        if not user_doc.get('has_api_access'):
+            # Add API access first
+            await db_manager.add_api_access(target_user_id, plan_id, days)
+        
         # Create API key
         api_info = await db_manager.api_db.create_api_key(target_user_id, plan_id, days, description)
         
@@ -4685,7 +5087,8 @@ async def create_api_command(event):
                 f"🔑 API Key: `{api_info['api_key']}`\n"
                 f"📅 Expires: {api_info['expires_at'][:10]}\n"
                 f"📊 Plan: {plan_id}\n"
-                f"📝 Description: {description}",
+                f"📝 Description: {description}\n\n"
+                f"🌐 **API Base URL:** {config.API_BASE_URL}",
                 parse_mode="md"
             )
         else:
@@ -4694,6 +5097,46 @@ async def create_api_command(event):
     except Exception as e:
         logger.error(f"❌ Error in create_api_command: {e}")
         await event.respond("❌ Error creating API key")
+
+@bot_client.on(events.NewMessage(pattern=r'/add_api_access (\d+) (\w+) (\d+)'))
+async def add_api_access_command(event):
+    """Handle /add_api_access command"""
+    try:
+        user_id = event.sender_id
+        
+        if not admin_panel.is_admin(user_id):
+            await event.respond("❌ Admin privileges required.")
+            return
+        
+        target_user_id = int(event.pattern_match.group(1))
+        plan_id = event.pattern_match.group(2)
+        days = int(event.pattern_match.group(3))
+        
+        if plan_id not in API_PLANS:
+            await event.respond(f"❌ Invalid plan ID. Available: {', '.join(API_PLANS.keys())}")
+            return
+        
+        # Add API access
+        success = await db_manager.add_api_access(target_user_id, plan_id, days)
+        
+        if success:
+            plan = API_PLANS[plan_id]
+            await event.respond(
+                f"✅ **API ACCESS ADDED**\n\n"
+                f"👤 User ID: `{target_user_id}`\n"
+                f"📊 Plan: {plan['name']}\n"
+                f"📅 Duration: {days} days\n"
+                f"💰 Price: ₹{plan['price']}\n\n"
+                f"🌐 **API Base URL:** {config.API_BASE_URL}\n"
+                f"🔑 **User can now create API keys in their profile.**",
+                parse_mode="md"
+            )
+        else:
+            await event.respond("❌ Failed to add API access")
+        
+    except Exception as e:
+        logger.error(f"❌ Error in add_api_access_command: {e}")
+        await event.respond("❌ Error adding API access")
 
 @bot_client.on(events.NewMessage(pattern=r'/revoke_api (.+)'))
 async def revoke_api_command(event):
@@ -4800,7 +5243,8 @@ async def main():
         logger.info("=" * 60)
         logger.info("🎭 DARK BOXES INTELLIGENCE SYSTEM - OPERATIONAL")
         logger.info(f"🔑 API Server: {'Enabled' if config.API_ENABLED else 'Disabled'}")
-        logger.info(f"🌐 API Port: {config.API_PORT}")
+        logger.info(f"🌐 API Base URL: {config.API_BASE_URL}")
+        logger.info(f"🔗 API Port: {config.API_PORT}")
         logger.info("=" * 60)
         
         # Keep the bot running
