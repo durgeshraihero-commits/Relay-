@@ -5182,13 +5182,20 @@ async def main():
     try:
         logger.info("🚀 Starting DarkBoxes Intelligence System with API Support...")
         
+        # Get Render's external URL early
+        render_hostname = os.getenv('RENDER_EXTERNAL_HOSTNAME', 'relay-wzlz.onrender.com')
+        config.API_BASE_URL = f"https://{render_hostname}"
+        logger.info(f"🌐 API Base URL set to: {config.API_BASE_URL}")
+        
         # Start bot client
+        logger.info("🤖 Starting Telegram bot client...")
         await bot_client.start(bot_token=config.BOT_TOKEN)
         bot_info = await bot_client.get_me()
-        logger.info(f"✅ Bot: @{bot_info.username}")
+        logger.info(f"✅ Bot started: @{bot_info.username}")
         
         # Start user client if configured
         if USE_USER_ACCOUNT:
+            logger.info("👤 Starting user client...")
             await user_client.connect()
             if not await user_client.is_user_authorized():
                 logger.error("❌ User client not authorized")
@@ -5198,17 +5205,21 @@ async def main():
             logger.info("ℹ️ Using bot client for all operations")
         
         # Connect to database
+        logger.info("🗄️ Connecting to MongoDB...")
         if not await db_manager.connect():
             logger.error("❌ Database connection failed")
             return
         
         # Initialize admin panel
+        logger.info("⚙️ Initializing admin panel...")
         admin_panel = AdminPanelHandler(db_manager, bot_client)
         
         # Initialize search engine
+        logger.info("🔍 Initializing search engine...")
         search_engine = SearchEngine(db_manager, db_manager)
         
         # Initialize API handler (needs search_engine)
+        logger.info("🔑 Initializing API handler...")
         api_handler = APIHandler(db_manager, search_engine)
         
         # Resolve groups
@@ -5222,37 +5233,63 @@ async def main():
                     logger.warning(f"⚠️ Failed: {group_data['name']} - {e}")
         
         # Start background tasks
+        logger.info("🔄 Starting background tasks...")
         asyncio.create_task(cleanup_expired_searches())
         
         # Start consolidated web server (includes API endpoints)
-        # Pass the api_handler as parameter
-        asyncio.create_task(start_web_server(api_handler))
-        
-        # Get the actual port from Render
+        logger.info("🌐 Starting web server...")
         port = int(os.getenv("PORT", "10000"))
+        logger.info(f"🔌 Binding to port: {port}")
         
-        # Get Render's external URL
-        render_hostname = os.getenv('RENDER_EXTERNAL_HOSTNAME', 'relay-wzlz.onrender.com')
+        # Create and start web server task
+        web_server_task = asyncio.create_task(start_web_server(api_handler))
+        
+        # Wait for server to start
+        await asyncio.sleep(2)  # Give server time to start
         
         logger.info("=" * 60)
         logger.info("🎭 DARK BOXES INTELLIGENCE SYSTEM - OPERATIONAL")
         logger.info(f"🔑 API Server: {'Enabled' if config.API_ENABLED else 'Disabled'}")
-        logger.info(f"🌐 API Base URL: https://{render_hostname}")
+        logger.info(f"🌐 API Base URL: {config.API_BASE_URL}")
         logger.info(f"🔗 Server Port: {port}")
+        logger.info(f"🤖 Bot: @{bot_info.username}")
         logger.info("=" * 60)
         
-        # Update the config.API_BASE_URL for API responses
-        config.API_BASE_URL = f"https://{render_hostname}"
+        # Send startup notification to admin
+        try:
+            await bot_client.send_message(
+                config.ADMIN_USER_ID,
+                f"🚀 Bot started successfully!\n\n"
+                f"🌐 API URL: {config.API_BASE_URL}\n"
+                f"🔗 Port: {port}\n"
+                f"🤖 Bot: @{bot_info.username}\n"
+                f"⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                parse_mode="md"
+            )
+        except Exception as e:
+            logger.warning(f"⚠️ Could not send startup notification: {e}")
         
         # Keep the bot running
+        logger.info("⏳ Bot is now running...")
         await bot_client.run_until_disconnected()
         
-    except KeyboardInterrupt:
-        logger.info("🛑 Shutting down...")
     except Exception as e:
-        logger.error(f"💀 Fatal error: {e}")
+        logger.error(f"💀 Fatal error in main: {e}")
         logger.error(traceback.format_exc())
+        
+        # Try to notify admin about crash
+        try:
+            await bot_client.send_message(
+                config.ADMIN_USER_ID,
+                f"🚨 Bot crashed!\n\n"
+                f"Error: {str(e)[:200]}\n"
+                f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                parse_mode="md"
+            )
+        except:
+            pass
     finally:
+        logger.info("🛑 Shutting down...")
         # Clean shutdown
         try:
             await bot_client.disconnect()
