@@ -1679,7 +1679,15 @@ class OneLineKeyboard:
         ]
     
     @staticmethod
-    def referrals_menu() -> List[List[Button]
+    def referrals_menu() -> List[List[Button]]:
+        """Referrals menu buttons"""
+        return [
+            [Button.inline("📋 My Referrals", "my_referrals")],
+            [Button.inline("📊 Referral Stats", "referral_stats")],
+            [Button.inline("📢 Share Referral", "share_referral")],
+            [Button.inline("« Main Menu", "main_menu")]
+        ]
+    
     @staticmethod
     def api_menu() -> List[List[Button]]:
         """API access menu"""
@@ -1709,14 +1717,6 @@ class OneLineKeyboard:
             [Button.inline("🔑 Manage API Keys", "admin_api_keys")],
             [Button.inline("📈 API Analytics", "admin_api_analytics")],
             [Button.inline("« Admin Panel", "admin_panel")]
-        ]
-]:
-        """Referrals menu buttons"""
-        return [
-            [Button.inline("📋 My Referrals", "my_referrals")],
-            [Button.inline("📊 Referral Stats", "referral_stats")],
-            [Button.inline("📢 Share Referral", "share_referral")],
-            [Button.inline("« Main Menu", "main_menu")]
         ]
 
 # ================== ADMIN PANEL HANDLER ==================
@@ -5453,27 +5453,15 @@ async def api_menu_callback(event):
             return
         
         api_text = (
-            "🔑 **API ACCESS MENU**
-"
-            "═══════════════════════
-
-"
-            "🌐 **Professional API Integration**
-"
-            "Integrate DarkBoxes intelligence into your applications!
-
-"
-            "📋 **Available Options:**
-"
-            "• View your API keys
-"
-            "• Monitor API usage
-"
-            "• Access documentation
-"
-            "• Purchase API plans
-
-"
+            "🔑 **API ACCESS MENU**\n"
+            "═══════════════════════\n\n"
+            "🌐 **Professional API Integration**\n"
+            "Integrate DarkBoxes intelligence into your applications!\n\n"
+            "📋 **Available Options:**\n"
+            "• View your API keys\n"
+            "• Monitor API usage\n"
+            "• Access documentation\n"
+            "• Purchase API plans\n\n"
         )
         
         # Check if user has API access
@@ -5483,16 +5471,12 @@ async def api_menu_callback(event):
             if expiry:
                 expiry_date = datetime.fromisoformat(expiry)
                 days_left = (expiry_date - datetime.now(timezone.utc)).days
-                api_text += f"✅ **API Status:** Active ({days_left} days remaining)
-"
+                api_text += f"✅ **API Status:** Active ({days_left} days remaining)\n"
             else:
-                api_text += "✅ **API Status:** Active (Lifetime)
-"
+                api_text += "✅ **API Status:** Active (Lifetime)\n"
         else:
-            api_text += "⚠️ **API Status:** Not activated
-"
-            api_text += "
-💡 Purchase an API plan to get started!"
+            api_text += "⚠️ **API Status:** Not activated\n"
+            api_text += "\n💡 Purchase an API plan to get started!"
         
         await event.edit(api_text, buttons=OneLineKeyboard.api_menu(), parse_mode="md")
         
@@ -5509,13 +5493,7 @@ async def my_api_keys_callback(event):
         # Get user's API keys
         api_keys = await db_manager.api_db.get_user_api_keys(user_id)
         
-        keys_text = (
-            "🔑 **MY API KEYS**
-"
-            "═══════════════════════
-
-"
-        )
+        keys_text = "🔑 **MY API KEYS**\n═══════════════════════\n\n"
         
         if not api_keys:
             keys_text += "⚠️ You don't have any API keys yet.\n\n"
@@ -5552,41 +5530,25 @@ async def api_usage_callback(event):
         # Get API stats
         stats = await db_manager.api_db.get_api_stats(user_id)
         
-        usage_text = (
-            "📊 **API USAGE STATISTICS**
-"
-            "═══════════════════════
-
-"
-        )
+        usage_text = "📊 **API USAGE STATISTICS**\n═══════════════════════\n\n"
         
         if stats.get('total_requests', 0) == 0:
-            usage_text += "⚠️ No API usage recorded yet.
-
-"
+            usage_text += "⚠️ No API usage recorded yet.\n\n"
             usage_text += "💡 Start using your API key to see statistics here!"
         else:
-            usage_text += f"📈 **Overall Statistics**
-"
-            usage_text += f"├─ Total Requests: {stats['total_requests']}
-"
-            usage_text += f"├─ Successful: {stats['successful_requests']}
-"
-            usage_text += f"├─ Failed: {stats['failed_requests']}
-"
-            usage_text += f"└─ Success Rate: {stats['success_rate']:.1f}%
-
-"
+            usage_text += f"📈 **Overall Statistics**\n"
+            usage_text += f"├─ Total Requests: {stats['total_requests']}\n"
+            usage_text += f"├─ Successful: {stats['successful_requests']}\n"
+            usage_text += f"├─ Failed: {stats['failed_requests']}\n"
+            usage_text += f"└─ Success Rate: {stats['success_rate']:.1f}%\n\n"
             
             if stats.get('recent_requests'):
-                usage_text += "🕐 **Recent Activity**
-"
+                usage_text += "🕐 **Recent Activity**\n"
                 for req in stats['recent_requests'][:5]:
                     endpoint = req.get('endpoint', 'Unknown')
                     timestamp = req.get('timestamp', '')[:16]
                     success = "✅" if req.get('success') else "❌"
-                    usage_text += f"{success} {endpoint} - {timestamp}
-"
+                    usage_text += f"{success} {endpoint} - {timestamp}\n"
         
         await event.edit(usage_text, buttons=OneLineKeyboard.api_menu(), parse_mode="md")
         
@@ -5599,69 +5561,26 @@ async def api_docs_callback(event):
     """Handle API documentation callback"""
     try:
         docs_text = (
-            "📖 **API DOCUMENTATION**
-"
-            "═══════════════════════
-
-"
-            "🌐 **Base URL:**
-"
-            f"`{config.API_BASE_URL}`
-
-"
-            "🔑 **Authentication:**
-"
-            "Include your API key in the request header:
-"
-            "`X-API-Key: your_api_key_here`
-
-"
-            "📡 **Available Endpoints:**
-
-"
-            "**Search Endpoints:**
-"
-            "• `POST /api/v1/search/phone` - Phone search
-"
-            "• `POST /api/v1/search/email` - Email search
-"
-            "• `POST /api/v1/search/aadhar` - Aadhar search
-"
-            "• `POST /api/v1/search/vehicle` - Vehicle search
-"
-            "• `POST /api/v1/search/leak` - Advanced OSINT
-"
-            "• And more...
-
-"
-            "**Utility Endpoints:**
-"
-            "• `GET /api/v1/status` - API status
-"
-            "• `GET /api/v1/balance` - Check credits
-"
-            "• `GET /api/v1/usage` - Usage stats
-
-"
-            "📝 **Example Request:**
-"
-            "```bash
-"
-            "curl -X POST \\
-"
-            f"  {config.API_BASE_URL}/api/v1/search/phone \\
-"
-            "  -H 'X-API-Key: your_key' \\
-"
-            "  -H 'Content-Type: application/json' \\
-"
-            "  -d '{"query": "9876543210"}'
-"
-            "```
-
-"
-            f"📚 **Full Docs:** {config.API_BASE_URL}/api/v1/docs
-"
+            "📖 **API DOCUMENTATION**\n"
+            "═══════════════════════\n\n"
+            "🌐 **Base URL:**\n"
+            f"`{config.API_BASE_URL}`\n\n"
+            "🔑 **Authentication:**\n"
+            "Include your API key in the request header:\n"
+            "`X-API-Key: your_api_key_here`\n\n"
+            "📡 **Available Endpoints:**\n\n"
+            "**Search Endpoints:**\n"
+            "• `POST /api/v1/search/phone` - Phone search\n"
+            "• `POST /api/v1/search/email` - Email search\n"
+            "• `POST /api/v1/search/aadhar` - Aadhar search\n"
+            "• `POST /api/v1/search/vehicle` - Vehicle search\n"
+            "• `POST /api/v1/search/leak` - Advanced OSINT\n"
+            "• And more...\n\n"
+            "**Utility Endpoints:**\n"
+            "• `GET /api/v1/status` - API status\n"
+            "• `GET /api/v1/balance` - Check credits\n"
+            "• `GET /api/v1/usage` - Usage stats\n\n"
+            f"📚 **Full Docs:** {config.API_BASE_URL}/api/v1/docs\n"
             "💬 **Support:** @darkboxesAdmin"
         )
         
@@ -5676,55 +5595,28 @@ async def api_plans_callback(event):
     """Handle API plans callback"""
     try:
         plans_text = (
-            "💎 **API SUBSCRIPTION PLANS**
-"
-            "═══════════════════════
-
-"
-            "Choose the perfect plan for your needs:
-
-"
-            "💰 **BASIC API** - ₹499/month
-"
-            "├─ 1,000 API calls/month
-"
-            "├─ All search endpoints
-"
-            "├─ Email support
-"
-            "└─ 99.9% uptime SLA
-
-"
-            "🚀 **PRO API** - ₹999/month
-"
-            "├─ 5,000 API calls/month
-"
-            "├─ All search endpoints
-"
-            "├─ Priority support
-"
-            "├─ 99.9% uptime SLA
-"
-            "└─ Webhook support
-
-"
-            "👑 **ENTERPRISE API** - ₹2,999/month
-"
-            "├─ 20,000 API calls/month
-"
-            "├─ All search endpoints
-"
-            "├─ 24/7 priority support
-"
-            "├─ 99.9% uptime SLA
-"
-            "├─ Webhook support
-"
-            "├─ Dedicated account manager
-"
-            "└─ Custom integrations
-
-"
+            "💎 **API SUBSCRIPTION PLANS**\n"
+            "═══════════════════════\n\n"
+            "Choose the perfect plan for your needs:\n\n"
+            "💰 **BASIC API** - ₹499/month\n"
+            "├─ 1,000 API calls/month\n"
+            "├─ All search endpoints\n"
+            "├─ Email support\n"
+            "└─ 99.9% uptime SLA\n\n"
+            "🚀 **PRO API** - ₹999/month\n"
+            "├─ 5,000 API calls/month\n"
+            "├─ All search endpoints\n"
+            "├─ Priority support\n"
+            "├─ 99.9% uptime SLA\n"
+            "└─ Webhook support\n\n"
+            "👑 **ENTERPRISE API** - ₹2,999/month\n"
+            "├─ 20,000 API calls/month\n"
+            "├─ All search endpoints\n"
+            "├─ 24/7 priority support\n"
+            "├─ 99.9% uptime SLA\n"
+            "├─ Webhook support\n"
+            "├─ Dedicated account manager\n"
+            "└─ Custom integrations\n\n"
             "📞 **Contact @darkboxesAdmin to activate!**"
         )
         
@@ -5733,97 +5625,6 @@ async def api_plans_callback(event):
     except Exception as e:
         logger.error(f"❌ Error in api_plans_callback: {e}")
         await event.answer("❌ Error loading API plans", alert=True)
-
-
-
-
-@bot_client.on(events.NewMessage(pattern=r'/create_api (\d+) (\w+) (\d+)'))
-async def create_api_command(event):
-    """Handle /create_api command"""
-    try:
-        user_id = event.sender_id
-        
-        if not admin_panel.is_admin(user_id):
-            await event.respond("❌ Admin privileges required.")
-            return
-        
-        target_user_id = int(event.pattern_match.group(1))
-        plan_id = event.pattern_match.group(2)
-        days = int(event.pattern_match.group(3))
-        
-        # Create API key
-        result = await db_manager.api_db.create_api_key(
-            target_user_id,
-            plan_id,
-            days,
-            f"Created by admin {user_id}"
-        )
-        
-        if result.get('success'):
-            api_key = result['api_key']
-            await event.respond(
-                f"✅ **API Key Created**\n\n"
-                f"👤 User ID: `{target_user_id}`\n"
-                f"🔑 API Key: `{api_key}`\n"
-                f"📦 Plan: {plan_id}\n"
-                f"⏰ Valid for: {days} days",
-                parse_mode="md"
-            )
-        else:
-            await event.respond(f"❌ Failed to create API key: {result.get('error')}")
-        
-    except Exception as e:
-        logger.error(f"❌ Error in create_api_command: {e}")
-        await event.respond("❌ Error creating API key")
-
-@bot_client.on(events.NewMessage(pattern=r'/revoke_api (.+)'))
-async def revoke_api_command(event):
-    """Handle /revoke_api command"""
-    try:
-        user_id = event.sender_id
-        
-        if not admin_panel.is_admin(user_id):
-            await event.respond("❌ Admin privileges required.")
-            return
-        
-        api_key = event.pattern_match.group(1).strip()
-        
-        # Revoke API key
-        success = await db_manager.api_db.delete_api_key(api_key)
-        
-        if success:
-            await event.respond(f"✅ API key revoked successfully")
-        else:
-            await event.respond("❌ Failed to revoke API key")
-        
-    except Exception as e:
-        logger.error(f"❌ Error in revoke_api_command: {e}")
-        await event.respond("❌ Error revoking API key")
-
-@bot_client.on(events.NewMessage(pattern=r'/extend_api (.+) (\d+)'))
-async def extend_api_command(event):
-    """Handle /extend_api command"""
-    try:
-        user_id = event.sender_id
-        
-        if not admin_panel.is_admin(user_id):
-            await event.respond("❌ Admin privileges required.")
-            return
-        
-        api_key = event.pattern_match.group(1).strip()
-        additional_days = int(event.pattern_match.group(2))
-        
-        # Extend API key
-        success = await db_manager.api_db.extend_api_key(api_key, additional_days)
-        
-        if success:
-            await event.respond(f"✅ API key extended by {additional_days} days")
-        else:
-            await event.respond("❌ Failed to extend API key")
-        
-    except Exception as e:
-        logger.error(f"❌ Error in extend_api_command: {e}")
-        await event.respond("❌ Error extending API key")
 
 
 # ================== MAIN FUNCTION ==================
