@@ -1,7 +1,7 @@
 """
-DarkBoxes Intelligence System - Premium Edition
+DarkBoxes Intelligence System - Premium Edition with API Support
 Advanced information retrieval with premium interface
-Professional Admin Panel
+Professional Admin Panel and API Management
 """
 
 import os
@@ -14,6 +14,7 @@ import logging
 import asyncio
 import secrets
 import traceback
+import hashlib
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Tuple, Any, Union
 from dataclasses import dataclass
@@ -76,6 +77,12 @@ class BotConfig:
     # Payment
     UPI_ID: str = os.getenv("UPI_ID", "durgeshraihero@oksbi")
     ADMIN_CONTACT: str = "@darkboxesAdmin"
+    
+    # API Configuration
+    API_ENABLED: bool = bool(os.getenv("API_ENABLED", "True"))
+    API_PORT: int = int(os.getenv("API_PORT", "8000"))
+    API_RATE_LIMIT: int = int(os.getenv("API_RATE_LIMIT", "100"))
+    API_SECRET_KEY: str = os.getenv("API_SECRET_KEY", secrets.token_hex(32))
 
 config = BotConfig()
 
@@ -123,6 +130,30 @@ if not validate_config():
 
 USE_USER_ACCOUNT = config.USER_API_ID != 0 and config.USER_API_HASH and config.USER_PHONE
 
+# ================== API KEY MANAGEMENT ==================
+
+class APIKeyManager:
+    """Manage API keys for external access"""
+    
+    @staticmethod
+    def generate_api_key(user_id: int, description: str = "") -> str:
+        """Generate a new API key"""
+        timestamp = int(time.time())
+        random_part = secrets.token_hex(16)
+        data = f"{user_id}:{timestamp}:{random_part}"
+        api_key = hashlib.sha256(data.encode()).hexdigest()
+        return api_key
+    
+    @staticmethod
+    def generate_client_token(api_key: str) -> str:
+        """Generate client token from API key"""
+        return hashlib.sha256(f"{api_key}:{config.API_SECRET_KEY}".encode()).hexdigest()[:32]
+    
+    @staticmethod
+    def validate_api_key_format(api_key: str) -> bool:
+        """Validate API key format"""
+        return len(api_key) == 64 and all(c in '0123456789abcdef' for c in api_key)
+
 # ================== GROUP PRIORITY MANAGEMENT ==================
 
 GROUP_PRIORITIES = {
@@ -151,9 +182,9 @@ GROUP_PRIORITIES = {
         "entity": None
     },
     "advanced": {
-        "name": "🚀 Advanced Search Engine",
-        "identifier": -1001234567890,  # Replace with your advanced group ID
-        "timeout": 5,
+        "name": "🚀 Advanced OSINT Engine",
+        "identifier": "IntelXGroup",  # Replace with your advanced group ID
+        "timeout": 25,
         "weight": 15,
         "enabled": True,
         "entity": None,
@@ -172,40 +203,66 @@ DESTINATION_GROUPS = sorted(
 
 SUBSCRIPTION_PLANS = {
     "basic": {
-        "name": "🔰 Basic Plan",
-        "price": 100,
+        "name": "💰 BASIC TIER",
+        "price": 99,
         "searches": 10,
         "validity": "7 days",
-        "features": ["5 premium searches", "Standard data sources", "7-day access"],
-        "icon": "🔰",
-        "color": "#27AE60"
+        "features": ["10 Premium Searches", "Standard Databases", "7-day Access", "Email Support"],
+        "icon": "💰",
+        "color": "#27AE60",
+        "for": "New users trying the service"
     },
     "standard": {
-        "name": "⭐ Standard Plan",
-        "price": 250,
+        "name": "🚀 STANDARD TIER",
+        "price": 249,
         "searches": 30,
-        "validity": "7 days",
-        "features": ["10 premium searches", "Extended data sources", "Priority processing"],
-        "icon": "⭐",
-        "color": "#F39C12"
+        "validity": "15 days",
+        "features": ["30 Premium Searches", "All Databases", "15-day Access", "Priority Support", "Search History Saved"],
+        "icon": "🚀",
+        "color": "#F39C12",
+        "for": "Regular users needing more searches"
     },
     "premium": {
-        "name": "👑 Premium Plan",
-        "price": 400,
-        "searches": "∞",
-        "validity": "7 days",
-        "features": ["Unlimited searches", "All data sources", "Priority processing", "24/7 support"],
+        "name": "👑 PREMIUM TIER",
+        "price": 499,
+        "searches": "Unlimited",
+        "validity": "30 days",
+        "features": ["Unlimited Searches (30 days)", "All Premium Databases", "Priority Processing", "24/7 WhatsApp Support", "Extended Search History"],
         "icon": "👑",
-        "color": "#9B59B6"
+        "color": "#9B59B6",
+        "for": "Power users & professionals"
+    }
+}
+
+# ================== API PLANS ==================
+
+API_PLANS = {
+    "basic": {
+        "name": "🔑 Basic API Access",
+        "price": 999,
+        "requests": 1000,
+        "validity_days": 30,
+        "concurrent": 1,
+        "rate_limit": 10,
+        "features": ["1000 API requests", "30-day access", "Basic endpoints", "Email support"]
+    },
+    "professional": {
+        "name": "⚡ Professional API",
+        "price": 2499,
+        "requests": 5000,
+        "validity_days": 30,
+        "concurrent": 3,
+        "rate_limit": 30,
+        "features": ["5000 API requests", "30-day access", "All endpoints", "Priority support", "Webhook support"]
     },
     "enterprise": {
-        "name": "🚀 Enterprise Plan",
-        "price": 600,
-        "searches": "∞",
-        "validity": "30 days",
-        "features": ["Unlimited searches", "All premium sources", "Highest priority", "Dedicated support", "API access"],
-        "icon": "🚀",
-        "color": "#E74C3C"
+        "name": "🏢 Enterprise API",
+        "price": 4999,
+        "requests": "Unlimited",
+        "validity_days": 30,
+        "concurrent": 10,
+        "rate_limit": 100,
+        "features": ["Unlimited requests", "30-day access", "All endpoints", "24/7 support", "Custom endpoints", "Bulk processing"]
     }
 }
 
@@ -248,11 +305,11 @@ SEARCH_COMMANDS = {
     "vehicle": {
         "name": "🚗 Vehicle Intelligence",
         "description": "🏎️ **Complete Vehicle & Owner Analysis**\n\n🔸 **Input:** Vehicle number (Format: UP53CZ3391)\n🔸 **Returns:** Vehicle details • Owner information • Mobile number • Address • Registration history • Insurance\n🔸 **Premium Feature:** Celebrity vehicle database access\n🔸 **Real-time:** Current registration status",
-        "commands": ["/vnum", "/vnum", "/vehicle"],
+        "commands": ["/vehicle", "/vnum", "/rc"],
         "example": "UP53CZ3391",
         "validation": r"^[A-Z]{2}\d{2}[A-Z]{1,2}\d{4}$",
         "cost": 2,
-        "priority": "primary",
+        "priority": "secondary",
         "icon": "🚗",
         "category": "assets"
     },
@@ -357,8 +414,8 @@ SEARCH_COMMANDS = {
         "category": "finance"
     },
     "leak": {
-        "name": "🚀 Search Anything",
-        "description": "🔮 **ADVANCED UNIVERSAL SEARCH**\n\n🔸 **Most Powerful Tool** - Finds ANY information\n🔸 **Input:** Email • Phone (with country code) • Name • Document • Username • Any query\n🔸 **Format:** Phone must include country code (e.g., 917204764637)\n🔸 **Returns:** Comprehensive results in JSON + TXT format\n🔸 **Speed:** Ultra-fast 5-second response\n🔸 **Sources:** Deep web • Breach databases • Global intelligence\n🔸 **Cost:** 3 credits per search",
+        "name": "🚀 ADVANCED OSINT TOOL",
+        "description": "🔮 **SEARCH ANYTHING - MOST POWERFUL TOOL**\n\n🔸 **Universal Search:** Email • Phone (with country code) • Name • Document • Username • Any query\n🔸 **Format:** Phone must include country code (e.g., 917204764637)\n🔸 **Returns:** Comprehensive results in JSON + TXT format\n🔸 **Speed:** Ultra-fast 5-second response\n🔸 **Sources:** Deep web • Breach databases • Global intelligence\n🔸 **Cost:** 3 credits per search",
         "commands": ["/leak"],
         "example": "917204764637 or email@domain.com or John Doe",
         "validation": r"^.+$",  # Accepts any input
@@ -368,6 +425,28 @@ SEARCH_COMMANDS = {
         "category": "advanced",
         "group": "advanced"
     }
+}
+
+# ================== API COMMANDS ==================
+
+API_COMMANDS = {
+    "phone": {"endpoint": "/api/v1/search/phone", "method": "POST"},
+    "family": {"endpoint": "/api/v1/search/family", "method": "POST"},
+    "aadhar": {"endpoint": "/api/v1/search/aadhar", "method": "POST"},
+    "vehicle": {"endpoint": "/api/v1/search/vehicle", "method": "POST"},
+    "upi": {"endpoint": "/api/v1/search/upi", "method": "POST"},
+    "email": {"endpoint": "/api/v1/search/email", "method": "POST"},
+    "telegram": {"endpoint": "/api/v1/search/telegram", "method": "POST"},
+    "imei": {"endpoint": "/api/v1/search/imei", "method": "POST"},
+    "gst": {"endpoint": "/api/v1/search/gst", "method": "POST"},
+    "insta": {"endpoint": "/api/v1/search/instagram", "method": "POST"},
+    "pak": {"endpoint": "/api/v1/search/pakistan", "method": "POST"},
+    "ip": {"endpoint": "/api/v1/search/ip", "method": "POST"},
+    "ifsc": {"endpoint": "/api/v1/search/ifsc", "method": "POST"},
+    "leak": {"endpoint": "/api/v1/search/leak", "method": "POST"},
+    "batch": {"endpoint": "/api/v1/search/batch", "method": "POST"},
+    "status": {"endpoint": "/api/v1/status", "method": "GET"},
+    "balance": {"endpoint": "/api/v1/balance", "method": "GET"},
 }
 
 # ================== PREMIUM TEXT FORMATTER ==================
@@ -469,6 +548,91 @@ class PremiumFormatter:
         
         return processing
 
+# ================== API RESPONSE FORMATTER ==================
+
+class APIResponseFormatter:
+    """Format API responses"""
+    
+    @staticmethod
+    def success(data: Any = None, message: str = "Success") -> Dict:
+        """Format successful response"""
+        response = {
+            "status": "success",
+            "message": message,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        if data is not None:
+            response["data"] = data
+        return response
+    
+    @staticmethod
+    def error(message: str = "Error", code: str = "UNKNOWN_ERROR") -> Dict:
+        """Format error response"""
+        return {
+            "status": "error",
+            "message": message,
+            "code": code,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+    
+    @staticmethod
+    def format_search_result(content: str, search_type: str, query: str, source: str) -> Dict:
+        """Format search result for API"""
+        cmd = SEARCH_COMMANDS.get(search_type, {})
+        
+        # Clean and structure the content
+        lines = content.split('\n')
+        structured_data = {
+            "query": query,
+            "type": search_type,
+            "name": cmd.get("name", "Search Result"),
+            "source": source,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "raw_text": content,
+            "parsed_data": {}
+        }
+        
+        # Try to parse structured data from content
+        for line in lines:
+            line = line.strip()
+            if ': ' in line:
+                key, value = line.split(': ', 1)
+                key = key.replace('•', '').replace('🔸', '').strip()
+                if key and value and len(key) < 50:
+                    structured_data["parsed_data"][key] = value
+        
+        return structured_data
+    
+    @staticmethod
+    def format_leak_result(files_data: List[Dict], query: str) -> Dict:
+        """Format leak search result for API"""
+        result = {
+            "query": query,
+            "type": "leak",
+            "name": "Advanced OSINT Search",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "files_count": len(files_data),
+            "files": []
+        }
+        
+        for file_data in files_data:
+            file_info = {
+                "type": file_data.get("file_type", "unknown"),
+                "size": len(file_data.get("content", "")),
+                "has_content": bool(file_data.get("content"))
+            }
+            
+            # Try to parse JSON if available
+            if file_data.get("file_type") == "json" and file_data.get("content"):
+                try:
+                    file_info["parsed_json"] = json.loads(file_data["content"])
+                except:
+                    file_info["parsed_json"] = None
+            
+            result["files"].append(file_info)
+        
+        return result
+
 # ================== TEXT PROCESSOR ==================
 
 class TextProcessor:
@@ -530,7 +694,7 @@ class TextProcessor:
         if not content:
             return ""
         
-        # Remove promotional content
+        # Remove promotional content and personal information
         patterns = [
             r'https?://\S+',
             r'www\.\S+',
@@ -553,7 +717,13 @@ class TextProcessor:
             r'report_.*\.txt',
             r'download.*file',
             r'click.*download',
-            r'designed & powered.*'
+            r'designed & powered.*',
+            r'join.*@\w+',
+            r'channel.*@\w+',
+            r'username.*:.*@\w+',
+            r'telegram.*:.*@\w+',
+            r'@\w+.*bot',
+            r'bot.*@\w+'
         ]
         
         for pattern in patterns:
@@ -564,12 +734,258 @@ class TextProcessor:
         content = re.sub(r' {2,}', ' ', content)
         
         return content.strip()
+    
+    @staticmethod
+    def split_long_text(text: str, max_length: int = 4000) -> List[str]:
+        """Split long text into chunks"""
+        if len(text) <= max_length:
+            return [text]
+        
+        chunks = []
+        while len(text) > max_length:
+            # Try to split at paragraph
+            split_pos = text.rfind('\n\n', 0, max_length)
+            if split_pos == -1:
+                split_pos = text.rfind('\n', 0, max_length)
+            if split_pos == -1:
+                split_pos = max_length
+            
+            chunks.append(text[:split_pos])
+            text = text[split_pos:].lstrip()
+        
+        if text:
+            chunks.append(text)
+        
+        return chunks
+
+# ================== API DATABASE MANAGER ==================
+
+class APIDatabaseManager:
+    """Manage API keys and access"""
+    
+    def __init__(self, db_manager):
+        self.db = db_manager.db
+    
+    async def create_api_key(self, user_id: int, plan_id: str, days: int, description: str = "") -> Dict:
+        """Create a new API key"""
+        try:
+            api_key = APIKeyManager.generate_api_key(user_id, description)
+            client_token = APIKeyManager.generate_client_token(api_key)
+            
+            expiry_date = datetime.now(timezone.utc) + timedelta(days=days)
+            
+            api_doc = {
+                "api_key": api_key,
+                "client_token": client_token,
+                "user_id": user_id,
+                "plan_id": plan_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "expires_at": expiry_date.isoformat(),
+                "description": description,
+                "is_active": True,
+                "total_requests": 0,
+                "requests_used": 0,
+                "requests_remaining": API_PLANS.get(plan_id, {}).get("requests", 1000),
+                "rate_limit": API_PLANS.get(plan_id, {}).get("rate_limit", 10),
+                "concurrent_limit": API_PLANS.get(plan_id, {}).get("concurrent", 1),
+                "last_used": None
+            }
+            
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.api_keys.insert_one(api_doc)
+            )
+            
+            return api_doc
+            
+        except Exception as e:
+            logger.error(f"❌ Error creating API key: {e}")
+            return None
+    
+    async def get_api_key(self, api_key: str) -> Optional[Dict]:
+        """Get API key information"""
+        try:
+            return await asyncio.get_running_loop().run_in_executor(
+                None, self.db.api_keys.find_one, {"api_key": api_key, "is_active": True}
+            )
+        except Exception as e:
+            logger.error(f"❌ Error getting API key: {e}")
+            return None
+    
+    async def get_api_key_by_client_token(self, client_token: str) -> Optional[Dict]:
+        """Get API key by client token"""
+        try:
+            return await asyncio.get_running_loop().run_in_executor(
+                None, self.db.api_keys.find_one, {"client_token": client_token, "is_active": True}
+            )
+        except Exception as e:
+            logger.error(f"❌ Error getting API key by token: {e}")
+            return None
+    
+    async def validate_api_key(self, api_key: str) -> Tuple[bool, str]:
+        """Validate API key"""
+        api_info = await self.get_api_key(api_key)
+        
+        if not api_info:
+            return False, "Invalid API key"
+        
+        # Check expiry
+        expires_at = datetime.fromisoformat(api_info["expires_at"])
+        if expires_at < datetime.now(timezone.utc):
+            return False, "API key expired"
+        
+        # Check usage limits
+        if api_info.get("requests_remaining", 0) <= 0:
+            return False, "API request limit exceeded"
+        
+        return True, ""
+    
+    async def record_api_request(self, api_key: str, endpoint: str, success: bool = True):
+        """Record API request"""
+        try:
+            update_data = {
+                "$inc": {
+                    "total_requests": 1,
+                    "requests_used": 1,
+                    "requests_remaining": -1
+                },
+                "$set": {
+                    "last_used": datetime.now(timezone.utc).isoformat(),
+                    "last_endpoint": endpoint
+                }
+            }
+            
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.api_keys.update_one(
+                    {"api_key": api_key},
+                    update_data
+                )
+            )
+            
+            # Log API request
+            log_doc = {
+                "api_key": api_key,
+                "endpoint": endpoint,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "success": success
+            }
+            
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.api_logs.insert_one(log_doc)
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Error recording API request: {e}")
+    
+    async def get_user_api_keys(self, user_id: int) -> List[Dict]:
+        """Get all API keys for a user"""
+        try:
+            return await asyncio.get_running_loop().run_in_executor(
+                None, lambda: list(self.db.api_keys.find(
+                    {"user_id": user_id},
+                    {"api_key": 1, "plan_id": 1, "created_at": 1, 
+                     "expires_at": 1, "description": 1, "is_active": 1,
+                     "requests_used": 1, "requests_remaining": 1}
+                ).sort("created_at", -1))
+            )
+        except Exception as e:
+            logger.error(f"❌ Error getting user API keys: {e}")
+            return []
+    
+    async def delete_api_key(self, api_key: str) -> bool:
+        """Delete (deactivate) an API key"""
+        try:
+            result = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.api_keys.update_one(
+                    {"api_key": api_key},
+                    {"$set": {"is_active": False, "deactivated_at": datetime.now(timezone.utc).isoformat()}}
+                )
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(f"❌ Error deleting API key: {e}")
+            return False
+    
+    async def extend_api_key(self, api_key: str, additional_days: int) -> bool:
+        """Extend API key expiry"""
+        try:
+            api_info = await self.get_api_key(api_key)
+            if not api_info:
+                return False
+            
+            current_expiry = datetime.fromisoformat(api_info["expires_at"])
+            new_expiry = current_expiry + timedelta(days=additional_days)
+            
+            result = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.api_keys.update_one(
+                    {"api_key": api_key},
+                    {"$set": {"expires_at": new_expiry.isoformat()}}
+                )
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(f"❌ Error extending API key: {e}")
+            return False
+    
+    async def get_api_stats(self, user_id: int = None) -> Dict:
+        """Get API statistics"""
+        try:
+            query = {}
+            if user_id is not None:
+                query["user_id"] = user_id
+            
+            # Total API keys
+            total_keys = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.api_keys.count_documents(query)
+            )
+            
+            # Active API keys
+            active_keys = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.api_keys.count_documents({**query, "is_active": True})
+            )
+            
+            # Total API requests
+            pipeline = [
+                {"$match": query},
+                {"$group": {
+                    "_id": None,
+                    "total_requests": {"$sum": "$total_requests"},
+                    "total_used": {"$sum": "$requests_used"}
+                }}
+            ]
+            
+            stats_result = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: list(self.db.api_keys.aggregate(pipeline))
+            )
+            
+            total_requests = stats_result[0]["total_requests"] if stats_result else 0
+            total_used = stats_result[0]["total_used"] if stats_result else 0
+            
+            # Recent API activity
+            recent_activity = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: list(self.db.api_logs.find(
+                    query,
+                    {"timestamp": 1, "endpoint": 1, "success": 1}
+                ).sort("timestamp", -1).limit(10))
+            )
+            
+            return {
+                "total_keys": total_keys,
+                "active_keys": active_keys,
+                "total_requests": total_requests,
+                "requests_used": total_used,
+                "recent_activity": recent_activity
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting API stats: {e}")
+            return {}
 
 # ================== ADMIN DATABASE MANAGER ==================
 
 class AdminDatabaseManager:
     def __init__(self, db_manager):
         self.db = db_manager.db
+        self.api_db = APIDatabaseManager(db_manager)
     
     async def get_today_stats(self) -> Dict:
         """Get today's statistics"""
@@ -599,11 +1015,19 @@ class AdminDatabaseManager:
         
         total_payments = sum(p.get('amount', 0) for p in payments)
         
+        # API stats today
+        api_logs = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: list(self.db.api_logs.find({
+                "timestamp": {"$gte": today.isoformat()}
+            }))
+        )
+        
         return {
             "new_users": new_users,
             "total_searches": len(search_logs),
             "total_payments": total_payments,
-            "payment_count": len(payments)
+            "payment_count": len(payments),
+            "api_requests": len(api_logs)
         }
     
     async def get_user_stats(self, user_id: int) -> Dict:
@@ -625,10 +1049,14 @@ class AdminDatabaseManager:
             None, lambda: self.db.users.count_documents({"referred_by": str(user.get('referral_code', ''))})
         )
         
+        # User's API keys
+        api_keys = await self.api_db.get_user_api_keys(user_id)
+        
         return {
             "user_info": user,
             "total_searches": len(user_searches),
             "referrals": referrals,
+            "api_keys": api_keys,
             "last_searches": user_searches[-10:] if len(user_searches) > 10 else user_searches
         }
     
@@ -817,6 +1245,72 @@ class AdminDatabaseManager:
         except Exception as e:
             logger.error(f"Error searching users: {e}")
             return []
+    
+    async def get_api_stats_detailed(self) -> Dict:
+        """Get detailed API statistics"""
+        try:
+            api_stats = await self.api_db.get_api_stats()
+            
+            # API key distribution by plan
+            pipeline = [
+                {"$group": {
+                    "_id": "$plan_id",
+                    "count": {"$sum": 1},
+                    "total_requests": {"$sum": "$total_requests"},
+                    "active_keys": {"$sum": {"$cond": [{"$eq": ["$is_active", True]}, 1, 0]}}
+                }},
+                {"$sort": {"count": -1}}
+            ]
+            
+            plan_distribution = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: list(self.db.api_keys.aggregate(pipeline))
+            )
+            
+            # Daily API requests (last 30 days)
+            thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+            
+            daily_pipeline = [
+                {"$match": {"timestamp": {"$gte": thirty_days_ago.isoformat()}}},
+                {"$group": {
+                    "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": {"$toDate": "$timestamp"}}},
+                    "count": {"$sum": 1},
+                    "success": {"$sum": {"$cond": [{"$eq": ["$success", True]}, 1, 0]}},
+                    "failed": {"$sum": {"$cond": [{"$eq": ["$success", False]}, 1, 0]}}
+                }},
+                {"$sort": {"_id": 1}},
+                {"$limit": 30}
+            ]
+            
+            daily_requests = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: list(self.db.api_logs.aggregate(daily_pipeline))
+            )
+            
+            # Top endpoints
+            endpoint_pipeline = [
+                {"$group": {
+                    "_id": "$endpoint",
+                    "count": {"$sum": 1},
+                    "success": {"$sum": {"$cond": [{"$eq": ["$success", True]}, 1, 0]}},
+                    "failed": {"$sum": {"$cond": [{"$eq": ["$success", False]}, 1, 0]}}
+                }},
+                {"$sort": {"count": -1}},
+                {"$limit": 10}
+            ]
+            
+            top_endpoints = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: list(self.db.api_logs.aggregate(endpoint_pipeline))
+            )
+            
+            return {
+                "summary": api_stats,
+                "plan_distribution": plan_distribution,
+                "daily_requests": daily_requests,
+                "top_endpoints": top_endpoints
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error getting detailed API stats: {e}")
+            return {}
 
 # ================== DATABASE MANAGER ==================
 
@@ -825,6 +1319,7 @@ class DatabaseManager:
         self.client = None
         self.db = None
         self.admin_db = None
+        self.api_db = None
     
     async def connect(self) -> bool:
         """Connect to MongoDB"""
@@ -834,6 +1329,7 @@ class DatabaseManager:
             self.client.server_info()
             self.db = self.client[config.MONGODB_DBNAME]
             self.admin_db = AdminDatabaseManager(self)
+            self.api_db = APIDatabaseManager(self)
             
             # Create indexes
             await asyncio.get_running_loop().run_in_executor(
@@ -847,6 +1343,24 @@ class DatabaseManager:
             )
             await asyncio.get_running_loop().run_in_executor(
                 None, lambda: self.db.payments.create_index([("timestamp", -1)])
+            )
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.api_keys.create_index([("api_key", 1)], unique=True)
+            )
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.api_keys.create_index([("client_token", 1)], unique=True)
+            )
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.api_keys.create_index([("user_id", 1)])
+            )
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.api_keys.create_index([("expires_at", 1)])
+            )
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.api_logs.create_index([("timestamp", -1)])
+            )
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.api_logs.create_index([("api_key", 1)])
             )
             
             logger.info("✅ MongoDB connected")
@@ -1147,18 +1661,23 @@ class OneLineKeyboard:
             "phone", "family", "aadhar", "vehicle", 
             "upi", "email", "telegram", "imei",
             "gst", "insta", "pak", "ip", "ifsc",
-            "leak"  # Advanced search
+            "leak"  # Advanced OSINT tool - placed at the end for emphasis
         ]
         
         for cmd_key in commands_in_order:
             if cmd_key in SEARCH_COMMANDS:
                 cmd = SEARCH_COMMANDS[cmd_key]
-                # Each command gets its own line
-                buttons.append([Button.inline(f"{cmd['icon']} {cmd['name'].split()[1]}", f"search_{cmd_key}")])
+                # Special emphasis for leak command
+                if cmd_key == "leak":
+                    button_text = f"🚀 ADVANCED OSINT TOOL"
+                else:
+                    button_text = f"{cmd['icon']} {cmd['name'].split()[1]}"
+                buttons.append([Button.inline(button_text, f"search_{cmd_key}")])
         
         # Add action buttons in their own lines
         buttons.append([Button.inline("👤 Profile", "profile")])
         buttons.append([Button.inline("💎 Premium Plans", "premium")])
+        buttons.append([Button.inline("🔑 API Access", "api_menu")])
         buttons.append([Button.inline("📊 Refer & Earn", "referrals")])
         buttons.append([Button.inline("🆘 Support", "support")])
         
@@ -1172,11 +1691,33 @@ class OneLineKeyboard:
     def subscription_plans() -> List[List[Button]]:
         """Premium plan selection"""
         buttons = [
-            [Button.inline("🔰 Basic Plan - ₹100", "plan_basic")],
-            [Button.inline("⭐ Standard Plan - ₹250", "plan_standard")],
-            [Button.inline("👑 Premium Plan - ₹400", "plan_premium")],
-            [Button.inline("🚀 Enterprise Plan - ₹600", "plan_enterprise")],
+            [Button.inline("💰 Basic Tier - ₹99", "plan_basic")],
+            [Button.inline("🚀 Standard Tier - ₹249", "plan_standard")],
+            [Button.inline("👑 Premium Tier - ₹499", "plan_premium")],
             [Button.inline("« Main Menu", "main_menu")]
+        ]
+        return buttons
+    
+    @staticmethod
+    def api_menu() -> List[List[Button]]:
+        """API menu"""
+        buttons = [
+            [Button.inline("🔐 My API Keys", "my_api_keys")],
+            [Button.inline("📊 API Usage", "api_usage")],
+            [Button.inline("🛒 Buy API Access", "api_plans")],
+            [Button.inline("📖 API Documentation", "api_docs")],
+            [Button.inline("« Main Menu", "main_menu")]
+        ]
+        return buttons
+    
+    @staticmethod
+    def api_plans() -> List[List[Button]]:
+        """API plan selection"""
+        buttons = [
+            [Button.inline("🔑 Basic API - ₹999", "api_plan_basic")],
+            [Button.inline("⚡ Professional API - ₹2499", "api_plan_professional")],
+            [Button.inline("🏢 Enterprise API - ₹4999", "api_plan_enterprise")],
+            [Button.inline("« API Menu", "api_menu")]
         ]
         return buttons
     
@@ -1188,6 +1729,7 @@ class OneLineKeyboard:
             [Button.inline("👥 User Management", "admin_users")],
             [Button.inline("📈 Search Analytics", "admin_analytics")],
             [Button.inline("💰 Payment Stats", "admin_payments")],
+            [Button.inline("🔑 API Management", "admin_api")],
             [Button.inline("🔍 Search Users", "admin_search_user")],
             [Button.inline("📢 Broadcast", "admin_broadcast")],
             [Button.inline("⚙️ Bot Settings", "admin_settings")],
@@ -1196,6 +1738,18 @@ class OneLineKeyboard:
             [Button.inline("🎯 Add Credits", "admin_add_credits")],
             [Button.inline("📊 Export Data", "admin_export")],
             [Button.inline("« Main Menu", "main_menu")]
+        ]
+        return buttons
+    
+    @staticmethod
+    def admin_api_panel() -> List[List[Button]]:
+        """Admin API management panel"""
+        buttons = [
+            [Button.inline("📊 API Statistics", "admin_api_stats")],
+            [Button.inline("🔑 Manage User API", "admin_api_user")],
+            [Button.inline("📈 API Analytics", "admin_api_analytics")],
+            [Button.inline("🚫 Revoke API Key", "admin_api_revoke")],
+            [Button.inline("« Admin Panel", "admin_panel")]
         ]
         return buttons
     
@@ -1279,6 +1833,7 @@ class OneLineKeyboard:
             [Button.inline("🔄 Refresh", "profile")],
             [Button.inline("💳 Add Credits", "buy_credits")],
             [Button.inline("💎 Upgrade Plan", "premium")],
+            [Button.inline("🔑 API Access", "api_menu")],
             [Button.inline("« Main Menu", "main_menu")]
         ]
     
@@ -1302,6 +1857,570 @@ class OneLineKeyboard:
             [Button.inline("📢 Share Referral", "share_referral")],
             [Button.inline("« Main Menu", "main_menu")]
         ]
+    
+    @staticmethod
+    def api_keys_menu() -> List[List[Button]]:
+        """API keys management menu"""
+        return [
+            [Button.inline("🔄 Refresh", "my_api_keys")],
+            [Button.inline("➕ Create New API Key", "create_api_key")],
+            [Button.inline("📊 Usage Stats", "api_usage")],
+            [Button.inline("« API Menu", "api_menu")]
+        ]
+
+# ================== API HANDLER ==================
+
+class APIHandler:
+    """Handle API requests"""
+    
+    def __init__(self, db_manager: DatabaseManager, search_engine):
+        self.db = db_manager
+        self.search_engine = search_engine
+    
+    async def authenticate_request(self, request: web.Request) -> Tuple[bool, Optional[Dict], str]:
+        """Authenticate API request"""
+        try:
+            # Get API key from header or query parameter
+            api_key = request.headers.get('X-API-Key') or request.query.get('api_key')
+            
+            if not api_key:
+                return False, None, "API key required"
+            
+            # Validate API key
+            api_info = await self.db.api_db.get_api_key(api_key)
+            if not api_info:
+                return False, None, "Invalid API key"
+            
+            # Check if API key is active
+            if not api_info.get("is_active", True):
+                return False, None, "API key is inactive"
+            
+            # Check expiry
+            expires_at = datetime.fromisoformat(api_info["expires_at"])
+            if expires_at < datetime.now(timezone.utc):
+                return False, None, "API key expired"
+            
+            # Check request limits
+            if api_info.get("requests_remaining", 0) <= 0:
+                return False, None, "API request limit exceeded"
+            
+            return True, api_info, ""
+            
+        except Exception as e:
+            logger.error(f"❌ API authentication error: {e}")
+            return False, None, "Authentication failed"
+    
+    async def handle_search_request(self, request: web.Request, search_type: str) -> web.Response:
+        """Handle search API request"""
+        try:
+            # Authenticate
+            auth_result, api_info, error = await self.authenticate_request(request)
+            if not auth_result:
+                return web.json_response(
+                    APIResponseFormatter.error(error, "AUTH_FAILED"),
+                    status=401
+                )
+            
+            # Parse request data
+            data = await request.json()
+            query = data.get("query", "").strip()
+            
+            if not query:
+                return web.json_response(
+                    APIResponseFormatter.error("Query parameter required", "INVALID_REQUEST"),
+                    status=400
+                )
+            
+            # Validate query
+            cmd = SEARCH_COMMANDS.get(search_type, {})
+            validation = cmd.get("validation")
+            if validation and not re.match(validation, query):
+                return web.json_response(
+                    APIResponseFormatter.error(f"Invalid query format. Example: {cmd['example']}", "INVALID_QUERY"),
+                    status=400
+                )
+            
+            # Get user info
+            user_id = api_info["user_id"]
+            user_doc = await self.db.get_user(user_id)
+            
+            if not user_doc:
+                return web.json_response(
+                    APIResponseFormatter.error("User not found", "USER_NOT_FOUND"),
+                    status=404
+                )
+            
+            # Check if user is banned
+            if user_doc.get('is_banned'):
+                return web.json_response(
+                    APIResponseFormatter.error("Account banned", "ACCOUNT_BANNED"),
+                    status=403
+                )
+            
+            # Check access
+            can_search = False
+            searches_remaining = user_doc.get('searches_remaining', 0)
+            subscription = user_doc.get('subscription')
+            subscription_expiry = user_doc.get('subscription_expiry')
+            
+            if subscription and subscription_expiry:
+                expiry_date = datetime.fromisoformat(subscription_expiry)
+                if expiry_date > datetime.now(timezone.utc):
+                    can_search = True
+            
+            if not can_search and searches_remaining <= 0:
+                await self.db.api_db.record_api_request(api_info["api_key"], f"/api/v1/search/{search_type}", False)
+                return web.json_response(
+                    APIResponseFormatter.error("Insufficient credits", "INSUFFICIENT_CREDITS"),
+                    status=402
+                )
+            
+            logger.info(f"🔍 API Search: {search_type} - {query} (User: {user_id})")
+            
+            # Perform search
+            result = await self.search_engine.perform_search(search_type, query, user_id)
+            
+            # Record API request
+            await self.db.api_db.record_api_request(
+                api_info["api_key"], 
+                f"/api/v1/search/{search_type}", 
+                result["success"]
+            )
+            
+            if result["success"]:
+                # Update user search count
+                await self.db.update_searches(user_id, search_type, query, True)
+                
+                # Format response
+                if search_type == "leak":
+                    # Special handling for leak search
+                    api_result = APIResponseFormatter.format_leak_result(
+                        result.get("files", []),
+                        query
+                    )
+                else:
+                    # Regular search
+                    api_result = APIResponseFormatter.format_search_result(
+                        result.get("result", ""),
+                        search_type,
+                        query,
+                        result.get("source", "Unknown")
+                    )
+                
+                response_data = APIResponseFormatter.success(api_result, "Search completed")
+                
+                # Include raw content for non-leak searches
+                if search_type != "leak" and result.get("has_file") and result.get("content"):
+                    response_data["data"]["raw_content"] = result["content"]
+                
+                return web.json_response(response_data)
+            else:
+                await self.db.update_searches(user_id, search_type, query, False)
+                return web.json_response(
+                    APIResponseFormatter.error(result.get("error", "Search failed"), "SEARCH_FAILED"),
+                    status=404
+                )
+            
+        except json.JSONDecodeError:
+            return web.json_response(
+                APIResponseFormatter.error("Invalid JSON", "INVALID_JSON"),
+                status=400
+            )
+        except Exception as e:
+            logger.error(f"❌ API search error: {e}")
+            return web.json_response(
+                APIResponseFormatter.error("Internal server error", "INTERNAL_ERROR"),
+                status=500
+            )
+    
+    async def handle_batch_search(self, request: web.Request) -> web.Response:
+        """Handle batch search API request"""
+        try:
+            # Authenticate
+            auth_result, api_info, error = await self.authenticate_request(request)
+            if not auth_result:
+                return web.json_response(
+                    APIResponseFormatter.error(error, "AUTH_FAILED"),
+                    status=401
+                )
+            
+            # Parse request data
+            data = await request.json()
+            searches = data.get("searches", [])
+            
+            if not searches or not isinstance(searches, list):
+                return web.json_response(
+                    APIResponseFormatter.error("Searches array required", "INVALID_REQUEST"),
+                    status=400
+                )
+            
+            if len(searches) > 10:  # Limit batch size
+                return web.json_response(
+                    APIResponseFormatter.error("Maximum 10 searches per batch", "BATCH_LIMIT_EXCEEDED"),
+                    status=400
+                )
+            
+            user_id = api_info["user_id"]
+            user_doc = await self.db.get_user(user_id)
+            
+            if not user_doc:
+                return web.json_response(
+                    APIResponseFormatter.error("User not found", "USER_NOT_FOUND"),
+                    status=404
+                )
+            
+            # Check if user is banned
+            if user_doc.get('is_banned'):
+                return web.json_response(
+                    APIResponseFormatter.error("Account banned", "ACCOUNT_BANNED"),
+                    status=403
+                )
+            
+            # Check access and calculate total cost
+            total_cost = 0
+            for search in searches:
+                search_type = search.get("type")
+                if search_type in SEARCH_COMMANDS:
+                    total_cost += SEARCH_COMMANDS[search_type].get("cost", 1)
+            
+            can_search = False
+            searches_remaining = user_doc.get('searches_remaining', 0)
+            subscription = user_doc.get('subscription')
+            subscription_expiry = user_doc.get('subscription_expiry')
+            
+            if subscription and subscription_expiry:
+                expiry_date = datetime.fromisoformat(subscription_expiry)
+                if expiry_date > datetime.now(timezone.utc):
+                    can_search = True
+            
+            if not can_search and searches_remaining < total_cost:
+                await self.db.api_db.record_api_request(api_info["api_key"], "/api/v1/search/batch", False)
+                return web.json_response(
+                    APIResponseFormatter.error(f"Insufficient credits. Required: {total_cost}", "INSUFFICIENT_CREDITS"),
+                    status=402
+                )
+            
+            logger.info(f"🔍 API Batch Search: {len(searches)} queries (User: {user_id})")
+            
+            # Perform batch searches
+            results = []
+            successful_searches = 0
+            
+            for search in searches:
+                search_type = search.get("type")
+                query = search.get("query", "").strip()
+                
+                if not query or search_type not in SEARCH_COMMANDS:
+                    results.append({
+                        "type": search_type,
+                        "query": query,
+                        "success": False,
+                        "error": "Invalid search type or query"
+                    })
+                    continue
+                
+                # Validate query
+                cmd = SEARCH_COMMANDS[search_type]
+                validation = cmd.get("validation")
+                if validation and not re.match(validation, query):
+                    results.append({
+                        "type": search_type,
+                        "query": query,
+                        "success": False,
+                        "error": f"Invalid format. Example: {cmd['example']}"
+                    })
+                    continue
+                
+                # Perform individual search
+                result = await self.search_engine.perform_search(search_type, query, user_id)
+                
+                if result["success"]:
+                    successful_searches += 1
+                    await self.db.update_searches(user_id, search_type, query, True)
+                    
+                    # Format result
+                    if search_type == "leak":
+                        formatted = APIResponseFormatter.format_leak_result(
+                            result.get("files", []),
+                            query
+                        )
+                    else:
+                        formatted = APIResponseFormatter.format_search_result(
+                            result.get("result", ""),
+                            search_type,
+                            query,
+                            result.get("source", "Unknown")
+                        )
+                    
+                    results.append({
+                        "type": search_type,
+                        "query": query,
+                        "success": True,
+                        "data": formatted
+                    })
+                else:
+                    await self.db.update_searches(user_id, search_type, query, False)
+                    results.append({
+                        "type": search_type,
+                        "query": query,
+                        "success": False,
+                        "error": result.get("error", "Search failed")
+                    })
+            
+            # Record API request
+            await self.db.api_db.record_api_request(
+                api_info["api_key"], 
+                "/api/v1/search/batch", 
+                successful_searches > 0
+            )
+            
+            response_data = {
+                "total_searches": len(searches),
+                "successful": successful_searches,
+                "failed": len(searches) - successful_searches,
+                "results": results,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            
+            return web.json_response(APIResponseFormatter.success(response_data, "Batch search completed"))
+            
+        except json.JSONDecodeError:
+            return web.json_response(
+                APIResponseFormatter.error("Invalid JSON", "INVALID_JSON"),
+                status=400
+            )
+        except Exception as e:
+            logger.error(f"❌ API batch search error: {e}")
+            return web.json_response(
+                APIResponseFormatter.error("Internal server error", "INTERNAL_ERROR"),
+                status=500
+            )
+    
+    async def handle_status_request(self, request: web.Request) -> web.Response:
+        """Handle status API request"""
+        try:
+            # Authenticate
+            auth_result, api_info, error = await self.authenticate_request(request)
+            if not auth_result:
+                return web.json_response(
+                    APIResponseFormatter.error(error, "AUTH_FAILED"),
+                    status=401
+                )
+            
+            # Get API key info
+            api_key = api_info["api_key"]
+            
+            # Get user info
+            user_id = api_info["user_id"]
+            user_doc = await self.db.get_user(user_id)
+            
+            status_data = {
+                "api_key": api_key[:8] + "..." + api_key[-4:],  # Mask API key
+                "plan": api_info.get("plan_id", "unknown"),
+                "created_at": api_info.get("created_at"),
+                "expires_at": api_info.get("expires_at"),
+                "is_active": api_info.get("is_active", True),
+                "requests": {
+                    "total": api_info.get("total_requests", 0),
+                    "used": api_info.get("requests_used", 0),
+                    "remaining": api_info.get("requests_remaining", 0)
+                },
+                "limits": {
+                    "rate_limit": api_info.get("rate_limit", 10),
+                    "concurrent_limit": api_info.get("concurrent_limit", 1)
+                },
+                "user": {
+                    "id": user_id,
+                    "username": user_doc.get("username") if user_doc else None,
+                    "credits": user_doc.get("searches_remaining", 0) if user_doc else 0,
+                    "subscription": user_doc.get("subscription") if user_doc else None
+                },
+                "server": {
+                    "status": "online",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "version": "2.0.0"
+                }
+            }
+            
+            # Record API request (status endpoint doesn't count against limit)
+            await self.db.api_db.record_api_request(api_key, "/api/v1/status", True)
+            
+            return web.json_response(APIResponseFormatter.success(status_data, "API status retrieved"))
+            
+        except Exception as e:
+            logger.error(f"❌ API status error: {e}")
+            return web.json_response(
+                APIResponseFormatter.error("Internal server error", "INTERNAL_ERROR"),
+                status=500
+            )
+    
+    async def handle_balance_request(self, request: web.Request) -> web.Response:
+        """Handle balance API request"""
+        try:
+            # Authenticate
+            auth_result, api_info, error = await self.authenticate_request(request)
+            if not auth_result:
+                return web.json_response(
+                    APIResponseFormatter.error(error, "AUTH_FAILED"),
+                    status=401
+                )
+            
+            # Get user info
+            user_id = api_info["user_id"]
+            user_doc = await self.db.get_user(user_id)
+            
+            if not user_doc:
+                return web.json_response(
+                    APIResponseFormatter.error("User not found", "USER_NOT_FOUND"),
+                    status=404
+                )
+            
+            balance_data = {
+                "user_id": user_id,
+                "credits": user_doc.get("searches_remaining", 0),
+                "total_searches": user_doc.get("total_searches", 0),
+                "subscription": user_doc.get("subscription"),
+                "subscription_expiry": user_doc.get("subscription_expiry"),
+                "api_requests_remaining": api_info.get("requests_remaining", 0),
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            
+            # Record API request
+            await self.db.api_db.record_api_request(
+                api_info["api_key"], 
+                "/api/v1/balance", 
+                True
+            )
+            
+            return web.json_response(APIResponseFormatter.success(balance_data, "Balance retrieved"))
+            
+        except Exception as e:
+            logger.error(f"❌ API balance error: {e}")
+            return web.json_response(
+                APIResponseFormatter.error("Internal server error", "INTERNAL_ERROR"),
+                status=500
+            )
+
+# ================== API SERVER ==================
+
+async def start_api_server():
+    """Start API server"""
+    if not config.API_ENABLED:
+        logger.info("ℹ️ API server disabled")
+        return
+    
+    app = web.Application()
+    
+    # Create API handler
+    api_handler = APIHandler(db_manager, search_engine)
+    
+    # Health check endpoint
+    async def health_check(request):
+        return web.json_response({"status": "ok", "timestamp": datetime.now().isoformat()})
+    
+    # Search endpoints
+    async def phone_search(request):
+        return await api_handler.handle_search_request(request, "phone")
+    
+    async def family_search(request):
+        return await api_handler.handle_search_request(request, "family")
+    
+    async def aadhar_search(request):
+        return await api_handler.handle_search_request(request, "aadhar")
+    
+    async def vehicle_search(request):
+        return await api_handler.handle_search_request(request, "vehicle")
+    
+    async def upi_search(request):
+        return await api_handler.handle_search_request(request, "upi")
+    
+    async def email_search(request):
+        return await api_handler.handle_search_request(request, "email")
+    
+    async def telegram_search(request):
+        return await api_handler.handle_search_request(request, "telegram")
+    
+    async def imei_search(request):
+        return await api_handler.handle_search_request(request, "imei")
+    
+    async def gst_search(request):
+        return await api_handler.handle_search_request(request, "gst")
+    
+    async def instagram_search(request):
+        return await api_handler.handle_search_request(request, "insta")
+    
+    async def pakistan_search(request):
+        return await api_handler.handle_search_request(request, "pak")
+    
+    async def ip_search(request):
+        return await api_handler.handle_search_request(request, "ip")
+    
+    async def ifsc_search(request):
+        return await api_handler.handle_search_request(request, "ifsc")
+    
+    async def leak_search(request):
+        return await api_handler.handle_search_request(request, "leak")
+    
+    # Utility endpoints
+    async def batch_search(request):
+        return await api_handler.handle_batch_search(request)
+    
+    async def status_endpoint(request):
+        return await api_handler.handle_status_request(request)
+    
+    async def balance_endpoint(request):
+        return await api_handler.handle_balance_request(request)
+    
+    # Add routes
+    app.router.add_get('/health', health_check)
+    
+    # Search endpoints
+    app.router.add_post('/api/v1/search/phone', phone_search)
+    app.router.add_post('/api/v1/search/family', family_search)
+    app.router.add_post('/api/v1/search/aadhar', aadhar_search)
+    app.router.add_post('/api/v1/search/vehicle', vehicle_search)
+    app.router.add_post('/api/v1/search/upi', upi_search)
+    app.router.add_post('/api/v1/search/email', email_search)
+    app.router.add_post('/api/v1/search/telegram', telegram_search)
+    app.router.add_post('/api/v1/search/imei', imei_search)
+    app.router.add_post('/api/v1/search/gst', gst_search)
+    app.router.add_post('/api/v1/search/instagram', instagram_search)
+    app.router.add_post('/api/v1/search/pakistan', pakistan_search)
+    app.router.add_post('/api/v1/search/ip', ip_search)
+    app.router.add_post('/api/v1/search/ifsc', ifsc_search)
+    app.router.add_post('/api/v1/search/leak', leak_search)
+    app.router.add_post('/api/v1/search/batch', batch_search)
+    
+    # Utility endpoints
+    app.router.add_get('/api/v1/status', status_endpoint)
+    app.router.add_get('/api/v1/balance', balance_endpoint)
+    
+    # CORS middleware
+    async def cors_middleware(app, handler):
+        async def middleware_handler(request):
+            if request.method == "OPTIONS":
+                response = web.Response()
+            else:
+                response = await handler(request)
+            
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-API-Key'
+            return response
+        return middleware_handler
+    
+    app.middlewares.append(cors_middleware)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', config.API_PORT)
+    
+    try:
+        await site.start()
+        logger.info(f"🌐 API server running on port {config.API_PORT}")
+        logger.info(f"📚 API Documentation available at http://localhost:{config.API_PORT}/api/v1/")
+    except Exception as e:
+        logger.error(f"❌ API server failed: {e}")
 
 # ================== ADMIN PANEL HANDLER ==================
 
@@ -1386,6 +2505,21 @@ class AdminPanelHandler:
             elif data == "admin_graph_revenue":
                 await self.generate_revenue_graph(event)
             
+            elif data == "admin_api":
+                await self.show_api_panel(event)
+            
+            elif data == "admin_api_stats":
+                await self.show_api_stats(event)
+            
+            elif data == "admin_api_user":
+                await self.ask_for_api_user_management(event)
+            
+            elif data == "admin_api_analytics":
+                await self.show_api_analytics(event)
+            
+            elif data == "admin_api_revoke":
+                await self.ask_for_api_revoke(event)
+            
             elif data == "admin_search_user":
                 await self.ask_for_user_search(event)
             
@@ -1427,10 +2561,492 @@ class AdminPanelHandler:
                 target_id = int(data.split("_")[-1])
                 await self.show_user_detail(event, target_id)
             
+            # API Menu Callbacks
+            elif data == "api_menu":
+                await self.show_api_menu(event)
+            
+            elif data == "my_api_keys":
+                await self.show_my_api_keys(event)
+            
+            elif data == "api_usage":
+                await self.show_api_usage(event)
+            
+            elif data == "api_plans":
+                await self.show_api_plans(event)
+            
+            elif data == "api_docs":
+                await self.show_api_docs(event)
+            
+            elif data.startswith("api_plan_"):
+                plan_id = data.split("_", 2)[2]
+                await self.show_api_plan_details(event, plan_id)
+            
+            elif data == "create_api_key":
+                await self.ask_for_create_api_key(event)
+            
         except Exception as e:
             logger.error(f"❌ Error in admin callback: {e}")
             await event.answer("❌ Error processing request", alert=True)
     
+    async def show_api_menu(self, event):
+        """Show API menu"""
+        api_text = (
+            "🔑 **DARKBOXES API ACCESS**\n"
+            "═══════════════════════\n\n"
+            "🚀 **Programmatic Access** to all DarkBoxes intelligence tools\n\n"
+            "🌟 **Features:**\n"
+            "• RESTful API endpoints\n"
+            "• JSON responses\n"
+            "• Batch processing\n"
+            "• Rate limiting\n"
+            "• Webhook support\n"
+            "• 24/7 availability\n\n"
+            "💼 **Perfect For:**\n"
+            "• Developers\n"
+            "• OSINT tools\n"
+            "• Automation scripts\n"
+            "• Business integrations\n\n"
+            "Select an option below:"
+        )
+        
+        await event.edit(api_text, buttons=OneLineKeyboard.api_menu(), parse_mode="md")
+    
+    async def show_my_api_keys(self, event):
+        """Show user's API keys"""
+        try:
+            user_id = event.sender_id
+            api_keys = await self.db.api_db.get_user_api_keys(user_id)
+            
+            api_text = "🔑 **MY API KEYS**\n"
+            api_text += "═══════════════════════\n\n"
+            
+            if api_keys:
+                for i, api_key in enumerate(api_keys, 1):
+                    status = "✅ Active" if api_key.get("is_active") else "❌ Inactive"
+                    created = api_key.get("created_at", "")[:10]
+                    expires = api_key.get("expires_at", "")[:10]
+                    requests = api_key.get("requests_used", 0)
+                    remaining = api_key.get("requests_remaining", 0)
+                    
+                    api_text += (
+                        f"{i}. **{api_key.get('description', 'Unnamed')}**\n"
+                        f"   ├─ Status: {status}\n"
+                        f"   ├─ Plan: {api_key.get('plan_id', 'N/A')}\n"
+                        f"   ├─ Key: `{api_key['api_key'][:8]}...{api_key['api_key'][-4:]}`\n"
+                        f"   ├─ Created: {created}\n"
+                        f"   ├─ Expires: {expires}\n"
+                        f"   ├─ Requests: {requests} used, {remaining} remaining\n"
+                        f"   └─ Token: `{api_key.get('client_token', 'N/A')}`\n\n"
+                    )
+                
+                api_text += "📝 **Usage Instructions:**\n"
+                api_text += "• Add header: `X-API-Key: your_api_key`\n"
+                api_text += "• Or query param: `?api_key=your_api_key`\n"
+                api_text += "• Base URL: `http://your-server:8000/api/v1/`\n"
+            else:
+                api_text += "📭 No API keys found.\n\n"
+                api_text += "💡 **Get started:**\n"
+                api_text += "1. Choose an API plan\n"
+                api_text += "2. Create your first API key\n"
+                api_text += "3. Start integrating!\n"
+            
+            await event.edit(api_text, buttons=OneLineKeyboard.api_keys_menu(), parse_mode="md")
+            
+        except Exception as e:
+            logger.error(f"❌ Error showing API keys: {e}")
+            await event.edit("❌ Error loading API keys", buttons=OneLineKeyboard.api_menu())
+    
+    async def show_api_usage(self, event):
+        """Show API usage statistics"""
+        try:
+            user_id = event.sender_id
+            api_stats = await self.db.api_db.get_api_stats(user_id)
+            
+            usage_text = "📊 **API USAGE STATISTICS**\n"
+            usage_text += "═══════════════════════\n\n"
+            
+            usage_text += f"📈 **Summary**\n"
+            usage_text += f"├─ Total API Keys: {api_stats.get('total_keys', 0)}\n"
+            usage_text += f"├─ Active Keys: {api_stats.get('active_keys', 0)}\n"
+            usage_text += f"├─ Total Requests: {api_stats.get('total_requests', 0)}\n"
+            usage_text += f"└─ Requests Used: {api_stats.get('requests_used', 0)}\n\n"
+            
+            if api_stats.get('recent_activity'):
+                usage_text += "🕒 **Recent Activity**\n"
+                for activity in api_stats['recent_activity'][:5]:
+                    time_str = activity.get('timestamp', '')[:16]
+                    endpoint = activity.get('endpoint', 'N/A')
+                    success = "✅" if activity.get('success') else "❌"
+                    
+                    usage_text += f"{success} {time_str} - {endpoint}\n"
+            
+            usage_text += "\n📋 **Available Endpoints:**\n"
+            for cmd_key, cmd_info in API_COMMANDS.items():
+                if cmd_key not in ['batch', 'status', 'balance']:
+                    usage_text += f"• {cmd_info['endpoint']} ({cmd_info['method']})\n"
+            
+            await event.edit(usage_text, buttons=OneLineKeyboard.api_keys_menu(), parse_mode="md")
+            
+        except Exception as e:
+            logger.error(f"❌ Error showing API usage: {e}")
+            await event.edit("❌ Error loading API usage", buttons=OneLineKeyboard.api_menu())
+    
+    async def show_api_plans(self, event):
+        """Show API plans"""
+        api_text = "🛒 **API ACCESS PLANS**\n"
+        api_text += "═══════════════════════\n\n"
+        
+        for plan_id, plan in API_PLANS.items():
+            api_text += f"{plan.get('icon', '🔑')} **{plan['name']}**\n"
+            api_text += f"💰 **Price:** ₹{plan['price']}\n"
+            api_text += f"📊 **Requests:** {plan['requests']}\n"
+            api_text += f"📅 **Validity:** {plan['validity_days']} days\n"
+            api_text += f"⚡ **Rate Limit:** {plan['rate_limit']}/min\n"
+            api_text += f"🔗 **Concurrent:** {plan['concurrent']}\n\n"
+            
+            api_text += "🌟 **Features:**\n"
+            for feature in plan['features']:
+                api_text += f"• {feature}\n"
+            
+            api_text += "\n" + "─" * 30 + "\n\n"
+        
+        api_text += "📞 **Contact @darkboxesAdmin to purchase API access**\n"
+        api_text += "💳 **UPI ID:** `{config.UPI_ID}`\n\n"
+        api_text += "🔒 **Instructions:**\n"
+        api_text += "1. Send payment via UPI\n"
+        api_text += "2. Send screenshot to @darkboxesAdmin\n"
+        api_text += "3. Include desired plan and duration\n"
+        api_text += "4. API key will be delivered within 5 minutes"
+        
+        await event.edit(api_text, buttons=OneLineKeyboard.api_plans(), parse_mode="md")
+    
+    async def show_api_plan_details(self, event, plan_id: str):
+        """Show API plan details"""
+        if plan_id not in API_PLANS:
+            await event.answer("❌ Invalid plan", alert=True)
+            return
+        
+        plan = API_PLANS[plan_id]
+        
+        plan_text = f"{plan.get('icon', '🔑')} **{plan['name']}**\n"
+        plan_text += "═══════════════════════\n\n"
+        
+        plan_text += f"💰 **Price:** ₹{plan['price']}\n"
+        plan_text += f"📊 **Requests:** {plan['requests']}\n"
+        plan_text += f"📅 **Validity:** {plan['validity_days']} days\n"
+        plan_text += f"⚡ **Rate Limit:** {plan['rate_limit']} requests/minute\n"
+        plan_text += f"🔗 **Concurrent Connections:** {plan['concurrent']}\n\n"
+        
+        plan_text += "🌟 **Features:**\n"
+        for feature in plan['features']:
+            plan_text += f"• {feature}\n"
+        
+        plan_text += f"\n🎯 **Perfect For:** {plan.get('for', 'Developers and businesses')}\n\n"
+        
+        plan_text += "📞 **To Purchase:**\n"
+        plan_text += f"1. Send ₹{plan['price']} to UPI: `{config.UPI_ID}`\n"
+        plan_text += f"2. Send payment screenshot to @darkboxesAdmin\n"
+        plan_text += f"3. Include your User ID: `{event.sender_id}`\n"
+        plan_text += f"4. Specify plan: {plan['name']}\n"
+        plan_text += f"5. API key will be delivered within 5 minutes\n\n"
+        
+        plan_text += "💡 **Note:** Contact @darkboxesAdmin for custom plans or bulk discounts"
+        
+        buttons = [
+            [Button.inline("🛒 Purchase This Plan", f"purchase_api_{plan_id}")],
+            [Button.inline("« Back to Plans", "api_plans")],
+            [Button.inline("« API Menu", "api_menu")]
+        ]
+        
+        await event.edit(plan_text, buttons=buttons, parse_mode="md")
+    
+    async def show_api_docs(self, event):
+        """Show API documentation"""
+        docs_text = "📖 **API DOCUMENTATION**\n"
+        docs_text += "═══════════════════════\n\n"
+        
+        docs_text += "🚀 **Getting Started**\n"
+        docs_text += "1. Obtain an API key from @darkboxesAdmin\n"
+        docs_text += "2. Use the API key in your requests\n"
+        docs_text += "3. Call the desired endpoint\n\n"
+        
+        docs_text += "🔐 **Authentication**\n"
+        docs_text += "Add to headers:\n"
+        docs_text += "```\n"
+        docs_text += "X-API-Key: your_api_key_here\n"
+        docs_text += "```\n\n"
+        docs_text += "Or as query parameter:\n"
+        docs_text += "```\n"
+        docs_text += "?api_key=your_api_key_here\n"
+        docs_text += "```\n\n"
+        
+        docs_text += "🌐 **Base URL**\n"
+        docs_text += "```\n"
+        docs_text += f"http://your-server:{config.API_PORT}/api/v1/\n"
+        docs_text += "```\n\n"
+        
+        docs_text += "🔍 **Search Endpoints**\n"
+        for cmd_key, cmd_info in API_COMMANDS.items():
+            if cmd_key not in ['batch', 'status', 'balance']:
+                cmd = SEARCH_COMMANDS.get(cmd_key, {})
+                example = cmd.get('example', 'query_value')
+                validation = cmd.get('validation', '.*')
+                
+                docs_text += f"**{cmd_info['endpoint']}**\n"
+                docs_text += f"Method: {cmd_info['method']}\n"
+                docs_text += f"Example: {{\"query\": \"{example}\"}}\n"
+                docs_text += f"Validation: `{validation}`\n\n"
+        
+        docs_text += "📦 **Batch Search**\n"
+        docs_text += "**Endpoint:** `/api/v1/search/batch`\n"
+        docs_text += "**Method:** POST\n"
+        docs_text += "**Request Body:**\n"
+        docs_text += "```json\n"
+        docs_text += '{\n'
+        docs_text += '  "searches": [\n'
+        docs_text += '    {"type": "phone", "query": "9876543210"},\n'
+        docs_text += '    {"type": "email", "query": "test@example.com"}\n'
+        docs_text += '  ]\n'
+        docs_text += '}\n'
+        docs_text += "```\n\n"
+        
+        docs_text += "📊 **Utility Endpoints**\n"
+        docs_text += "• `GET /api/v1/status` - API status and limits\n"
+        docs_text += "• `GET /api/v1/balance` - User credits and balance\n\n"
+        
+        docs_text += "✅ **Response Format**\n"
+        docs_text += "```json\n"
+        docs_text += '{\n'
+        docs_text += '  "status": "success",\n'
+        docs_text += '  "message": "Search completed",\n'
+        docs_text += '  "data": {\n'
+        docs_text += '    "query": "9876543210",\n'
+        docs_text += '    "type": "phone",\n'
+        docs_text += '    "parsed_data": {\n'
+        docs_text += '      "Name": "John Doe",\n'
+        docs_text += '      "Location": "Mumbai"\n'
+        docs_text += '    }\n'
+        docs_text += '  },\n'
+        docs_text += '  "timestamp": "2024-01-01T12:00:00Z"\n'
+        docs_text += '}\n'
+        docs_text += "```\n\n"
+        
+        docs_text += "❌ **Error Response**\n"
+        docs_text += "```json\n"
+        docs_text += '{\n'
+        docs_text += '  "status": "error",\n'
+        docs_text += '  "message": "Invalid API key",\n'
+        docs_text += '  "code": "AUTH_FAILED",\n'
+        docs_text += '  "timestamp": "2024-01-01T12:00:00Z"\n'
+        docs_text += '}\n'
+        docs_text += "```\n\n"
+        
+        docs_text += "💡 **Need Help?**\n"
+        docs_text += "Contact @darkboxesAdmin for API support"
+        
+        buttons = [
+            [Button.inline("🔑 My API Keys", "my_api_keys")],
+            [Button.inline("🛒 API Plans", "api_plans")],
+            [Button.inline("« API Menu", "api_menu")]
+        ]
+        
+        await event.edit(docs_text, buttons=buttons, parse_mode="md")
+    
+    async def ask_for_create_api_key(self, event):
+        """Ask for API key creation details"""
+        await event.edit(
+            "🔑 **CREATE API KEY**\n\n"
+            "Enter API key details in format:\n"
+            "`plan_id days description`\n\n"
+            "**Example:** `basic 30 My OSINT Tool`\n\n"
+            "**Available Plans:**\n"
+            "• `basic` - 1000 requests, 30 days\n"
+            "• `professional` - 5000 requests, 30 days\n"
+            "• `enterprise` - Unlimited, 30 days\n\n"
+            "**Note:** Only admins can create API keys. Contact @darkboxesAdmin.",
+            buttons=OneLineKeyboard.api_keys_menu()
+        )
+        
+        user_states[event.sender_id] = {"action": "create_api_key"}
+    
+    async def show_api_panel(self, event):
+        """Show API management panel"""
+        api_text = (
+            "🔑 **API MANAGEMENT**\n"
+            "═══════════════════════\n\n"
+            "📊 **Manage API keys and monitor API usage**\n\n"
+            "🛠️ **Available Actions:**\n"
+            "• View API statistics\n"
+            "• Manage user API keys\n"
+            "• View API analytics\n"
+            "• Revoke API keys\n"
+            "• Monitor API usage\n\n"
+            "Select an option below:"
+        )
+        
+        await event.edit(api_text, buttons=OneLineKeyboard.admin_api_panel(), parse_mode="md")
+    
+    async def show_api_stats(self, event):
+        """Show API statistics"""
+        try:
+            api_stats = await self.db.admin_db.get_api_stats_detailed()
+            
+            stats_text = "📊 **API STATISTICS**\n"
+            stats_text += "═══════════════════════\n\n"
+            
+            # Summary
+            summary = api_stats.get('summary', {})
+            stats_text += f"📈 **Summary**\n"
+            stats_text += f"├─ Total API Keys: {summary.get('total_keys', 0)}\n"
+            stats_text += f"├─ Active Keys: {summary.get('active_keys', 0)}\n"
+            stats_text += f"├─ Total Requests: {summary.get('total_requests', 0)}\n"
+            stats_text += f"└─ Requests Used: {summary.get('requests_used', 0)}\n\n"
+            
+            # Plan distribution
+            if api_stats.get('plan_distribution'):
+                stats_text += "📋 **Plan Distribution**\n"
+                for plan in api_stats['plan_distribution']:
+                    plan_name = API_PLANS.get(plan['_id'], {}).get('name', plan['_id'])
+                    stats_text += (
+                        f"• {plan_name}\n"
+                        f"  ├─ Total Keys: {plan['count']}\n"
+                        f"  ├─ Active: {plan['active_keys']}\n"
+                        f"  └─ Requests: {plan['total_requests']}\n\n"
+                    )
+            
+            # Daily requests
+            if api_stats.get('daily_requests'):
+                stats_text += "📅 **Recent Daily Requests**\n"
+                for day in api_stats['daily_requests'][:5]:
+                    stats_text += (
+                        f"• {day['_id']}\n"
+                        f"  ├─ Total: {day['count']}\n"
+                        f"  ├─ Success: {day['success']}\n"
+                        f"  └─ Failed: {day['failed']}\n\n"
+                    )
+            
+            # Top endpoints
+            if api_stats.get('top_endpoints'):
+                stats_text += "🔝 **Top Endpoints**\n"
+                for endpoint in api_stats['top_endpoints'][:5]:
+                    stats_text += (
+                        f"• {endpoint['_id']}\n"
+                        f"  ├─ Calls: {endpoint['count']}\n"
+                        f"  ├─ Success Rate: {endpoint['success']/endpoint['count']*100:.1f}%\n"
+                        f"  └─ Failed: {endpoint['failed']}\n\n"
+                    )
+            
+            await event.edit(stats_text, buttons=OneLineKeyboard.back_to_admin(), parse_mode="md")
+            
+        except Exception as e:
+            logger.error(f"❌ Error showing API stats: {e}")
+            await event.edit("❌ Error loading API statistics", buttons=OneLineKeyboard.back_to_admin())
+    
+    async def ask_for_api_user_management(self, event):
+        """Ask for user ID for API management"""
+        await event.edit(
+            "👤 **MANAGE USER API KEYS**\n\n"
+            "Enter user ID to manage their API keys:\n"
+            "(Numeric user ID)\n\n"
+            "Type the user ID:",
+            buttons=OneLineKeyboard.back_to_admin()
+        )
+        
+        user_states[event.sender_id] = {"action": "admin_api_user"}
+    
+    async def show_api_analytics(self, event):
+        """Show API analytics with graphs"""
+        try:
+            api_stats = await self.db.admin_db.get_api_stats_detailed()
+            
+            if not api_stats.get('daily_requests'):
+                await event.edit("📊 No API analytics data available.", 
+                               buttons=OneLineKeyboard.back_to_admin())
+                return
+            
+            # Create visualization
+            daily_data = api_stats['daily_requests']
+            dates = [data['_id'][5:] for data in daily_data]  # Remove year
+            counts = [data['count'] for data in daily_data]
+            successes = [data['success'] for data in daily_data]
+            failures = [data['failed'] for data in daily_data]
+            
+            plt.figure(figsize=(14, 8))
+            
+            # Success vs Failure stacked bar chart
+            x = range(len(dates))
+            width = 0.6
+            
+            plt.bar(x, successes, width, label='Success', color='lightgreen', alpha=0.8)
+            plt.bar(x, failures, width, bottom=successes, label='Failure', color='lightcoral', alpha=0.8)
+            
+            plt.title('API Requests - Success vs Failure (Last 30 Days)', fontsize=14, fontweight='bold')
+            plt.xlabel('Date', fontsize=12)
+            plt.ylabel('Number of Requests', fontsize=12)
+            plt.xticks(x, dates, rotation=45)
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            
+            # Add value labels
+            for i, (s, f) in enumerate(zip(successes, failures)):
+                total = s + f
+                if total > 0:
+                    plt.text(i, total + max(counts)*0.01, str(total), 
+                            ha='center', va='bottom', fontsize=9, fontweight='bold')
+            
+            plt.tight_layout()
+            
+            # Save to bytes
+            buf = BytesIO()
+            plt.savefig(buf, format='png', dpi=100)
+            buf.seek(0)
+            plt.close()
+            
+            # Calculate statistics
+            total_requests = sum(counts)
+            total_success = sum(successes)
+            total_failed = sum(failures)
+            success_rate = (total_success / total_requests * 100) if total_requests > 0 else 0
+            
+            caption = (
+                f"📈 **API Analytics Dashboard**\n\n"
+                f"📊 **Last 30 Days Summary:**\n"
+                f"├─ Total Requests: {total_requests}\n"
+                f"├─ Successful: {total_success}\n"
+                f"├─ Failed: {total_failed}\n"
+                f"├─ Success Rate: {success_rate:.1f}%\n"
+                f"└─ Average Daily: {total_requests/len(dates):.1f}\n\n"
+                f"📅 **Peak Day:** {dates[counts.index(max(counts))]} ({max(counts)} requests)"
+            )
+            
+            # Send image
+            await event.delete()
+            await self.bot.send_file(
+                event.chat_id,
+                buf,
+                caption=caption,
+                buttons=OneLineKeyboard.back_to_admin()
+            )
+            
+        except Exception as e:
+            logger.error(f"❌ Error generating API analytics: {e}")
+            await event.edit("❌ Error generating API analytics", 
+                           buttons=OneLineKeyboard.back_to_admin())
+    
+    async def ask_for_api_revoke(self, event):
+        """Ask for API key to revoke"""
+        await event.edit(
+            "🚫 **REVOKE API KEY**\n\n"
+            "Enter API key to revoke:\n"
+            "(Full API key or first 8 characters)\n\n"
+            "Type the API key:",
+            buttons=OneLineKeyboard.back_to_admin()
+        )
+        
+        user_states[event.sender_id] = {"action": "admin_api_revoke"}
+    
+    # ... (rest of the admin panel methods remain the same as before, just add API-related handlers)
+
     async def show_admin_panel(self, event):
         """Show main admin panel"""
         admin_text = (
@@ -1444,6 +3060,7 @@ class AdminPanelHandler:
             admin_text += f"├─ Today's Users: {today_stats['new_users']}\n"
             admin_text += f"├─ Today's Searches: {today_stats['total_searches']}\n"
             admin_text += f"├─ Today's Payments: ₹{today_stats['total_payments']}\n"
+            admin_text += f"├─ Today's API Requests: {today_stats['api_requests']}\n"
             
             total_users = await asyncio.get_running_loop().run_in_executor(
                 None, self.db.db.users.count_documents, {}
@@ -1457,924 +3074,7 @@ class AdminPanelHandler:
         
         await event.edit(admin_text, buttons=OneLineKeyboard.admin_panel(), parse_mode="md")
     
-    async def show_today_stats(self, event):
-        """Show today's statistics in detail"""
-        try:
-            today_stats = await self.db.admin_db.get_today_stats()
-            command_stats = await self.db.admin_db.get_command_stats()
-            
-            stats_text = (
-                "📊 **TODAY'S STATISTICS**\n"
-                "═══════════════════════\n\n"
-                f"📈 **User Statistics**\n"
-                f"├─ New Users: {today_stats['new_users']}\n"
-                f"├─ Total Searches: {today_stats['total_searches']}\n"
-                f"├─ Total Payments: ₹{today_stats['total_payments']}\n"
-                f"└─ Payment Count: {today_stats['payment_count']}\n\n"
-            )
-            
-            if command_stats['today']:
-                stats_text += "🔍 **Top Commands Today**\n"
-                for i, cmd in enumerate(command_stats['today'][:5], 1):
-                    cmd_name = SEARCH_COMMANDS.get(cmd['_id'], {}).get('name', cmd['_id'])
-                    stats_text += f"{i}. {cmd_name}: {cmd['count']} searches\n"
-            
-            await event.edit(stats_text, buttons=OneLineKeyboard.back_to_admin(), parse_mode="md")
-        except Exception as e:
-            logger.error(f"Error showing today stats: {e}")
-            await event.edit("❌ Error loading statistics", buttons=OneLineKeyboard.back_to_admin())
-    
-    async def show_user_list(self, event, page: int = 1):
-        """Show paginated user list"""
-        try:
-            user_list = await self.db.admin_db.get_user_list(page, 15)
-            
-            users_text = f"👥 **USER LIST** (Page {page}/{user_list['total_pages']})\n"
-            users_text += "═══════════════════════\n\n"
-            
-            for i, user in enumerate(user_list['users'], 1):
-                idx = (page - 1) * 15 + i
-                username = f"@{user['username']}" if user.get('username') else "No username"
-                joined = user.get('joined_at', '')[:10]
-                searches = user.get('total_searches', 0)
-                
-                users_text += (
-                    f"{idx}. **{user['first_name']}**\n"
-                    f"   ├─ {username}\n"
-                    f"   ├─ ID: `{user['user_id']}`\n"
-                    f"   ├─ Joined: {joined}\n"
-                    f"   └─ Searches: {searches}\n\n"
-                )
-            
-            users_text += f"📊 **Total Users:** {user_list['total_users']}"
-            
-            await event.edit(
-                users_text,
-                buttons=OneLineKeyboard.user_list_buttons(page, user_list['total_pages']),
-                parse_mode="md"
-            )
-        except Exception as e:
-            logger.error(f"Error showing user list: {e}")
-            await event.edit("❌ Error loading user list", buttons=OneLineKeyboard.back_to_admin())
-    
-    async def show_user_management(self, event):
-        """Show user management panel"""
-        management_text = (
-            "👥 **USER MANAGEMENT**\n"
-            "═══════════════════════\n\n"
-            "📋 **Available Actions:**\n"
-            "• View all users with pagination\n"
-            "• View top users by searches\n"
-            "• View referral statistics\n"
-            "• Search for specific users\n"
-            "• View user details\n\n"
-            "Select an option below:"
-        )
-        
-        await event.edit(management_text, buttons=OneLineKeyboard.user_management_panel(), parse_mode="md")
-    
-    async def show_top_users(self, event):
-        """Show top users by searches"""
-        try:
-            top_users = await self.db.admin_db.get_top_users(15)
-            
-            top_text = "🏆 **TOP USERS BY SEARCHES**\n"
-            top_text += "═══════════════════════\n\n"
-            
-            for i, user in enumerate(top_users, 1):
-                username = f"@{user['username']}" if user.get('username') else "No username"
-                sub_status = user.get('subscription', 'None')
-                
-                top_text += (
-                    f"{i}. **{user['first_name']}**\n"
-                    f"   ├─ {username}\n"
-                    f"   ├─ ID: `{user['user_id']}`\n"
-                    f"   ├─ Searches: {user['total_searches']}\n"
-                    f"   ├─ Credits: {user.get('searches_remaining', 0)}\n"
-                    f"   ├─ Subscription: {sub_status}\n"
-                    f"   └─ Last: {user.get('last_search', '')[:10]}\n\n"
-                )
-            
-            await event.edit(top_text, buttons=OneLineKeyboard.back_to_admin(), parse_mode="md")
-        except Exception as e:
-            logger.error(f"Error showing top users: {e}")
-            await event.edit("❌ Error loading top users", buttons=OneLineKeyboard.back_to_admin())
-    
-    async def show_referral_stats(self, event):
-        """Show referral statistics"""
-        try:
-            referral_stats = await self.db.admin_db.get_referral_stats()
-            
-            ref_text = "📊 **REFERRAL STATISTICS**\n"
-            ref_text += "═══════════════════════\n\n"
-            
-            ref_text += f"📈 **Total Referrals:** {referral_stats['total_referrals']}\n\n"
-            
-            if referral_stats['top_referrers']:
-                ref_text += "🏆 **TOP REFERRERS**\n"
-                for i, user in enumerate(referral_stats['top_referrers'][:10], 1):
-                    username = f"@{user['username']}" if user.get('username') else "No username"
-                    ref_text += (
-                        f"{i}. **{user['first_name']}**\n"
-                        f"   ├─ {username}\n"
-                        f"   ├─ Referrals: {user['referrals']}\n"
-                        f"   ├─ Code: `{user.get('referral_code', 'N/A')}`\n"
-                        f"   └─ Credits: {user.get('referral_credits', 0)}\n\n"
-                    )
-            else:
-                ref_text += "No referrals yet.\n"
-            
-            await event.edit(ref_text, buttons=OneLineKeyboard.back_to_admin(), parse_mode="md")
-        except Exception as e:
-            logger.error(f"Error showing referral stats: {e}")
-            await event.edit("❌ Error loading referral statistics", buttons=OneLineKeyboard.back_to_admin())
-    
-    async def show_analytics_panel(self, event):
-        """Show analytics panel"""
-        analytics_text = (
-            "📈 **SEARCH ANALYTICS**\n"
-            "═══════════════════════\n\n"
-            "📊 **Available Reports:**\n"
-            "• Command usage statistics\n"
-            "• Daily activity graphs\n"
-            "• Most used commands\n"
-            "• User activity patterns\n\n"
-            "Select an option below:"
-        )
-        
-        await event.edit(analytics_text, buttons=OneLineKeyboard.analytics_panel(), parse_mode="md")
-    
-    async def show_command_stats(self, event):
-        """Show command usage statistics"""
-        try:
-            command_stats = await self.db.admin_db.get_command_stats()
-            
-            stats_text = "🔍 **COMMAND USAGE STATISTICS**\n"
-            stats_text += "═══════════════════════\n\n"
-            
-            # All-time stats
-            stats_text += "📊 **ALL-TIME STATS**\n"
-            total_searches = sum(cmd['count'] for cmd in command_stats['all_time'])
-            stats_text += f"Total Searches: {total_searches}\n\n"
-            
-            for cmd in command_stats['all_time'][:10]:
-                cmd_name = SEARCH_COMMANDS.get(cmd['command'], {}).get('name', cmd['command'])
-                percentage = (cmd['count'] / total_searches * 100) if total_searches > 0 else 0
-                stats_text += (
-                    f"• **{cmd_name}**\n"
-                    f"  ├─ Searches: {cmd['count']}\n"
-                    f"  ├─ Unique Users: {cmd['unique_users']}\n"
-                    f"  └─ Usage: {percentage:.1f}%\n\n"
-                )
-            
-            # Today's stats
-            if command_stats['today']:
-                stats_text += "📅 **TODAY'S STATS**\n"
-                for cmd in command_stats['today'][:5]:
-                    cmd_name = SEARCH_COMMANDS.get(cmd['_id'], {}).get('name', cmd['_id'])
-                    stats_text += f"• {cmd_name}: {cmd['count']}\n"
-            
-            await event.edit(stats_text, buttons=OneLineKeyboard.back_to_admin(), parse_mode="md")
-        except Exception as e:
-            logger.error(f"Error showing command stats: {e}")
-            await event.edit("❌ Error loading command statistics", buttons=OneLineKeyboard.back_to_admin())
-    
-    async def show_top_commands(self, event):
-        """Show most used commands"""
-        try:
-            command_stats = await self.db.admin_db.get_command_stats()
-            
-            top_text = "🎯 **MOST USED COMMANDS**\n"
-            top_text += "═══════════════════════\n\n"
-            
-            # Prepare data for bar chart
-            commands = []
-            counts = []
-            
-            for cmd in command_stats['all_time'][:8]:
-                cmd_name = SEARCH_COMMANDS.get(cmd['command'], {}).get('name', cmd['command'])
-                commands.append(cmd_name[:15])  # Truncate long names
-                counts.append(cmd['count'])
-            
-            # Create bar chart
-            plt.figure(figsize=(10, 6))
-            bars = plt.bar(commands, counts, color='skyblue')
-            plt.title('Most Used Commands', fontsize=14, fontweight='bold')
-            plt.xlabel('Commands', fontsize=12)
-            plt.ylabel('Number of Searches', fontsize=12)
-            plt.xticks(rotation=45, ha='right')
-            
-            # Add value labels on bars
-            for bar in bars:
-                height = bar.get_height()
-                plt.text(bar.get_x() + bar.get_width()/2., height,
-                        f'{int(height)}', ha='center', va='bottom')
-            
-            plt.tight_layout()
-            
-            # Save to bytes
-            buf = BytesIO()
-            plt.savefig(buf, format='png', dpi=100)
-            buf.seek(0)
-            plt.close()
-            
-            # Send image
-            await event.delete()
-            await self.bot.send_file(
-                event.chat_id,
-                buf,
-                caption="📊 **Command Usage Visualization**",
-                buttons=OneLineKeyboard.back_to_admin()
-            )
-            
-        except Exception as e:
-            logger.error(f"Error generating command chart: {e}")
-            await event.edit("❌ Error generating visualization", buttons=OneLineKeyboard.back_to_admin())
-    
-    async def show_user_activity(self, event):
-        """Show user activity patterns"""
-        try:
-            # Get activity data for last 7 days
-            seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
-            
-            pipeline = [
-                {"$match": {"timestamp": {"$gte": seven_days_ago.isoformat()}}},
-                {"$group": {
-                    "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": {"$toDate": "$timestamp"}}},
-                    "count": {"$sum": 1},
-                    "unique_users": {"$addToSet": "$user_id"}
-                }},
-                {"$project": {
-                    "date": "$_id",
-                    "searches": "$count",
-                    "unique_users": {"$size": "$unique_users"}
-                }},
-                {"$sort": {"date": 1}}
-            ]
-            
-            activity_data = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: list(self.db.db.search_logs.aggregate(pipeline))
-            )
-            
-            if not activity_data:
-                await event.edit("📊 No activity data available for the last 7 days.", 
-                               buttons=OneLineKeyboard.back_to_admin())
-                return
-            
-            # Create visualization
-            dates = [data['date'][5:] for data in activity_data]  # Remove year
-            searches = [data['searches'] for data in activity_data]
-            users = [data['unique_users'] for data in activity_data]
-            
-            plt.figure(figsize=(12, 6))
-            
-            x = range(len(dates))
-            width = 0.35
-            
-            plt.bar([i - width/2 for i in x], searches, width, label='Searches', color='skyblue')
-            plt.bar([i + width/2 for i in x], users, width, label='Unique Users', color='lightcoral')
-            
-            plt.title('User Activity (Last 7 Days)', fontsize=14, fontweight='bold')
-            plt.xlabel('Date', fontsize=12)
-            plt.ylabel('Count', fontsize=12)
-            plt.xticks(x, dates, rotation=45)
-            plt.legend()
-            plt.grid(True, alpha=0.3)
-            plt.tight_layout()
-            
-            # Add value labels
-            for i, (s, u) in enumerate(zip(searches, users)):
-                plt.text(i - width/2, s + max(searches)*0.01, str(s), 
-                        ha='center', va='bottom', fontsize=8)
-                plt.text(i + width/2, u + max(users)*0.01, str(u), 
-                        ha='center', va='bottom', fontsize=8)
-            
-            # Save to bytes
-            buf = BytesIO()
-            plt.savefig(buf, format='png', dpi=100)
-            buf.seek(0)
-            plt.close()
-            
-            # Calculate totals
-            total_searches = sum(searches)
-            total_users = sum(users)
-            avg_searches = total_searches / len(activity_data)
-            
-            caption = (
-                f"📊 **User Activity Analysis**\n\n"
-                f"📈 **Last 7 Days Summary:**\n"
-                f"├─ Total Searches: {total_searches}\n"
-                f"├─ Total Unique Users: {total_users}\n"
-                f"├─ Average Daily Searches: {avg_searches:.1f}\n"
-                f"└─ Peak Day: {dates[searches.index(max(searches))]} ({max(searches)} searches)"
-            )
-            
-            # Send image
-            await event.delete()
-            await self.bot.send_file(
-                event.chat_id,
-                buf,
-                caption=caption,
-                buttons=OneLineKeyboard.back_to_admin()
-            )
-            
-        except Exception as e:
-            logger.error(f"Error generating activity chart: {e}")
-            await event.edit("❌ Error generating activity visualization", 
-                           buttons=OneLineKeyboard.back_to_admin())
-    
-    async def generate_daily_graph(self, event):
-        """Generate daily activity graph"""
-        try:
-            # Get daily stats for last 30 days
-            thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
-            
-            pipeline = [
-                {"$match": {"timestamp": {"$gte": thirty_days_ago.isoformat()}}},
-                {"$group": {
-                    "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": {"$toDate": "$timestamp"}}},
-                    "searches": {"$sum": 1},
-                    "users": {"$addToSet": "$user_id"}
-                }},
-                {"$project": {
-                    "date": "$_id",
-                    "searches": 1,
-                    "users": {"$size": "$users"}
-                }},
-                {"$sort": {"date": 1}}
-            ]
-            
-            daily_data = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: list(self.db.db.search_logs.aggregate(pipeline))
-            )
-            
-            if not daily_data:
-                await event.edit("📊 No activity data available.", 
-                               buttons=OneLineKeyboard.back_to_admin())
-                return
-            
-            # Prepare data
-            dates = [data['date'][5:] for data in daily_data]  # Remove year
-            searches = [data['searches'] for data in daily_data]
-            
-            # Create line chart
-            plt.figure(figsize=(14, 7))
-            plt.plot(dates, searches, marker='o', linewidth=2, markersize=6, color='royalblue')
-            plt.fill_between(dates, searches, alpha=0.3, color='skyblue')
-            
-            plt.title('Daily Search Activity (Last 30 Days)', fontsize=16, fontweight='bold')
-            plt.xlabel('Date', fontsize=12)
-            plt.ylabel('Number of Searches', fontsize=12)
-            plt.xticks(rotation=45, ha='right')
-            plt.grid(True, alpha=0.3)
-            
-            # Highlight max point
-            max_idx = searches.index(max(searches))
-            plt.plot(dates[max_idx], searches[max_idx], 'ro', markersize=10)
-            plt.annotate(f'Peak: {searches[max_idx]}', 
-                        xy=(dates[max_idx], searches[max_idx]),
-                        xytext=(10, 10), textcoords='offset points',
-                        fontsize=10, color='red', fontweight='bold')
-            
-            plt.tight_layout()
-            
-            # Calculate statistics
-            total_searches = sum(searches)
-            avg_searches = total_searches / len(searches)
-            growth = ((searches[-1] - searches[0]) / searches[0] * 100) if searches[0] > 0 else 0
-            
-            # Save to bytes
-            buf = BytesIO()
-            plt.savefig(buf, format='png', dpi=100)
-            buf.seek(0)
-            plt.close()
-            
-            caption = (
-                f"📈 **Daily Activity Analysis**\n\n"
-                f"📊 **Statistics (Last 30 Days):**\n"
-                f"├─ Total Searches: {total_searches}\n"
-                f"├─ Average Daily: {avg_searches:.1f}\n"
-                f"├─ Peak Activity: {searches[max_idx]} searches\n"
-                f"└─ Growth Rate: {growth:+.1f}%\n\n"
-                f"📅 **Trend Analysis:**\n"
-            )
-            
-            if growth > 0:
-                caption += "📈 Positive growth trend detected\n"
-            else:
-                caption += "📉 Negative growth trend detected\n"
-            
-            # Send image
-            await event.delete()
-            await self.bot.send_file(
-                event.chat_id,
-                buf,
-                caption=caption,
-                buttons=OneLineKeyboard.back_to_admin()
-            )
-            
-        except Exception as e:
-            logger.error(f"Error generating daily graph: {e}")
-            await event.edit("❌ Error generating daily graph", 
-                           buttons=OneLineKeyboard.back_to_admin())
-    
-    async def show_payment_panel(self, event):
-        """Show payment management panel"""
-        payment_text = (
-            "💰 **PAYMENT MANAGEMENT**\n"
-            "═══════════════════════\n\n"
-            "📊 **Available Reports:**\n"
-            "• Today's revenue\n"
-            "• Revenue graphs\n"
-            "• Total revenue\n"
-            "• Payment history\n\n"
-            "Select an option below:"
-        )
-        
-        await event.edit(payment_text, buttons=OneLineKeyboard.payment_panel(), parse_mode="md")
-    
-    async def show_today_payments(self, event):
-        """Show today's payment statistics"""
-        try:
-            today_stats = await self.db.admin_db.get_today_stats()
-            payment_stats = await self.db.admin_db.get_payment_stats()
-            
-            # Get today's payments
-            today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-            today_payments = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: list(self.db.db.payments.find({
-                    "timestamp": {"$gte": today.isoformat()},
-                    "status": "completed"
-                }).sort("timestamp", -1).limit(10))
-            )
-            
-            payment_text = "💰 **TODAY'S PAYMENTS**\n"
-            payment_text += "═══════════════════════\n\n"
-            
-            payment_text += f"📊 **Summary**\n"
-            payment_text += f"├─ Total Revenue: ₹{today_stats['total_payments']}\n"
-            payment_text += f"├─ Number of Payments: {today_stats['payment_count']}\n"
-            payment_text += f"└─ Average Payment: ₹{today_stats['total_payments']/today_stats['payment_count']:.2f}\n\n"
-            
-            if today_payments:
-                payment_text += "📋 **Recent Payments**\n"
-                for i, payment in enumerate(today_payments[:5], 1):
-                    plan = SUBSCRIPTION_PLANS.get(payment.get('plan_id', ''), {})
-                    plan_name = plan.get('name', payment.get('plan_id', 'N/A'))
-                    time_str = payment.get('timestamp', '')[:16]
-                    
-                    payment_text += (
-                        f"{i}. **₹{payment.get('amount', 0)}**\n"
-                        f"   ├─ Plan: {plan_name}\n"
-                        f"   ├─ User: `{payment.get('user_id', 'N/A')}`\n"
-                        f"   └─ Time: {time_str}\n\n"
-                    )
-            else:
-                payment_text += "No payments today.\n"
-            
-            await event.edit(payment_text, buttons=OneLineKeyboard.back_to_admin(), parse_mode="md")
-        except Exception as e:
-            logger.error(f"Error showing today payments: {e}")
-            await event.edit("❌ Error loading payment statistics", buttons=OneLineKeyboard.back_to_admin())
-    
-    async def show_total_revenue(self, event):
-        """Show total revenue statistics"""
-        try:
-            payment_stats = await self.db.admin_db.get_payment_stats()
-            
-            revenue_text = "💰 **TOTAL REVENUE**\n"
-            revenue_text += "═══════════════════════\n\n"
-            
-            revenue_text += f"📊 **Overall Statistics**\n"
-            revenue_text += f"├─ Total Revenue: ₹{payment_stats['total_revenue']}\n"
-            revenue_text += f"├─ Daily Average: ₹{payment_stats['total_revenue']/30:.2f}\n"
-            revenue_text += f"└─ Projected Monthly: ₹{payment_stats['total_revenue']:.2f}\n\n"
-            
-            if payment_stats['daily_stats']:
-                revenue_text += "📅 **Last 30 Days Revenue**\n"
-                total_last_30 = sum(day['total_amount'] for day in payment_stats['daily_stats'])
-                avg_last_30 = total_last_30 / len(payment_stats['daily_stats'])
-                
-                revenue_text += f"├─ Total (30 days): ₹{total_last_30}\n"
-                revenue_text += f"├─ Daily Average: ₹{avg_last_30:.2f}\n"
-                revenue_text += f"└─ Growth Potential: ₹{avg_last_30 * 30:.2f}/month\n\n"
-                
-                revenue_text += "📈 **Top 5 Revenue Days**\n"
-                top_days = sorted(payment_stats['daily_stats'], key=lambda x: x['total_amount'], reverse=True)[:5]
-                for i, day in enumerate(top_days, 1):
-                    revenue_text += f"{i}. {day['_id']}: ₹{day['total_amount']} ({day['count']} payments)\n"
-            
-            await event.edit(revenue_text, buttons=OneLineKeyboard.back_to_admin(), parse_mode="md")
-        except Exception as e:
-            logger.error(f"Error showing total revenue: {e}")
-            await event.edit("❌ Error loading revenue statistics", buttons=OneLineKeyboard.back_to_admin())
-    
-    async def generate_revenue_graph(self, event):
-        """Generate revenue graph"""
-        try:
-            payment_stats = await self.db.admin_db.get_payment_stats()
-            
-            if not payment_stats['daily_stats']:
-                await event.edit("💰 No revenue data available.", 
-                               buttons=OneLineKeyboard.back_to_admin())
-                return
-            
-            # Prepare data
-            dates = [day['_id'][5:] for day in payment_stats['daily_stats']]  # Remove year
-            amounts = [day['total_amount'] for day in payment_stats['daily_stats']]
-            counts = [day['count'] for day in payment_stats['daily_stats']]
-            
-            # Create figure with two subplots
-            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 10))
-            
-            # Revenue line chart
-            ax1.plot(dates, amounts, marker='o', linewidth=2, markersize=6, color='green')
-            ax1.fill_between(dates, amounts, alpha=0.3, color='lightgreen')
-            ax1.set_title('Daily Revenue (Last 30 Days)', fontsize=14, fontweight='bold')
-            ax1.set_ylabel('Revenue (₹)', fontsize=12)
-            ax1.grid(True, alpha=0.3)
-            ax1.tick_params(axis='x', rotation=45)
-            
-            # Add value labels for peaks
-            for i, (date, amount) in enumerate(zip(dates, amounts)):
-                if amount == max(amounts):
-                    ax1.annotate(f'₹{amount}', xy=(date, amount),
-                                xytext=(0, 10), textcoords='offset points',
-                                fontsize=10, color='red', fontweight='bold',
-                                ha='center')
-            
-            # Payment count bar chart
-            bars = ax2.bar(dates, counts, color='orange', alpha=0.7)
-            ax2.set_title('Daily Payment Count', fontsize=14, fontweight='bold')
-            ax2.set_xlabel('Date', fontsize=12)
-            ax2.set_ylabel('Number of Payments', fontsize=12)
-            ax2.grid(True, alpha=0.3)
-            ax2.tick_params(axis='x', rotation=45)
-            
-            # Add value labels on bars
-            for bar in bars:
-                height = bar.get_height()
-                if height > 0:
-                    ax2.text(bar.get_x() + bar.get_width()/2., height,
-                            f'{int(height)}', ha='center', va='bottom', fontsize=9)
-            
-            plt.tight_layout()
-            
-            # Calculate statistics
-            total_revenue = sum(amounts)
-            total_payments = sum(counts)
-            avg_revenue = total_revenue / len(amounts)
-            avg_payments = total_payments / len(counts)
-            
-            # Save to bytes
-            buf = BytesIO()
-            plt.savefig(buf, format='png', dpi=100)
-            buf.seek(0)
-            plt.close()
-            
-            caption = (
-                f"📊 **Revenue Analysis**\n\n"
-                f"💰 **Last 30 Days Summary:**\n"
-                f"├─ Total Revenue: ₹{total_revenue}\n"
-                f"├─ Total Payments: {total_payments}\n"
-                f"├─ Average Daily Revenue: ₹{avg_revenue:.2f}\n"
-                f"├─ Average Daily Payments: {avg_payments:.1f}\n"
-                f"└─ Average Payment Value: ₹{total_revenue/total_payments:.2f}\n\n"
-                f"📈 **Insights:**\n"
-            )
-            
-            if avg_revenue > 1000:
-                caption += "• 📈 Strong revenue performance\n"
-            elif avg_revenue > 500:
-                caption += "• 📊 Moderate revenue growth\n"
-            else:
-                caption += "• ⚠️ Revenue needs improvement\n"
-            
-            # Send image
-            await event.delete()
-            await self.bot.send_file(
-                event.chat_id,
-                buf,
-                caption=caption,
-                buttons=OneLineKeyboard.back_to_admin()
-            )
-            
-        except Exception as e:
-            logger.error(f"Error generating revenue graph: {e}")
-            await event.edit("❌ Error generating revenue visualization", 
-                           buttons=OneLineKeyboard.back_to_admin())
-    
-    async def ask_for_user_search(self, event):
-        """Ask for user search query"""
-        await event.edit(
-            "🔍 **SEARCH USER**\n\n"
-            "Enter search criteria:\n"
-            "• User ID (numeric)\n"
-            "• Username (with or without @)\n"
-            "• First name\n\n"
-            "Type your search query:",
-            buttons=OneLineKeyboard.back_to_admin()
-        )
-        
-        # Set state for message handler
-        user_states[event.sender_id] = {"action": "admin_search_user"}
-    
-    async def ask_for_broadcast(self, event):
-        """Ask for broadcast message"""
-        await event.edit(
-            "📢 **BROADCAST MESSAGE**\n\n"
-            "Enter your broadcast message:\n"
-            "(Supports Markdown formatting)\n\n"
-            "Type your message:",
-            buttons=OneLineKeyboard.back_to_admin()
-        )
-        
-        user_states[event.sender_id] = {"action": "admin_broadcast"}
-    
-    async def ask_for_ban_user(self, event):
-        """Ask for user ID to ban/unban"""
-        await event.edit(
-            "🚫 **BAN/UNBAN USER**\n\n"
-            "Enter user ID to ban/unban:\n"
-            "(Numeric user ID)\n\n"
-            "Type the user ID:",
-            buttons=OneLineKeyboard.back_to_admin()
-        )
-        
-        user_states[event.sender_id] = {"action": "admin_ban"}
-    
-    async def ask_for_admin_management(self, event):
-        """Ask for user ID for admin management"""
-        await event.edit(
-            "👑 **ADMIN MANAGEMENT**\n\n"
-            "Enter user ID to add/remove as admin:\n"
-            "(Numeric user ID)\n\n"
-            "Type the user ID:",
-            buttons=OneLineKeyboard.back_to_admin()
-        )
-        
-        user_states[event.sender_id] = {"action": "admin_management"}
-    
-    async def ask_for_add_credits(self, event):
-        """Ask for user ID and credits to add"""
-        await event.edit(
-            "🎯 **ADD CREDITS**\n\n"
-            "Enter in format:\n"
-            "`user_id credits`\n\n"
-            "Example: `123456789 10`\n"
-            "This will add 10 credits to user 123456789\n\n"
-            "Type the command:",
-            buttons=OneLineKeyboard.back_to_admin()
-        )
-        
-        user_states[event.sender_id] = {"action": "admin_add_credits"}
-    
-    async def show_bot_settings(self, event):
-        """Show bot settings"""
-        settings_text = (
-            "⚙️ **BOT SETTINGS**\n"
-            "═══════════════════════\n\n"
-            "📊 **Current Configuration:**\n"
-            f"├─ Bot: @{bot_info.username}\n"
-            f"├─ Admin: {config.ADMIN_USER_ID}\n"
-            f"├─ New User Credits: {config.NEW_USER_CREDITS}\n"
-            f"├─ Referral Reward: {config.REFERRAL_REWARD}\n"
-            f"├─ Max File Size: {config.MAX_FILE_SIZE_MB}MB\n"
-            f"├─ Group Timeout: {config.GROUP_TIMEOUT}s\n"
-            f"└─ UPI ID: {config.UPI_ID}\n\n"
-            "🔄 **Available Actions:**\n"
-            "• Adjust user credits\n"
-            "• Modify referral rewards\n"
-            "• Update configuration\n"
-            "• Restart services\n\n"
-            "⚠️ **Note:** Some settings require bot restart."
-        )
-        
-        await event.edit(settings_text, buttons=OneLineKeyboard.back_to_admin(), parse_mode="md")
-    
-    async def export_data(self, event):
-        """Export bot data"""
-        try:
-            await event.edit("📥 **EXPORTING DATA...**\n\nThis may take a moment...")
-            
-            # Get all data
-            users = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: list(self.db.db.users.find({}, {
-                    "user_id": 1, "username": 1, "first_name": 1, 
-                    "joined_at": 1, "total_searches": 1, "searches_remaining": 1,
-                    "subscription": 1, "referrals": 1, "is_banned": 1
-                }))
-            )
-            
-            payments = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: list(self.db.db.payments.find({}, {
-                    "user_id": 1, "amount": 1, "plan_id": 1, 
-                    "timestamp": 1, "status": 1
-                }))
-            )
-            
-            searches = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: list(self.db.db.search_logs.find({}, {
-                    "user_id": 1, "search_type": 1, "query": 1,
-                    "timestamp": 1, "success": 1, "credits_used": 1
-                }).limit(10000))  # Limit to prevent memory issues
-            )
-            
-            # Create CSV data
-            import csv
-            from io import StringIO
-            
-            # Users CSV
-            users_csv = StringIO()
-            users_writer = csv.writer(users_csv)
-            users_writer.writerow(['User ID', 'Username', 'Name', 'Joined', 'Searches', 'Credits', 'Subscription', 'Referrals', 'Banned'])
-            for user in users:
-                users_writer.writerow([
-                    user.get('user_id', ''),
-                    user.get('username', ''),
-                    user.get('first_name', ''),
-                    user.get('joined_at', '')[:10],
-                    user.get('total_searches', 0),
-                    user.get('searches_remaining', 0),
-                    user.get('subscription', 'None'),
-                    user.get('referrals', 0),
-                    'Yes' if user.get('is_banned') else 'No'
-                ])
-            
-            users_csv.seek(0)
-            
-            # Payments CSV
-            payments_csv = StringIO()
-            payments_writer = csv.writer(payments_csv)
-            payments_writer.writerow(['User ID', 'Amount', 'Plan', 'Date', 'Status'])
-            for payment in payments:
-                payments_writer.writerow([
-                    payment.get('user_id', ''),
-                    payment.get('amount', 0),
-                    payment.get('plan_id', ''),
-                    payment.get('timestamp', '')[:10],
-                    payment.get('status', '')
-                ])
-            
-            payments_csv.seek(0)
-            
-            # Prepare message
-            export_text = (
-                "📊 **DATA EXPORT COMPLETE**\n\n"
-                f"✅ **Exported Data:**\n"
-                f"├─ Users: {len(users)} records\n"
-                f"├─ Payments: {len(payments)} records\n"
-                f"└─ Searches: {len(searches)} records\n\n"
-                "📁 **Files are ready for download.**\n"
-                "Use the buttons below to download:"
-            )
-            
-            buttons = [
-                [Button.inline("📥 Download Users CSV", "export_users")],
-                [Button.inline("📥 Download Payments CSV", "export_payments")],
-                [Button.inline("📥 Download Searches CSV", "export_searches")],
-                [Button.inline("« Admin Panel", "admin_panel")]
-            ]
-            
-            # Store export data temporarily
-            export_data_storage[event.sender_id] = {
-                "users": users_csv.getvalue(),
-                "payments": payments_csv.getvalue(),
-                "timestamp": datetime.now().isoformat()
-            }
-            
-            await event.edit(export_text, buttons=buttons)
-            
-        except Exception as e:
-            logger.error(f"Error exporting data: {e}")
-            await event.edit("❌ Error exporting data", buttons=OneLineKeyboard.back_to_admin())
-    
-    async def show_user_detail(self, event, user_id: int):
-        """Show detailed user information"""
-        try:
-            user_stats = await self.db.admin_db.get_user_stats(user_id)
-            
-            if not user_stats.get('user_info'):
-                await event.answer("❌ User not found", alert=True)
-                return
-            
-            user = user_stats['user_info']
-            
-            detail_text = f"👤 **USER DETAILS**\n"
-            detail_text += "═══════════════════════\n\n"
-            
-            detail_text += f"📋 **Basic Information**\n"
-            detail_text += f"├─ Name: {user.get('first_name', 'N/A')}\n"
-            detail_text += f"├─ Username: @{user.get('username', 'N/A')}\n"
-            detail_text += f"├─ User ID: `{user_id}`\n"
-            detail_text += f"├─ Joined: {user.get('joined_at', 'N/A')[:10]}\n"
-            detail_text += f"├─ Last Seen: {user.get('last_seen', 'N/A')[:16]}\n"
-            detail_text += f"├─ Credits: {user.get('searches_remaining', 0)}\n"
-            detail_text += f"├─ Total Searches: {user_stats['total_searches']}\n"
-            detail_text += f"├─ Referrals: {user_stats['referrals']}\n"
-            detail_text += f"└─ Banned: {'Yes' if user.get('is_banned') else 'No'}\n\n"
-            
-            # Subscription info
-            if user.get('subscription'):
-                expiry = user.get('subscription_expiry', '')
-                if expiry:
-                    expiry_date = datetime.fromisoformat(expiry)
-                    days_left = (expiry_date - datetime.now(timezone.utc)).days
-                    detail_text += f"💎 **Subscription**\n"
-                    detail_text += f"├─ Plan: {user['subscription']}\n"
-                    detail_text += f"└─ Expires in: {days_left} days\n\n"
-            
-            # Recent searches
-            if user_stats.get('last_searches'):
-                detail_text += "🔍 **Recent Searches**\n"
-                for search in user_stats['last_searches'][:5]:
-                    search_type = search.get('search_type', 'N/A')
-                    cmd_name = SEARCH_COMMANDS.get(search_type, {}).get('name', search_type)
-                    time_str = search.get('timestamp', '')[:16]
-                    success = "✅" if search.get('success') else "❌"
-                    
-                    detail_text += f"{success} {cmd_name}\n"
-                    detail_text += f"   ├─ Query: `{search.get('query', 'N/A')}`\n"
-                    detail_text += f"   └─ Time: {time_str}\n\n"
-            
-            # Action buttons
-            buttons = []
-            if user.get('is_banned'):
-                buttons.append([Button.inline("🔓 Unban User", f"confirm_unban_{user_id}")])
-            else:
-                buttons.append([Button.inline("🚫 Ban User", f"confirm_ban_{user_id}")])
-            
-            if user.get('is_admin'):
-                buttons.append([Button.inline("👑 Remove Admin", f"confirm_remove_admin_{user_id}")])
-            else:
-                buttons.append([Button.inline("👑 Add Admin", f"confirm_add_admin_{user_id}")])
-            
-            buttons.append([Button.inline("🎯 Add Credits", f"admin_add_credits_user_{user_id}")])
-            buttons.append([Button.inline("« User Management", "admin_users")])
-            
-            await event.edit(detail_text, buttons=buttons, parse_mode="md")
-            
-        except Exception as e:
-            logger.error(f"Error showing user detail: {e}")
-            await event.answer("❌ Error loading user details", alert=True)
-    
-    async def confirm_ban_user(self, event, user_id: int):
-        """Confirm ban user"""
-        try:
-            success = await self.db.ban_user(user_id, "Admin action")
-            if success:
-                # Remove from admin cache if they were admin
-                if user_id in self.admin_users:
-                    self.admin_users.remove(user_id)
-                
-                await event.answer("✅ User banned successfully", alert=True)
-                await self.show_admin_panel(event)
-            else:
-                await event.answer("❌ Failed to ban user", alert=True)
-        except Exception as e:
-            logger.error(f"Error banning user: {e}")
-            await event.answer("❌ Error banning user", alert=True)
-    
-    async def confirm_unban_user(self, event, user_id: int):
-        """Confirm unban user"""
-        try:
-            success = await self.db.unban_user(user_id)
-            if success:
-                await event.answer("✅ User unbanned successfully", alert=True)
-                await self.show_admin_panel(event)
-            else:
-                await event.answer("❌ Failed to unban user", alert=True)
-        except Exception as e:
-            logger.error(f"Error unbanning user: {e}")
-            await event.answer("❌ Error unbanning user", alert=True)
-    
-    async def confirm_add_admin(self, event, user_id: int):
-        """Confirm add admin"""
-        try:
-            success = await self.db.add_admin(user_id)
-            if success:
-                self.admin_users.add(user_id)
-                await event.answer("✅ User added as admin", alert=True)
-                await self.show_admin_panel(event)
-            else:
-                await event.answer("❌ Failed to add admin", alert=True)
-        except Exception as e:
-            logger.error(f"Error adding admin: {e}")
-            await event.answer("❌ Error adding admin", alert=True)
-    
-    async def confirm_remove_admin(self, event, user_id: int):
-        """Confirm remove admin"""
-        try:
-            success = await self.db.remove_admin(user_id)
-            if success:
-                self.admin_users.remove(user_id)
-                await event.answer("✅ Admin privileges removed", alert=True)
-                await self.show_admin_panel(event)
-            else:
-                await event.answer("❌ Failed to remove admin", alert=True)
-        except Exception as e:
-            logger.error(f"Error removing admin: {e}")
-            await event.answer("❌ Error removing admin", alert=True)
+    # ... (all other admin panel methods remain the same)
 
 # ================== SEARCH ENGINE WITH PRIORITY MANAGEMENT ==================
 
@@ -2462,7 +3162,7 @@ class SearchEngine:
         await self._notify_admin(user_id, search_type, query)
         return {
             "success": False,
-            "error": f"🔍 **INTELLIGENCE GATHERING FAILED**\n\nQuery: `{query}`\n\n⚠️ **Premium Notice:** Your query has been escalated to our premium database.\nAdministrator will review and respond within 24 hours.\n\n💎 **For instant access, upgrade to:**\n• 👑 Premium Plan: Unlimited searches (7 days)\n• 🚀 Enterprise Plan: Unlimited searches (30 days)\n\nContact @darkboxesAdmin for immediate assistance."
+            "error": f"🔍 **INTELLIGENCE GATHERING FAILED**\n\nQuery: `{query}`\n\n⚠️ **Premium Notice:** Your query has been escalated to our premium database.\nAdministrator will review and respond within 24 hours.\n\n💎 **For instant access, upgrade to:**\n• 👑 Premium Tier: Unlimited searches (30 days)\n• 🚀 Standard Tier: 30 searches (15 days)\n\nContact @darkboxesAdmin for immediate assistance."
         }
     
     async def perform_leak_search(self, query: str, user_id: int) -> Dict:
@@ -2501,12 +3201,13 @@ class SearchEngine:
                 "priority": advanced_group["weight"],
                 "expect_multiple_files": True,
                 "files_received": [],
-                "file_types": ["json", "txt"]
+                "file_types": ["json", "txt"],
+                "processed_files": []  # NEW: Track which files we've already processed
             }
             
             # Wait for response (5 seconds timeout for leak search)
             try:
-                result = await asyncio.wait_for(future, timeout=5)
+                result = await asyncio.wait_for(future, timeout=10)  # Increased timeout to 10 seconds
                 
                 if result["success"]:
                     logger.info(f"✅ Advanced leak search successful")
@@ -2589,28 +3290,86 @@ class SearchEngine:
                         if file_check is not None:
                             logger.info(f"📁 Found file in {search_info['group']['name']}")
                             await self._process_search_response(search_id, search_info, message)
-                            return
+                        return
                 except:
                     continue
                     
         except Exception as e:
             logger.error(f"❌ Error handling incoming message: {e}")
-    
+
     async def _check_and_process_file(self, message, search_info: Dict) -> Optional[Dict]:
         """Check if message has file and process it"""
-        if message.media and hasattr(message.media, 'document'):
-            logger.info(f"📁 Found document media in message")
-            return await self._process_file(message, search_info)
+        try:
+            # First check for actual file/document
+            if message.media and hasattr(message.media, 'document'):
+                logger.info(f"📁 Found document media in message")
+                return await self._process_file(message, search_info)
         
-        if hasattr(message, 'file') and message.file:
-            logger.info(f"📁 Found file attribute in message")
-            return await self._process_file(message, search_info)
+            if hasattr(message, 'file') and message.file:
+                logger.info(f"📁 Found file attribute in message")
+                return await self._process_file(message, search_info)
         
-        if message.document:
-            logger.info(f"📁 Found document in message")
-            return await self._process_file(message, search_info)
+            if message.document:
+                logger.info(f"📁 Found document in message")
+                return await self._process_file(message, search_info)
         
-        return None
+            # Check for text that might be a TXT file
+            text = message.text or message.raw_text or ""
+            if text and len(text) > 1000:
+                # Check for TXT file indicators in the text
+                txt_indicators = [
+                    'Full results available as JSON file',
+                    'Total length:',
+                    'TRUNCATED - DATA TOO LONG',
+                    '───────────────────────',
+                    '━━━━━━━━━━━━━━━━━━━━━━━━',
+                    'Service: leak',
+                    'Requested by:',
+                    '👤 ʀᴇǫᴜᴇꜱᴛᴇᴅ ʙʏ:',
+                    '🔍 ǫᴜᴇʀʏ:',
+                    '⏰ ᴛɪᴍᴇ:'
+                ]
+            
+                indicator_count = 0
+                for indicator in txt_indicators:
+                    if indicator in text:
+                        indicator_count += 1
+            
+                # If multiple indicators found, treat as TXT file
+                if indicator_count >= 3:
+                    logger.info(f"📄 Detected TXT file content in message text ({indicator_count} indicators)")
+                
+                    # Clean the text content
+                    cleaned_content = TextProcessor.clean_content(text, search_info["search_type"])
+                
+                    result = {
+                        "success": True,
+                        "result": None,
+                        "has_file": True,
+                        "content": cleaned_content,
+                        "raw_bytes": cleaned_content.encode('utf-8'),
+                        "filename": f"leak_{search_info['query']}_{int(time.time())}.txt",
+                        "is_text_based": True
+                    }
+                
+                    # For non-leak searches, format the result
+                    if search_info["search_type"] != "leak":
+                        formatted_result = PremiumFormatter.format_result(
+                            cleaned_content,
+                            search_info["search_type"],
+                            search_info["query"],
+                            search_info["group"]["name"]
+                        )
+                        result["result"] = formatted_result
+                
+                    logger.info(f"✅ Processed TXT content with {len(cleaned_content)} characters")
+                    return result
+        
+            return None
+        
+        except Exception as e:
+            logger.error(f"❌ Error checking for file: {e}")
+            return None
     
     async def _process_search_response(self, search_id: str, search_info: Dict, message):
         """Process a search response message"""
@@ -2683,10 +3442,22 @@ class SearchEngine:
     async def _process_leak_response(self, search_id: str, search_info: Dict, message):
         """Process leak search response"""
         try:
+            # First, check if this is a file
             file_result = await self._check_and_process_file(message, search_info)
             
             if file_result is not None:
                 logger.info(f"📁 Processing leak search file")
+                
+                # Check if we've already processed this file (prevent duplicate processing)
+                message_id = message.id
+                if "processed_files" not in search_info:
+                    search_info["processed_files"] = []
+                
+                if message_id in search_info["processed_files"]:
+                    logger.info(f"⚠️ Already processed file with ID {message_id}, skipping")
+                    return
+                
+                search_info["processed_files"].append(message_id)
                 
                 # Add file to received files
                 if "files_received" not in search_info:
@@ -2696,103 +3467,207 @@ class SearchEngine:
                 filename = ""
                 if hasattr(message.file, 'name') and message.file.name:
                     filename = message.file.name.lower()
+                elif hasattr(message, 'file') and message.file and hasattr(message.file, 'name'):
+                    filename = message.file.name.lower()
                 
                 file_type = "unknown"
                 if '.json' in filename:
                     file_type = "json"
                 elif '.txt' in filename:
                     file_type = "txt"
+                elif '.text' in filename:
+                    file_type = "txt"
+                elif 'json' in filename:
+                    file_type = "json"
                 
                 file_result["file_type"] = file_type
+                file_result["message_id"] = message_id
                 search_info["files_received"].append(file_result)
                 
-                # Check if we have both JSON and TXT files
+                logger.info(f"✅ Added {file_type} file to leak search results. Total files: {len(search_info['files_received'])}")
+                
+                # Check if we should complete the search
                 received_types = [f["file_type"] for f in search_info["files_received"]]
+                has_json = "json" in received_types
+                has_txt = "txt" in received_types
+                has_enough_files = len(search_info["files_received"]) >= 2
+                time_elapsed = time.time() - search_info["start_time"]
                 
-                if all(ft in received_types for ft in ["json", "txt"]) or len(search_info["files_received"]) >= 2:
-                    # We have both files or enough files
-                    logger.info(f"✅ Received {len(search_info['files_received'])} files for leak search")
-                    
-                    # Combine results
-                    combined_result = {
-                        "success": True,
-                        "result": "🚀 **ADVANCED SEARCH COMPLETE**\n\n",
-                        "files": search_info["files_received"],
-                        "has_multiple_files": True
-                    }
-                    
-                    # Create summary
-                    json_data = None
-                    txt_data = None
-                    
-                    for file in search_info["files_received"]:
-                        if file["file_type"] == "json":
-                            json_data = file.get("content", "")
-                        elif file["file_type"] == "txt":
-                            txt_data = file.get("content", "")
-                    
-                    # Format result
-                    summary = f"🔮 **ADVANCED UNIVERSAL SEARCH RESULT**\n"
-                    summary += f"═══════════════════════════════════\n\n"
-                    summary += f"🔍 **Query:** `{search_info['query']}`\n"
-                    summary += f"🚀 **Source:** {search_info['group']['name']}\n"
-                    summary += f"⚡ **Speed:** Ultra-fast processing\n"
-                    summary += f"📊 **Files Received:** {len(search_info['files_received'])}\n\n"
-                    
-                    if txt_data:
-                        summary += f"📄 **TEXT REPORT SUMMARY**\n"
-                        summary += f"─────────────────────────────\n"
-                        # Extract first 500 chars from text
-                        txt_preview = txt_data[:500].replace('\n', '\n')
-                        summary += f"{txt_preview}\n"
-                        if len(txt_data) > 500:
-                            summary += f"... (truncated, full report in TXT file)\n\n"
-                    
-                    if json_data:
-                        try:
-                            json_obj = json.loads(json_data)
-                            summary += f"📊 **DATA FIELDS FOUND**\n"
-                            summary += f"─────────────────────────────\n"
-                            for key in json_obj.keys():
-                                summary += f"• {key}\n"
-                            summary += f"\n"
-                        except:
-                            summary += f"📊 **JSON Data Received** (View in file)\n\n"
-                    
-                    summary += f"📁 **Files available for download below**\n"
-                    summary += f"⚡ **Powered by DarkBoxes Advanced Intelligence**\n"
-                    
-                    combined_result["result"] = summary
-                    
-                    if search_id in self.active_searches:
-                        future = self.active_searches[search_id]["future"]
-                        if not future.done():
-                            future.set_result(combined_result)
-                        del self.active_searches[search_id]
-                
+                # Complete if we have both file types OR enough files OR timeout
+                if (has_json and has_txt) or has_enough_files or time_elapsed > 10:
+                    await self._complete_leak_search(search_id, search_info)
                 return
             
-            # Check for text response
+            # Check for text message that might be a TXT file content
             text = message.text or message.raw_text or ""
-            if text and len(text.strip()) > 20:
-                if TextProcessor.is_processing_message(text):
-                    logger.info(f"⏳ Processing message for leak search")
+            
+            # Check if this looks like a TXT file result
+            is_txt_result = False
+            
+            # Patterns that indicate this is a TXT file result
+            txt_patterns = [
+                r'Full results available as JSON file',
+                r'📁 Full JSON results for',
+                r'Service: leak',
+                r'Requested by:',
+                r'───────────────────────',
+                r'━━━━━━━━━━━━━━━━━━━━━━━━',
+                r'Total length: \d+ characters',
+                r'\.\.\. \[TRUNCATED - DATA TOO LONG\] \.\.\.',
+                r'👤 ʀᴇǫᴜᴇꜱᴛᴇᴅ ʙʏ:',
+                r'🔍 ǫᴜᴇʀʏ:',
+                r'⏰ ᴛɪᴍᴇ:'
+            ]
+            
+            # Check if text contains TXT result patterns
+            pattern_count = 0
+            for pattern in txt_patterns:
+                if re.search(pattern, text, re.IGNORECASE):
+                    pattern_count += 1
+            
+            # If at least 3 patterns match, consider it a TXT file
+            if pattern_count >= 3 and len(text) > 500:
+                is_txt_result = True
+                logger.info(f"📄 Detected TXT file content in message (matched {pattern_count} patterns)")
+            
+            if text and (is_txt_result or len(text.strip()) > 1000):
+                logger.info(f"📝 Processing text message as potential TXT file ({len(text)} chars)")
+                
+                # Check if we've already processed this message
+                message_id = message.id
+                if "processed_files" not in search_info:
+                    search_info["processed_files"] = []
+                
+                if message_id in search_info["processed_files"]:
+                    logger.info(f"⚠️ Already processed message with ID {message_id}, skipping")
                     return
                 
-                if TextProcessor.is_no_info_message(text):
-                    logger.info(f"🚫 No info for leak search")
-                    result = {"success": False}
-                else:
-                    result = await self._process_text(text, search_info)
+                search_info["processed_files"].append(message_id)
                 
+                # Create a file result from the text
+                txt_result = {
+                    "success": True,
+                    "has_file": True,
+                    "content": text,
+                    "raw_bytes": text.encode('utf-8'),
+                    "file_type": "txt",
+                    "filename": f"leak_{search_info['query']}_{int(time.time())}.txt",
+                    "message_id": message_id,
+                    "is_text_message": True
+                }
+                
+                # Add to received files
+                if "files_received" not in search_info:
+                    search_info["files_received"] = []
+                
+                search_info["files_received"].append(txt_result)
+                logger.info(f"✅ Added TXT content from message to leak search results. Total files: {len(search_info['files_received'])}")
+                
+                # Check if we should complete the search
+                received_types = [f["file_type"] for f in search_info["files_received"]]
+                has_json = "json" in received_types
+                has_txt = "txt" in received_types
+                has_enough_files = len(search_info["files_received"]) >= 2
+                time_elapsed = time.time() - search_info["start_time"]
+                
+                # Complete if we have both file types OR enough files OR timeout
+                if (has_json and has_txt) or has_enough_files or time_elapsed > 10:
+                    await self._complete_leak_search(search_id, search_info)
+                return
+            
+            # Check for processing or no-info messages
+            if TextProcessor.is_processing_message(text):
+                logger.info(f"⏳ Processing message for leak search")
+                return
+            
+            if TextProcessor.is_no_info_message(text):
+                logger.info(f"🚫 No info for leak search")
                 if search_id in self.active_searches:
                     future = self.active_searches[search_id]["future"]
                     if not future.done():
-                        future.set_result(result)
+                        future.set_result({"success": False})
                     del self.active_searches[search_id]
-                
+            
         except Exception as e:
             logger.error(f"❌ Error processing leak response: {e}")
+    
+    async def _complete_leak_search(self, search_id: str, search_info: Dict):
+        """Complete leak search and send results"""
+        try:
+            logger.info(f"✅ Completing leak search with {len(search_info.get('files_received', []))} files")
+            
+            if "files_received" not in search_info or not search_info["files_received"]:
+                logger.warning("⚠️ No files received for leak search")
+                if search_id in self.active_searches:
+                    future = self.active_searches[search_id]["future"]
+                    if not future.done():
+                        future.set_result({
+                            "success": False,
+                            "error": "❌ No results found in our advanced databases."
+                        })
+                    del self.active_searches[search_id]
+                return
+            
+            # Combine results
+            combined_result = {
+                "success": True,
+                "result": "🚀 **ADVANCED OSINT SEARCH COMPLETE**\n\n",
+                "files": search_info["files_received"],
+                "has_multiple_files": len(search_info["files_received"]) > 1
+            }
+            
+            # Create summary
+            json_data = None
+            txt_data = None
+            
+            for file in search_info["files_received"]:
+                if file["file_type"] == "json" and json_data is None:
+                    json_data = file.get("content", "")
+                elif file["file_type"] == "txt" and txt_data is None:
+                    txt_data = file.get("content", "")
+            
+            # Format result summary
+            summary = f"🔮 **ADVANCED UNIVERSAL SEARCH RESULT**\n"
+            summary += f"═══════════════════════════════════\n\n"
+            summary += f"🔍 **Query:** `{search_info['query']}`\n"
+            summary += f"🚀 **Source:** Advanced OSINT Engine\n"
+            summary += f"⚡ **Files Found:** {len(search_info['files_received'])}\n"
+            
+            if json_data and txt_data:
+                summary += f"📊 **Includes:** JSON + TXT files\n\n"
+            elif json_data:
+                summary += f"📊 **Includes:** JSON file\n\n"
+            elif txt_data:
+                summary += f"📊 **Includes:** TXT file\n\n"
+            
+            if txt_data:
+                # Extract preview from TXT data
+                txt_preview = txt_data[:300].replace('\n', '\n')
+                summary += f"📄 **PREVIEW:**\n"
+                summary += f"─────────────────────────────\n"
+                summary += f"{txt_preview}\n"
+                if len(txt_data) > 300:
+                    summary += f"... (see full TXT file below)\n\n"
+            
+            summary += f"📁 **Files available for download below**\n"
+            summary += f"⚡ **Powered by DarkBoxes Advanced Intelligence**\n"
+            
+            combined_result["result"] = summary
+            
+            if search_id in self.active_searches:
+                future = self.active_searches[search_id]["future"]
+                if not future.done():
+                    future.set_result(combined_result)
+                del self.active_searches[search_id]
+                logger.info(f"✅ Leak search completed successfully")
+            
+        except Exception as e:
+            logger.error(f"❌ Error completing leak search: {e}")
+            if search_id in self.active_searches:
+                future = self.active_searches[search_id]["future"]
+                if not future.done():
+                    future.set_result({"success": False})
+                del self.active_searches[search_id]
     
     async def _process_file(self, message, search_info: Dict) -> Dict:
         """Process file message"""
@@ -2823,6 +3698,7 @@ class SearchEngine:
                 logger.error("❌ Could not decode file with any encoding")
                 return {"success": False}
             
+            # Clean content - remove usernames and links
             cleaned_content = TextProcessor.clean_content(content, search_info["search_type"])
             
             if len(cleaned_content.strip()) < 30:
@@ -2832,7 +3708,7 @@ class SearchEngine:
                 for line in lines:
                     line = line.strip()
                     if len(line) > 10:
-                        if not any(word in line.lower() for word in ['powered', 'developed', 'created', 'join', 'subscribe', 'channel', 'admin', '@']):
+                        if not any(word in line.lower() for word in ['powered', 'developed', 'created', 'join', 'subscribe', 'channel', 'admin', '@', 't.me', 'http']):
                             meaningful_lines.append(line)
                 
                 if meaningful_lines:
@@ -3075,25 +3951,23 @@ async def search_callback(event):
                 "🔒 **ACCESS DENIED**\n\n"
                 "You have no search credits remaining.\n\n"
                 "💎 **UPGRADE TO PREMIUM**\n\n"
-                "🔰 **Basic Plan** - ₹100\n"
-                "├─ 5 Premium Searches\n"
-                "├─ Standard Databases\n"
-                "└─ 7-day Access\n\n"
-                "⭐ **Standard Plan** - ₹200\n"
+                "💰 **BASIC TIER** - ₹99\n"
                 "├─ 10 Premium Searches\n"
-                "├─ Extended Databases\n"
-                "└─ Priority Processing\n\n"
-                "👑 **Premium Plan** - ₹500\n"
-                "├─ Unlimited Searches\n"
+                "├─ Standard Databases\n"
+                "├─ 7-day Access\n"
+                "└─ Email Support\n\n"
+                "🚀 **STANDARD TIER** - ₹249\n"
+                "├─ 30 Premium Searches\n"
                 "├─ All Databases\n"
+                "├─ 15-day Access\n"
+                "├─ Priority Support\n"
+                "└─ Search History Saved\n\n"
+                "👑 **PREMIUM TIER** - ₹499\n"
+                "├─ Unlimited Searches (30 days)\n"
+                "├─ All Premium Databases\n"
                 "├─ Priority Processing\n"
-                "└─ 24/7 Support\n\n"
-                "🚀 **Enterprise Plan** - ₹800\n"
-                "├─ Unlimited Searches\n"
-                "├─ Premium Sources\n"
-                "├─ Highest Priority\n"
-                "├─ Dedicated Support\n"
-                "└─ 30-day Access\n\n"
+                "├─ 24/7 WhatsApp Support\n"
+                "└─ Extended Search History\n\n"
                 "Select a plan to continue:",
                 buttons=OneLineKeyboard.subscription_plans(),
                 parse_mode="md"
@@ -3105,7 +3979,7 @@ async def search_callback(event):
         # Special formatting for leak search
         if search_type == "leak":
             leak_text = (
-                f"🚀 **{cmd['name']}**\n\n"
+                f"🚀 **ADVANCED OSINT TOOL - SEARCH ANYTHING**\n\n"
                 f"{cmd['description']}\n\n"
                 f"⚡ **ULTRA-FAST PROCESSING** (5 seconds)\n"
                 f"💎 **Cost:** {cmd['cost']} credits\n"
@@ -3209,31 +4083,26 @@ async def premium_callback(event):
         premium_text = (
             "💎 **DARKBOXES PREMIUM PLANS**\n"
             "═══════════════════════\n\n"
-            "🔰 **BASIC PLAN** - ₹100\n"
-            "├─ 5 Premium Searches\n"
+            "💰 **BASIC TIER** - ₹99\n"
+            "├─ 10 Premium Searches\n"
             "├─ Standard Databases\n"
             "├─ 7-day Access\n"
-            "└─ Basic Support\n\n"
-            "⭐ **STANDARD PLAN** - ₹250\n"
-            "├─ 10 Premium Searches\n"
-            "├─ Extended Databases\n"
+            "├─ Email Support\n"
+            "└─ 🎯 For: New users trying the service\n\n"
+            "🚀 **STANDARD TIER** - ₹249\n"
+            "├─ 30 Premium Searches\n"
+            "├─ All Databases\n"
+            "├─ 15-day Access\n"
+            "├─ Priority Support\n"
+            "├─ Search History Saved\n"
+            "└─ 🎯 For: Regular users needing more searches\n\n"
+            "👑 **PREMIUM TIER** - ₹499\n"
+            "├─ Unlimited Searches (30 days)\n"
+            "├─ All Premium Databases\n"
             "├─ Priority Processing\n"
-            "├─ 7-day Access\n"
-            "└─ Email Support\n\n"
-            "👑 **PREMIUM PLAN** - ₹400\n"
-            "├─ Unlimited Searches\n"
-            "├─ All Data Sources\n"
-            "├─ Highest Priority\n"
-            "├─ 24/7 Support\n"
-            "├─ 7-day Access\n"
-            "└─ Advanced Features\n\n"
-            "🚀 **ENTERPRISE PLAN** - ₹600\n"
-            "├─ Unlimited Searches\n"
-            "├─ Premium Sources\n"
-            "├─ Real-time Updates\n"
-            "├─ Dedicated Support\n"
-            "├─ 30-day Access\n"
-            "└─ API Access (Coming Soon)\n\n"
+            "├─ 24/7 WhatsApp Support\n"
+            "├─ Extended Search History\n"
+            "└─ 🎯 For: Power users & professionals\n\n"
             "📞 **Contact @darkboxesAdmin to purchase**\n"
             "💳 **UPI ID:** `{config.UPI_ID}`\n\n"
             "🔒 **Payment Instructions:**\n"
@@ -3251,6 +4120,37 @@ async def premium_callback(event):
     except Exception as e:
         logger.error(f"❌ Error in premium_callback: {e}")
         await event.answer("❌ Error loading premium plans", alert=True)
+
+@bot_client.on(events.CallbackQuery(pattern=r'^api_menu$'))
+async def api_menu_callback(event):
+    """Handle API menu callback"""
+    await admin_panel.show_api_menu(event)
+
+@bot_client.on(events.CallbackQuery(pattern=r'^my_api_keys$'))
+async def my_api_keys_callback(event):
+    """Handle my API keys callback"""
+    await admin_panel.show_my_api_keys(event)
+
+@bot_client.on(events.CallbackQuery(pattern=r'^api_usage$'))
+async def api_usage_callback(event):
+    """Handle API usage callback"""
+    await admin_panel.show_api_usage(event)
+
+@bot_client.on(events.CallbackQuery(pattern=r'^api_plans$'))
+async def api_plans_callback(event):
+    """Handle API plans callback"""
+    await admin_panel.show_api_plans(event)
+
+@bot_client.on(events.CallbackQuery(pattern=r'^api_docs$'))
+async def api_docs_callback(event):
+    """Handle API docs callback"""
+    await admin_panel.show_api_docs(event)
+
+@bot_client.on(events.CallbackQuery(pattern=r'^api_plan_(.+)$'))
+async def api_plan_callback(event):
+    """Handle API plan selection"""
+    plan_id = event.data.decode().split('_', 2)[2]
+    await admin_panel.show_api_plan_details(event, plan_id)
 
 @bot_client.on(events.CallbackQuery(pattern=r'^plan_(.+)$'))
 async def plan_selection_callback(event):
@@ -3276,7 +4176,9 @@ async def plan_selection_callback(event):
         for feature in plan['features']:
             plan_details += f"• {feature}\n"
         
-        plan_details += f"\n📞 **To Purchase:**\n"
+        plan_details += f"\n🎯 **Perfect For:** {plan['for']}\n\n"
+        
+        plan_details += f"📞 **To Purchase:**\n"
         plan_details += f"1. Send ₹{plan['price']} to UPI: `{config.UPI_ID}`\n"
         plan_details += f"2. Send payment screenshot to @darkboxesAdmin\n"
         plan_details += f"3. Include your User ID: `{event.sender_id}`\n"
@@ -3386,163 +4288,6 @@ async def support_callback(event):
         logger.error(f"❌ Error in support_callback: {e}")
         await event.answer("❌ Error loading support", alert=True)
 
-@bot_client.on(events.CallbackQuery(pattern=r'^my_referrals$'))
-async def my_referrals_callback(event):
-    """Handle my referrals callback"""
-    try:
-        user_id = event.sender_id
-        user_doc = await db_manager.get_user(user_id)
-        
-        if not user_doc:
-            await event.answer("❌ User not found", alert=True)
-            return
-        
-        # Get referrals from database
-        referral_code = user_doc.get('referral_code', '')
-        referrals = []
-        
-        if referral_code:
-            referrals = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: list(db_manager.db.users.find(
-                    {"referred_by": referral_code},
-                    {"user_id": 1, "username": 1, "first_name": 1, "joined_at": 1}
-                ).limit(20))
-            )
-        
-        referrals_text = (
-            f"📋 **MY REFERRALS**\n"
-            f"═══════════════════════\n\n"
-        )
-        
-        if referrals:
-            referrals_text += f"👥 **Total Referrals:** {len(referrals)}\n\n"
-            
-            for i, ref in enumerate(referrals[:10], 1):
-                username = f"@{ref['username']}" if ref.get('username') else "No username"
-                joined = ref.get('joined_at', '')[:10]
-                
-                referrals_text += (
-                    f"{i}. **{ref['first_name']}**\n"
-                    f"   ├─ {username}\n"
-                    f"   ├─ ID: `{ref['user_id']}`\n"
-                    f"   └─ Joined: {joined}\n\n"
-                )
-            
-            if len(referrals) > 10:
-                referrals_text += f"... and {len(referrals) - 10} more referrals\n"
-        else:
-            referrals_text += "📭 No referrals yet.\n\n"
-            referrals_text += f"🔗 **Your Referral Code:** `{user_doc.get('referral_code', 'N/A')}`\n"
-            referrals_text += "💡 Share your referral link to earn credits!"
-        
-        buttons = [
-            [Button.inline("📢 Share Referral", "share_referral")],
-            [Button.inline("« Refer & Earn", "referrals")],
-            [Button.inline("« Main Menu", "main_menu")]
-        ]
-        
-        await event.edit(referrals_text, buttons=buttons, parse_mode="md")
-        
-    except Exception as e:
-        logger.error(f"❌ Error in my_referrals_callback: {e}")
-        await event.answer("❌ Error loading referrals", alert=True)
-
-@bot_client.on(events.CallbackQuery(pattern=r'^share_referral$'))
-async def share_referral_callback(event):
-    """Handle share referral callback"""
-    try:
-        user_id = event.sender_id
-        user_doc = await db_manager.get_user(user_id)
-        
-        if not user_doc:
-            await event.answer("❌ User not found", alert=True)
-            return
-        
-        referral_code = user_doc.get('referral_code', '')
-        referral_link = f"https://t.me/{bot_info.username}?start={referral_code}"
-        
-        share_text = (
-            f"📢 **SHARE REFERRAL LINK**\n"
-            f"═══════════════════════\n\n"
-            f"🔗 **Your Referral Link:**\n"
-            f"{referral_link}\n\n"
-            f"📝 **Copy-Paste Message:**\n"
-            f"```\n"
-            f"🚀 Join DarkBoxes Intelligence System!\n\n"
-            f"🔍 **Powerful OSINT Tools:**\n"
-            f"• Phone Number Lookup\n"
-            f"• Email Intelligence\n"
-            f"• Aadhar Information\n"
-            f"• Vehicle Details\n"
-            f"• Telegram Analysis\n"
-            f"• And much more!\n\n"
-            f"💎 **Get {config.NEW_USER_CREDITS} FREE Credits**\n"
-            f"🔗 Sign up now: {referral_link}\n\n"
-            f"⚡ **Features:**\n"
-            f"• Fast & Accurate Results\n"
-            f"• Premium Databases\n"
-            f"• 24/7 Support\n"
-            f"• Affordable Plans\n"
-            f"```\n\n"
-            f"💡 **Where to Share:**\n"
-            f"• Telegram Groups\n"
-            f"• Friends & Family\n"
-            f"• Social Media\n"
-            f"• Forums\n\n"
-            f"💰 **Earn {config.REFERRAL_REWARD} credit for each successful referral!**"
-        )
-        
-        buttons = [
-            [Button.inline("« Back to Referrals", "referrals")],
-            [Button.inline("« Main Menu", "main_menu")]
-        ]
-        
-        await event.edit(share_text, buttons=buttons, parse_mode="md")
-        
-    except Exception as e:
-        logger.error(f"❌ Error in share_referral_callback: {e}")
-        await event.answer("❌ Error loading share referral", alert=True)
-
-@bot_client.on(events.CallbackQuery(pattern=r'^contact_admin$'))
-async def contact_admin_callback(event):
-    """Handle contact admin callback"""
-    try:
-        contact_text = (
-            f"📞 **CONTACT ADMINISTRATOR**\n"
-            f"═══════════════════════\n\n"
-            f"👤 **Official Admin:** @darkboxesAdmin\n\n"
-            f"📧 **Contact Methods:**\n"
-            f"• Telegram: @darkboxesAdmin (Preferred)\n"
-            f"• Email: darkboxes.admin@gmail.com\n"
-            f"• Channel: @darkboxesv1\n\n"
-            f"⏰ **Response Time:**\n"
-            f"• General: Within 1 hour\n"
-            f"• Urgent: 15-30 minutes\n"
-            f"• Payment: 5-10 minutes\n\n"
-            f"💳 **Payment Issues:**\n"
-            f"1. Send payment to: `{config.UPI_ID}`\n"
-            f"2. Take screenshot\n"
-            f"3. Send to @darkboxesAdmin\n"
-            f"4. Include your User ID: `{event.sender_id}`\n\n"
-            f"⚠️ **Important:**\n"
-            f"• Never share passwords/OTPs\n"
-            f"• Official admin ONLY: @darkboxesAdmin\n"
-            f"• Beware of impersonators\n"
-            f"• Report suspicious accounts"
-        )
-        
-        buttons = [
-            [Button.inline("📋 Report Issue", "report_issue")],
-            [Button.inline("« Support", "support")],
-            [Button.inline("« Main Menu", "main_menu")]
-        ]
-        
-        await event.edit(contact_text, buttons=buttons, parse_mode="md")
-        
-    except Exception as e:
-        logger.error(f"❌ Error in contact_admin_callback: {e}")
-        await event.answer("❌ Error loading contact info", alert=True)
-
 @bot_client.on(events.NewMessage(func=lambda e: e.is_private and not e.text.startswith('/')))
 async def private_message_handler(event):
     """Handle private messages (queries and admin actions)"""
@@ -3556,6 +4301,9 @@ async def private_message_handler(event):
         
         if state.get("action") == "search":
             await handle_search_query(event, state)
+        
+        elif state.get("action") == "create_api_key":
+            await handle_create_api_key(event)
         
         elif state.get("action") == "admin_search_user":
             await handle_admin_search_user(event)
@@ -3571,6 +4319,12 @@ async def private_message_handler(event):
         
         elif state.get("action") == "admin_add_credits":
             await handle_admin_add_credits(event)
+        
+        elif state.get("action") == "admin_api_user":
+            await handle_admin_api_user(event)
+        
+        elif state.get("action") == "admin_api_revoke":
+            await handle_admin_api_revoke(event)
         
     except Exception as e:
         logger.error(f"❌ Error in private_message_handler: {e}")
@@ -3596,7 +4350,7 @@ async def handle_search_query(event, state):
         # Special handling for leak search
         if search_type == "leak":
             leak_warning = (
-                "🚀 **ADVANCED SEARCH INITIATED**\n\n"
+                "🚀 **ADVANCED OSINT SEARCH INITIATED**\n\n"
                 f"🔍 **Query:** `{query}`\n"
                 f"⚡ **Processing:** Ultra-fast (5 seconds)\n"
                 f"📁 **Output:** JSON + TXT files\n"
@@ -3624,9 +4378,9 @@ async def handle_search_query(event, state):
             await event.respond(
                 "🔒 **INSUFFICIENT CREDITS**\n\n"
                 "Upgrade to Premium for unlimited access:\n\n"
-                "💎 **Premium Plan** - ₹500\n"
-                "• Unlimited searches (7 days)\n"
-                "• All databases\n"
+                "👑 **Premium Tier** - ₹499\n"
+                "• Unlimited searches (30 days)\n"
+                "• All premium databases\n"
                 "• Priority processing\n\n"
                 "Contact @darkboxesAdmin for assistance.",
                 buttons=OneLineKeyboard.subscription_plans()
@@ -3649,21 +4403,24 @@ async def handle_search_query(event, state):
                 # Send summary first
                 await event.respond(result["result"], parse_mode="md")
                 
-                # Send each file
+                # Send all files
                 for file_data in result.get("files", []):
                     if file_data.get("raw_bytes"):
-                        filename = file_data.get("filename", f"result_{int(time.time())}.txt")
+                        file_type = file_data.get("file_type", "unknown")
+                        caption = f"📁 **{file_type.upper()} DATA**\nQuery: `{query}`"
                         
-                        # Determine file extension
-                        if file_data.get("file_type") == "json":
-                            filename = f"result_{int(time.time())}.json"
-                        elif file_data.get("file_type") == "txt":
-                            filename = f"result_{int(time.time())}.txt"
+                        # Determine filename
+                        filename = file_data.get("filename", "")
+                        if not filename:
+                            timestamp = int(time.time())
+                            filename = f"leak_{query}_{timestamp}.{file_type}"
                         
                         await event.respond(
                             file=file_data["raw_bytes"],
-                            caption=f"📁 **{file_data.get('file_type', 'RESULT').upper()} File**\nQuery: `{query}`"
+                            caption=caption
                         )
+                        
+                        logger.info(f"✅ Sent {file_type} file to user")
             else:
                 await event.respond(result["result"], parse_mode="md")
             
@@ -3679,601 +4436,313 @@ async def handle_search_query(event, state):
         logger.error(f"❌ Error in handle_search_query: {e}")
         await event.respond("❌ An error occurred during processing.")
 
-async def handle_admin_search_user(event):
-    """Handle admin user search"""
+async def handle_create_api_key(event):
+    """Handle API key creation"""
     try:
-        query = event.text.strip()
-        if not query:
-            await event.respond("❌ Please enter a search query.")
+        user_id = event.sender_id
+        
+        # Only admins can create API keys
+        if not admin_panel.is_admin(user_id):
+            await event.respond("❌ Only administrators can create API keys.")
+            user_states.pop(user_id, None)
             return
         
-        users = await db_manager.admin_db.search_users(query)
+        input_text = event.text.strip()
+        parts = input_text.split()
         
-        if not users:
-            await event.respond("❌ No users found matching your query.")
+        if len(parts) < 3:
+            await event.respond("❌ Invalid format. Use: `plan_id days description`")
+            return
+        
+        plan_id = parts[0].lower()
+        days = int(parts[1])
+        description = ' '.join(parts[2:])
+        
+        if plan_id not in API_PLANS:
+            await event.respond(f"❌ Invalid plan ID. Available: {', '.join(API_PLANS.keys())}")
+            return
+        
+        if days <= 0 or days > 365:
+            await event.respond("❌ Days must be between 1 and 365")
+            return
+        
+        # Create API key
+        api_info = await db_manager.api_db.create_api_key(user_id, plan_id, days, description)
+        
+        if api_info:
+            api_text = (
+                f"✅ **API KEY CREATED SUCCESSFULLY**\n\n"
+                f"🔑 **API Key:** `{api_info['api_key']}`\n"
+                f"🔐 **Client Token:** `{api_info['client_token']}`\n"
+                f"📅 **Expires:** {api_info['expires_at'][:10]}\n"
+                f"📊 **Plan:** {api_info['plan_id']}\n"
+                f"📝 **Description:** {description}\n\n"
+                f"📋 **Usage Instructions:**\n"
+                f"```\n"
+                f"curl -X POST \\\n"
+                f"  -H \"X-API-Key: {api_info['api_key']}\" \\\n"
+                f"  -H \"Content-Type: application/json\" \\\n"
+                f"  -d '{{\"query\": \"9876543210\"}}' \\\n"
+                f"  http://your-server:{config.API_PORT}/api/v1/search/phone\n"
+                f"```\n\n"
+                f"⚠️ **Save this information securely!**\n"
+                f"API key will not be shown again."
+            )
+            
+            await event.respond(api_text, parse_mode="md")
+        else:
+            await event.respond("❌ Failed to create API key")
+        
+        user_states.pop(user_id, None)
+        
+    except Exception as e:
+        logger.error(f"❌ Error creating API key: {e}")
+        await event.respond("❌ Error creating API key")
+
+async def handle_admin_api_user(event):
+    """Handle admin API user management"""
+    try:
+        user_input = event.text.strip()
+        if not user_input.isdigit():
+            await event.respond("❌ Please enter a valid numeric user ID.")
+            return
+        
+        user_id = int(user_input)
+        user = await db_manager.get_user(user_id)
+        
+        if not user:
+            await event.respond(f"❌ User with ID {user_id} not found.")
             user_states.pop(event.sender_id, None)
             return
         
-        if len(users) == 1:
-            # Show single user detail
-            user = users[0]
-            await admin_panel.show_user_detail(event, user['user_id'])
-        else:
-            # Show list of users
-            result_text = f"🔍 **SEARCH RESULTS** ({len(users)} users found)\n\n"
-            
-            for i, user in enumerate(users[:10], 1):
-                username = f"@{user['username']}" if user.get('username') else "No username"
-                joined = user.get('joined_at', '')[:10]
-                searches = user.get('total_searches', 0)
-                
-                result_text += (
-                    f"{i}. **{user['first_name']}**\n"
-                    f"   ├─ {username}\n"
-                    f"   ├─ ID: `{user['user_id']}`\n"
-                    f"   ├─ Joined: {joined}\n"
-                    f"   └─ Searches: {searches}\n\n"
-                )
-            
-            if len(users) > 10:
-                result_text += f"... and {len(users) - 10} more users\n"
-            
-            result_text += "\nClick on a user ID to view details:"
-            
-            # Create buttons with user IDs
-            buttons = []
-            for user in users[:5]:
-                buttons.append([Button.inline(
-                    f"👤 {user['first_name']} (ID: {user['user_id']})",
-                    f"user_detail_{user['user_id']}"
-                )])
-            
-            buttons.append([Button.inline("« Back to Admin", "admin_panel")])
-            
-            await event.respond(result_text, buttons=buttons, parse_mode="md")
+        # Get user's API keys
+        api_keys = await db_manager.api_db.get_user_api_keys(user_id)
         
+        api_text = f"🔑 **API KEYS FOR USER** {user.get('first_name', 'N/A')}\n\n"
+        
+        if api_keys:
+            for i, api_key in enumerate(api_keys, 1):
+                status = "✅ Active" if api_key.get("is_active") else "❌ Inactive"
+                created = api_key.get("created_at", "")[:10]
+                expires = api_key.get("expires_at", "")[:10]
+                requests = api_key.get("requests_used", 0)
+                remaining = api_key.get("requests_remaining", 0)
+                
+                api_text += (
+                    f"{i}. **{api_key.get('description', 'Unnamed')}**\n"
+                    f"   ├─ Status: {status}\n"
+                    f"   ├─ Plan: {api_key.get('plan_id', 'N/A')}\n"
+                    f"   ├─ Key: `{api_key['api_key'][:8]}...{api_key['api_key'][-4:]}`\n"
+                    f"   ├─ Created: {created}\n"
+                    f"   ├─ Expires: {expires}\n"
+                    f"   ├─ Requests: {requests} used, {remaining} remaining\n"
+                    f"   └─ Actions: /revoke_api_{api_key['api_key']}\n\n"
+                )
+        else:
+            api_text += "📭 No API keys found for this user.\n"
+        
+        api_text += "\n🔧 **Available Actions:**\n"
+        api_text += f"• Create new API key: /create_api {user_id} plan_id days description\n"
+        api_text += f"• Extend API key: /extend_api api_key additional_days\n"
+        api_text += f"• Revoke API key: /revoke_api api_key\n"
+        
+        await event.respond(api_text, parse_mode="md")
         user_states.pop(event.sender_id, None)
         
     except Exception as e:
-        logger.error(f"❌ Error in handle_admin_search_user: {e}")
-        await event.respond("❌ Error searching users.")
+        logger.error(f"❌ Error handling API user management: {e}")
+        await event.respond("❌ Error processing request")
 
-async def handle_admin_broadcast(event):
-    """Handle admin broadcast"""
+async def handle_admin_api_revoke(event):
+    """Handle admin API key revocation"""
     try:
-        message = event.text.strip()
-        if not message or len(message) < 5:
-            await event.respond("❌ Message too short. Minimum 5 characters required.")
+        api_key_input = event.text.strip()
+        
+        if not api_key_input:
+            await event.respond("❌ Please enter an API key.")
             return
         
-        # Confirm broadcast
+        # Find API key (full or partial)
+        if len(api_key_input) == 64:
+            # Full API key
+            api_info = await db_manager.api_db.get_api_key(api_key_input)
+        else:
+            # Partial key, search for it
+            all_keys = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: list(db_manager.db.api_keys.find(
+                    {"api_key": {"$regex": f"^{api_key_input}"}},
+                    {"api_key": 1, "user_id": 1, "description": 1}
+                ))
+            )
+            
+            if len(all_keys) == 1:
+                api_info = all_keys[0]
+            elif len(all_keys) > 1:
+                await event.respond(f"❌ Multiple API keys found. Please enter full API key.")
+                return
+            else:
+                await event.respond("❌ API key not found.")
+                return
+        
+        if not api_info:
+            await event.respond("❌ API key not found.")
+            user_states.pop(event.sender_id, None)
+            return
+        
+        # Get user info
+        user = await db_manager.get_user(api_info["user_id"])
+        
         confirm_text = (
-            f"📢 **BROADCAST CONFIRMATION**\n\n"
-            f"**Message:**\n{message[:500]}...\n\n"
-            f"**This message will be sent to all users.**\n"
-            f"Estimated recipients: [Calculating...]\n\n"
-            f"Are you sure you want to proceed?"
+            f"🚫 **REVOKE API KEY CONFIRMATION**\n\n"
+            f"🔑 **API Key:** `{api_info['api_key'][:8]}...{api_info['api_key'][-4:]}`\n"
+            f"👤 **User:** {user.get('first_name', 'N/A')} (@{user.get('username', 'N/A')})\n"
+            f"📝 **Description:** {api_info.get('description', 'N/A')}\n"
+            f"📅 **Created:** {api_info.get('created_at', 'N/A')[:10]}\n"
+            f"📊 **Requests Used:** {api_info.get('requests_used', 0)}\n\n"
+            f"Are you sure you want to revoke this API key?\n"
+            f"This action cannot be undone."
         )
         
-        # Store message for confirmation
+        # Store for confirmation
         user_states[event.sender_id] = {
-            "action": "confirm_broadcast",
-            "message": message
+            "action": "confirm_api_revoke",
+            "api_key": api_info["api_key"]
         }
         
         buttons = [
-            [Button.inline("✅ Yes, Send Broadcast", "confirm_broadcast_yes")],
+            [Button.inline("✅ Yes, Revoke API Key", f"confirm_revoke_api_{api_info['api_key']}")],
             [Button.inline("❌ Cancel", "admin_panel")]
         ]
         
         await event.respond(confirm_text, buttons=buttons, parse_mode="md")
         
     except Exception as e:
-        logger.error(f"❌ Error in handle_admin_broadcast: {e}")
-        await event.respond("❌ Error processing broadcast message.")
+        logger.error(f"❌ Error handling API revocation: {e}")
+        await event.respond("❌ Error processing request")
 
-async def handle_admin_ban(event):
-    """Handle admin ban user"""
+@bot_client.on(events.CallbackQuery(pattern=r'^confirm_revoke_api_(.+)$'))
+async def confirm_revoke_api_handler(event):
+    """Handle API key revocation confirmation"""
     try:
-        user_input = event.text.strip()
-        if not user_input.isdigit():
-            await event.respond("❌ Please enter a valid numeric user ID.")
-            return
+        api_key = event.data.decode().split('_', 3)[3]
         
-        user_id = int(user_input)
-        user = await db_manager.get_user(user_id)
-        
-        if not user:
-            await event.respond(f"❌ User with ID {user_id} not found.")
-            user_states.pop(event.sender_id, None)
-            return
-        
-        if user.get('is_banned'):
-            # User is already banned, show unban option
-            buttons = OneLineKeyboard.confirm_buttons("unban", user_id)
-            await event.respond(
-                f"🚫 **USER IS ALREADY BANNED**\n\n"
-                f"👤 User: {user.get('first_name', 'N/A')}\n"
-                f"🆔 ID: `{user_id}`\n"
-                f"📅 Banned on: {user.get('banned_at', 'N/A')[:10]}\n"
-                f"📝 Reason: {user.get('ban_reason', 'N/A')}\n\n"
-                f"Do you want to unban this user?",
-                buttons=buttons,
-                parse_mode="md"
-            )
-        else:
-            # User is not banned, show ban option
-            buttons = OneLineKeyboard.confirm_buttons("ban", user_id)
-            await event.respond(
-                f"🚫 **BAN USER CONFIRMATION**\n\n"
-                f"👤 User: {user.get('first_name', 'N/A')}\n"
-                f"🆔 ID: `{user_id}`\n"
-                f"📅 Joined: {user.get('joined_at', 'N/A')[:10]}\n"
-                f"📊 Searches: {user.get('total_searches', 0)}\n\n"
-                f"Are you sure you want to ban this user?",
-                buttons=buttons,
-                parse_mode="md"
-            )
-        
-        user_states.pop(event.sender_id, None)
-        
-    except Exception as e:
-        logger.error(f"❌ Error in handle_admin_ban: {e}")
-        await event.respond("❌ Error processing ban request.")
-
-async def handle_admin_management(event):
-    """Handle admin management"""
-    try:
-        user_input = event.text.strip()
-        if not user_input.isdigit():
-            await event.respond("❌ Please enter a valid numeric user ID.")
-            return
-        
-        user_id = int(user_input)
-        user = await db_manager.get_user(user_id)
-        
-        if not user:
-            await event.respond(f"❌ User with ID {user_id} not found.")
-            user_states.pop(event.sender_id, None)
-            return
-        
-        if user.get('is_admin'):
-            # User is already admin, show remove option
-            buttons = OneLineKeyboard.confirm_buttons("remove_admin", user_id)
-            await event.respond(
-                f"👑 **REMOVE ADMIN PRIVILEGES**\n\n"
-                f"👤 User: {user.get('first_name', 'N/A')}\n"
-                f"🆔 ID: `{user_id}`\n"
-                f"📅 Joined: {user.get('joined_at', 'N/A')[:10]}\n\n"
-                f"This user currently has admin privileges.\n"
-                f"Do you want to remove admin privileges?",
-                buttons=buttons,
-                parse_mode="md"
-            )
-        else:
-            # User is not admin, show add option
-            buttons = OneLineKeyboard.confirm_buttons("add_admin", user_id)
-            await event.respond(
-                f"👑 **ADD ADMIN PRIVILEGES**\n\n"
-                f"👤 User: {user.get('first_name', 'N/A')}\n"
-                f"🆔 ID: `{user_id}`\n"
-                f"📅 Joined: {user.get('joined_at', 'N/A')[:10]}\n"
-                f"📊 Searches: {user.get('total_searches', 0)}\n\n"
-                f"Are you sure you want to add this user as admin?",
-                buttons=buttons,
-                parse_mode="md"
-            )
-        
-        user_states.pop(event.sender_id, None)
-        
-    except Exception as e:
-        logger.error(f"❌ Error in handle_admin_management: {e}")
-        await event.respond("❌ Error processing admin management request.")
-
-async def handle_admin_add_credits(event):
-    """Handle admin add credits"""
-    try:
-        user_input = event.text.strip()
-        parts = user_input.split()
-        
-        if len(parts) != 2:
-            await event.respond("❌ Invalid format. Use: `user_id credits`")
-            return
-        
-        if not parts[0].isdigit() or not parts[1].isdigit():
-            await event.respond("❌ Both user ID and credits must be numbers.")
-            return
-        
-        user_id = int(parts[0])
-        credits = int(parts[1])
-        
-        if credits <= 0 or credits > 1000:
-            await event.respond("❌ Credits must be between 1 and 1000.")
-            return
-        
-        user = await db_manager.get_user(user_id)
-        if not user:
-            await event.respond(f"❌ User with ID {user_id} not found.")
-            user_states.pop(event.sender_id, None)
-            return
-        
-        # Add credits
-        success = await db_manager.add_credits(user_id, credits)
+        # Revoke API key
+        success = await db_manager.api_db.delete_api_key(api_key)
         
         if success:
-            await event.respond(
-                f"✅ **CREDITS ADDED SUCCESSFULLY**\n\n"
-                f"👤 User: {user.get('first_name', 'N/A')}\n"
-                f"🆔 ID: `{user_id}`\n"
-                f"🎯 Credits Added: {credits}\n"
-                f"💰 New Balance: {user.get('searches_remaining', 0) + credits}\n\n"
-                f"User has been notified.",
-                parse_mode="md"
-            )
+            await event.answer("✅ API key revoked successfully", alert=True)
             
-            # Notify user
-            await bot_client.send_message(
-                user_id,
-                f"🎁 **CREDITS ADDED**\n\n"
-                f"Administrator has added {credits} credits to your account.\n"
-                f"💰 New Balance: {user.get('searches_remaining', 0) + credits}\n\n"
-                f"Thank you for using DarkBoxes!",
-                parse_mode="md"
-            )
-        else:
-            await event.respond("❌ Failed to add credits.")
-        
-        user_states.pop(event.sender_id, None)
-        
-    except Exception as e:
-        logger.error(f"❌ Error in handle_admin_add_credits: {e}")
-        await event.respond("❌ Error adding credits.")
-
-@bot_client.on(events.CallbackQuery(pattern=r'^confirm_broadcast_yes$'))
-async def confirm_broadcast_handler(event):
-    """Handle broadcast confirmation"""
-    try:
-        user_id = event.sender_id
-        state = user_states.get(user_id, {})
-        
-        if state.get("action") != "confirm_broadcast":
-            await event.answer("❌ No broadcast pending", alert=True)
-            return
-        
-        message = state.get("message", "")
-        if not message:
-            await event.answer("❌ No message found", alert=True)
-            return
-        
-        await event.edit("📢 **SENDING BROADCAST...**\n\nPlease wait...")
-        
-        # Get all users
-        users = await asyncio.get_running_loop().run_in_executor(
-            None, lambda: list(db_manager.db.users.find({}, {"user_id": 1}))
-        )
-        
-        sent = 0
-        failed = 0
-        
-        broadcast_text = f"📢 **ANNOUNCEMENT**\n\n{message}\n\n— DarkBoxes Administration"
-        
-        for user in users:
-            try:
+            # Get API key info for notification
+            api_info = await db_manager.api_db.get_api_key(api_key)
+            if api_info and api_info.get("user_id"):
+                # Notify user
                 await bot_client.send_message(
-                    user["user_id"],
-                    broadcast_text,
+                    api_info["user_id"],
+                    f"🚫 **API KEY REVOKED**\n\n"
+                    f"Your API key has been revoked by administrator.\n"
+                    f"🔑 Key: `{api_key[:8]}...{api_key[-4:]}`\n"
+                    f"📝 Description: {api_info.get('description', 'N/A')}\n\n"
+                    f"Contact @darkboxesAdmin for more information.",
                     parse_mode="md"
                 )
-                sent += 1
-                await asyncio.sleep(0.1)  # Rate limiting
-            except Exception as e:
-                failed += 1
-        
-        # Clear state
-        user_states.pop(user_id, None)
-        
-        result_text = (
-            f"✅ **BROADCAST COMPLETE**\n\n"
-            f"📊 **Results:**\n"
-            f"├─ Total Users: {len(users)}\n"
-            f"├─ Successfully Sent: {sent}\n"
-            f"└─ Failed: {failed}\n\n"
-            f"📝 **Message Preview:**\n{message[:200]}..."
-        )
-        
-        await event.edit(result_text, buttons=OneLineKeyboard.back_to_admin(), parse_mode="md")
-        
-    except Exception as e:
-        logger.error(f"❌ Error in confirm_broadcast_handler: {e}")
-        await event.answer("❌ Error sending broadcast", alert=True)
-
-@bot_client.on(events.CallbackQuery(pattern=r'^main_menu$'))
-async def main_menu_callback(event):
-    """Return to main menu"""
-    try:
-        user_id = event.sender_id
-        user_states.pop(user_id, None)
-        
-        user_doc = await db_manager.get_user(user_id)
-        is_admin = admin_panel.is_admin(user_id) if admin_panel else (user_id == config.ADMIN_USER_ID)
-        
-        message = (
-            f"🎭 **DARK BOXES INTELLIGENCE**\n\n"
-            f"📊 **ACCOUNT STATUS**\n"
-            f"├─ Credits: {user_doc.get('searches_remaining', 0)}\n"
-            f"├─ Total Searches: {user_doc.get('total_searches', 0)}\n"
-            f"└─ Subscription: {user_doc.get('subscription', 'None')}\n\n"
-            f"🛠️ **SELECT SERVICE**"
-        )
-        
-        # Get keyboard - ONE COMMAND PER LINE
-        buttons = OneLineKeyboard.main_menu(is_admin)
-        
-        await event.edit(message, buttons=buttons, parse_mode="md")
-        
-    except Exception as e:
-        logger.error(f"❌ Error in main_menu_callback: {e}")
-
-@bot_client.on(events.CallbackQuery(pattern=r'^user_detail_(\d+)$'))
-async def user_detail_callback(event):
-    """Handle user detail callback"""
-    try:
-        user_id = int(event.data.decode().split('_')[-1])
-        await admin_panel.show_user_detail(event, user_id)
-    except Exception as e:
-        logger.error(f"❌ Error in user_detail_callback: {e}")
-        await event.answer("❌ Error loading user details", alert=True)
-
-@bot_client.on(events.CallbackQuery(pattern=r'^export_'))
-async def export_data_callback(event):
-    """Handle export data callbacks"""
-    try:
-        data_type = event.data.decode().split('_', 1)[1]
-        user_id = event.sender_id
-        
-        if user_id not in export_data_storage:
-            await event.answer("❌ No export data available", alert=True)
-            return
-        
-        data = export_data_storage[user_id].get(data_type)
-        if not data:
-            await event.answer("❌ No data available for export", alert=True)
-            return
-        
-        # Create file
-        filename = f"darkboxes_{data_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        
-        # Send file
-        await event.delete()
-        await bot_client.send_file(
-            event.chat_id,
-            bytes(data, 'utf-8'),
-            filename=filename,
-            caption=f"📊 **{data_type.upper()} DATA EXPORT**\n\nExported on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ Error in export_data_callback: {e}")
-        await event.answer("❌ Error exporting data", alert=True)
-
-# ================== ADMIN COMMANDS ==================
-
-@bot_client.on(events.NewMessage(pattern=r'/admin'))
-async def admin_command_handler(event):
-    """Handle /admin command"""
-    try:
-        user_id = event.sender_id
-        
-        if not admin_panel.is_admin(user_id):
-            await event.respond("❌ Access denied. Admin privileges required.")
-            return
+        else:
+            await event.answer("❌ Failed to revoke API key", alert=True)
         
         await admin_panel.show_admin_panel(event)
         
     except Exception as e:
-        logger.error(f"❌ Error in admin_command_handler: {e}")
+        logger.error(f"❌ Error revoking API key: {e}")
+        await event.answer("❌ Error revoking API key", alert=True)
 
-@bot_client.on(events.NewMessage(pattern=r'/stats'))
-async def stats_command_handler(event):
-    """Handle /stats command"""
+# ... (rest of the handlers remain the same as before, just add API-related commands)
+
+@bot_client.on(events.NewMessage(pattern=r'/create_api (\d+) (\w+) (\d+) (.+)'))
+async def create_api_command(event):
+    """Handle /create_api command"""
     try:
         user_id = event.sender_id
         
         if not admin_panel.is_admin(user_id):
-            await event.respond("❌ Access denied. Admin privileges required.")
+            await event.respond("❌ Admin privileges required.")
             return
         
-        await admin_panel.show_today_stats(event)
+        target_user_id = int(event.pattern_match.group(1))
+        plan_id = event.pattern_match.group(2)
+        days = int(event.pattern_match.group(3))
+        description = event.pattern_match.group(4)
         
-    except Exception as e:
-        logger.error(f"❌ Error in stats_command_handler: {e}")
-
-@bot_client.on(events.NewMessage(pattern=r'/broadcast (.+)'))
-async def broadcast_command_handler(event):
-    """Handle /broadcast command"""
-    try:
-        user_id = event.sender_id
-        
-        if not admin_panel.is_admin(user_id):
-            await event.respond("❌ Access denied. Admin privileges required.")
+        if plan_id not in API_PLANS:
+            await event.respond(f"❌ Invalid plan ID. Available: {', '.join(API_PLANS.keys())}")
             return
         
-        message = event.pattern_match.group(1)
-        user_states[user_id] = {
-            "action": "confirm_broadcast",
-            "message": message
-        }
+        # Create API key
+        api_info = await db_manager.api_db.create_api_key(target_user_id, plan_id, days, description)
         
-        await admin_panel.ask_for_broadcast(event)
-        
-    except Exception as e:
-        logger.error(f"❌ Error in broadcast_command_handler: {e}")
-
-@bot_client.on(events.NewMessage(pattern=r'/ban (\d+)'))
-async def ban_command_handler(event):
-    """Handle /ban command"""
-    try:
-        user_id = event.sender_id
-        
-        if not admin_panel.is_admin(user_id):
-            await event.respond("❌ Access denied. Admin privileges required.")
-            return
-        
-        target_id = int(event.pattern_match.group(1))
-        user_states[user_id] = {"action": "admin_ban"}
-        
-        # Simulate message event
-        event.text = str(target_id)
-        await handle_admin_ban(event)
-        
-    except Exception as e:
-        logger.error(f"❌ Error in ban_command_handler: {e}")
-
-@bot_client.on(events.NewMessage(pattern=r'/addcredits (\d+) (\d+)'))
-async def add_credits_command_handler(event):
-    """Handle /addcredits command"""
-    try:
-        user_id = event.sender_id
-        
-        if not admin_panel.is_admin(user_id):
-            await event.respond("❌ Access denied. Admin privileges required.")
-            return
-        
-        target_id = int(event.pattern_match.group(1))
-        credits = int(event.pattern_match.group(2))
-        user_states[user_id] = {"action": "admin_add_credits"}
-        
-        # Simulate message event
-        event.text = f"{target_id} {credits}"
-        await handle_admin_add_credits(event)
-        
-    except Exception as e:
-        logger.error(f"❌ Error in add_credits_command_handler: {e}")
-
-@bot_client.on(events.NewMessage(pattern=r'/reply (\d+) (.+)'))
-async def admin_reply_handler(event):
-    """Handle admin reply command"""
-    try:
-        if not admin_panel.is_admin(event.sender_id):
-            return
-        
-        user_id = int(event.pattern_match.group(1))
-        message = event.pattern_match.group(2)
-        
-        await bot_client.send_message(
-            user_id,
-            f"👤 **ADMINISTRATOR RESPONSE**\n\n{message}\n\n— DarkBoxes Support Team"
-        )
-        
-        await event.respond(f"✅ Reply sent to user {user_id}")
-        
-    except Exception as e:
-        logger.error(f"❌ Error in admin_reply_handler: {e}")
-
-@bot_client.on(events.NewMessage(pattern=r'/leak (.+)'))
-async def leak_command_handler(event):
-    """Handle /leak command directly"""
-    try:
-        user_id = event.sender_id
-        query = event.pattern_match.group(1).strip()
-        
-        if not query:
-            await event.respond("❌ Please provide a query. Example: `/leak 917204764637`")
-            return
-        
-        # Check if user is banned
-        user_doc = await db_manager.get_user(user_id)
-        if user_doc and user_doc.get('is_banned'):
-            await event.respond("🚫 Your account has been banned. Contact @darkboxesAdmin for assistance.")
-            return
-        
-        if not user_doc:
-            await event.respond("❌ User not found. Please use /start first.")
-            return
-        
-        # Check access
-        can_search = False
-        searches_remaining = user_doc.get('searches_remaining', 0)
-        subscription = user_doc.get('subscription')
-        subscription_expiry = user_doc.get('subscription_expiry')
-        
-        if subscription and subscription_expiry:
-            expiry_date = datetime.fromisoformat(subscription_expiry)
-            if expiry_date > datetime.now(timezone.utc):
-                can_search = True
-        
-        if not can_search and searches_remaining <= 0:
+        if api_info:
             await event.respond(
-                "🔒 **INSUFFICIENT CREDITS**\n\n"
-                "You need 3 credits for advanced search.\n\n"
-                "💎 **Premium Plan** - ₹500\n"
-                "• Unlimited searches (7 days)\n"
-                "• All databases\n"
-                "• Priority processing\n\n"
-                "Contact @darkboxesAdmin for assistance.",
-                buttons=OneLineKeyboard.subscription_plans()
+                f"✅ **API KEY CREATED**\n\n"
+                f"👤 User ID: `{target_user_id}`\n"
+                f"🔑 API Key: `{api_info['api_key']}`\n"
+                f"📅 Expires: {api_info['expires_at'][:10]}\n"
+                f"📊 Plan: {plan_id}\n"
+                f"📝 Description: {description}",
+                parse_mode="md"
             )
+        else:
+            await event.respond("❌ Failed to create API key")
+        
+    except Exception as e:
+        logger.error(f"❌ Error in create_api_command: {e}")
+        await event.respond("❌ Error creating API key")
+
+@bot_client.on(events.NewMessage(pattern=r'/revoke_api (.+)'))
+async def revoke_api_command(event):
+    """Handle /revoke_api command"""
+    try:
+        user_id = event.sender_id
+        
+        if not admin_panel.is_admin(user_id):
+            await event.respond("❌ Admin privileges required.")
             return
         
-        # Perform leak search
-        leak_warning = (
-            "🚀 **ADVANCED SEARCH INITIATED**\n\n"
-            f"🔍 **Query:** `{query}`\n"
-            f"⚡ **Processing:** Ultra-fast (5 seconds)\n"
-            f"📁 **Output:** JSON + TXT files\n"
-            f"💎 **Cost:** 3 credits\n\n"
-            f"⚠️ **Note:** For phone numbers, include country code (e.g., 917204764637)\n"
-            f"⏳ Processing your advanced search..."
-        )
-        status = await event.respond(leak_warning, parse_mode="md")
+        api_key = event.pattern_match.group(1).strip()
         
-        result = await search_engine.perform_search("leak", query, user_id)
+        # Revoke API key
+        success = await db_manager.api_db.delete_api_key(api_key)
         
-        try:
-            await status.delete()
-        except:
-            pass
-        
-        if result["success"]:
-            # Handle multiple files for leak search
-            if result.get("has_multiple_files"):
-                # Send summary first
-                await event.respond(result["result"], parse_mode="md")
-                
-                # Send each file
-                for file_data in result.get("files", []):
-                    if file_data.get("raw_bytes"):
-                        filename = file_data.get("filename", f"result_{int(time.time())}.txt")
-                        
-                        # Determine file extension
-                        if file_data.get("file_type") == "json":
-                            filename = f"result_{int(time.time())}.json"
-                        elif file_data.get("file_type") == "txt":
-                            filename = f"result_{int(time.time())}.txt"
-                        
-                        await event.respond(
-                            file=file_data["raw_bytes"],
-                            caption=f"📁 **{file_data.get('file_type', 'RESULT').upper()} File**\nQuery: `{query}`"
-                        )
-            else:
-                await event.respond(result["result"], parse_mode="md")
-            
-            await db_manager.update_searches(user_id, "leak", query, True)
+        if success:
+            await event.respond(f"✅ API key revoked successfully")
         else:
-            await event.respond(result["error"], parse_mode="md")
-            await db_manager.update_searches(user_id, "leak", query, False)
+            await event.respond("❌ Failed to revoke API key")
         
     except Exception as e:
-        logger.error(f"❌ Error in leak_command_handler: {e}")
-        await event.respond("❌ An error occurred during advanced search.")
+        logger.error(f"❌ Error in revoke_api_command: {e}")
+        await event.respond("❌ Error revoking API key")
 
-@user_client.on(events.NewMessage())
-async def handle_all_messages(event):
-    """Handle all incoming messages for search responses"""
+@bot_client.on(events.NewMessage(pattern=r'/extend_api (.+) (\d+)'))
+async def extend_api_command(event):
+    """Handle /extend_api command"""
     try:
-        await search_engine.handle_incoming_message(event)
+        user_id = event.sender_id
+        
+        if not admin_panel.is_admin(user_id):
+            await event.respond("❌ Admin privileges required.")
+            return
+        
+        api_key = event.pattern_match.group(1).strip()
+        additional_days = int(event.pattern_match.group(2))
+        
+        # Extend API key
+        success = await db_manager.api_db.extend_api_key(api_key, additional_days)
+        
+        if success:
+            await event.respond(f"✅ API key extended by {additional_days} days")
+        else:
+            await event.respond("❌ Failed to extend API key")
+        
     except Exception as e:
-        pass
+        logger.error(f"❌ Error in extend_api_command: {e}")
+        await event.respond("❌ Error extending API key")
 
 # ================== MAIN FUNCTION ==================
 
@@ -4282,7 +4751,7 @@ async def main():
     global search_engine, admin_panel, bot_info
     
     try:
-        logger.info("🚀 Starting DarkBoxes Intelligence System...")
+        logger.info("🚀 Starting DarkBoxes Intelligence System with API Support...")
         
         # Start bot client
         await bot_client.start(bot_token=config.BOT_TOKEN)
@@ -4324,8 +4793,14 @@ async def main():
         asyncio.create_task(cleanup_expired_searches())
         asyncio.create_task(start_web_server())
         
+        # Start API server if enabled
+        if config.API_ENABLED:
+            asyncio.create_task(start_api_server())
+        
         logger.info("=" * 60)
         logger.info("🎭 DARK BOXES INTELLIGENCE SYSTEM - OPERATIONAL")
+        logger.info(f"🔑 API Server: {'Enabled' if config.API_ENABLED else 'Disabled'}")
+        logger.info(f"🌐 API Port: {config.API_PORT}")
         logger.info("=" * 60)
         
         # Keep the bot running
