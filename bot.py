@@ -2484,176 +2484,6 @@ class APIHandler:
 
 # ================== API SERVER ==================
 
-async def start_api_server():
-    """Start API server"""
-    if not config.API_ENABLED:
-        logger.info("ℹ️ API server disabled")
-        return
-    
-    app = web.Application()
-    
-    # Create API handler
-    api_handler = APIHandler(db_manager, search_engine)
-    
-    # Health check endpoint
-    async def health_check(request):
-        return web.json_response({"status": "ok", "timestamp": datetime.now().isoformat()})
-    
-    # Search endpoints
-    async def phone_search(request):
-        return await api_handler.handle_search_request(request, "phone")
-    
-    async def family_search(request):
-        return await api_handler.handle_search_request(request, "family")
-    
-    async def aadhar_search(request):
-        return await api_handler.handle_search_request(request, "aadhar")
-    
-    async def vehicle_search(request):
-        return await api_handler.handle_search_request(request, "vehicle")
-    
-    async def upi_search(request):
-        return await api_handler.handle_search_request(request, "upi")
-    
-    async def email_search(request):
-        return await api_handler.handle_search_request(request, "email")
-    
-    async def telegram_search(request):
-        return await api_handler.handle_search_request(request, "telegram")
-    
-    async def imei_search(request):
-        return await api_handler.handle_search_request(request, "imei")
-    
-    async def gst_search(request):
-        return await api_handler.handle_search_request(request, "gst")
-    
-    async def instagram_search(request):
-        return await api_handler.handle_search_request(request, "insta")
-    
-    async def pakistan_search(request):
-        return await api_handler.handle_search_request(request, "pak")
-    
-    async def ip_search(request):
-        return await api_handler.handle_search_request(request, "ip")
-    
-    async def ifsc_search(request):
-        return await api_handler.handle_search_request(request, "ifsc")
-    
-    async def leak_search(request):
-        return await api_handler.handle_search_request(request, "leak")
-    
-    # Utility endpoints
-    async def batch_search(request):
-        return await api_handler.handle_batch_search(request)
-    
-    async def status_endpoint(request):
-        return await api_handler.handle_status_request(request)
-    
-    async def balance_endpoint(request):
-        return await api_handler.handle_balance_request(request)
-    
-    async def usage_endpoint(request):
-        return await api_handler.handle_usage_request(request)
-    
-    # Add routes
-    app.router.add_get('/health', health_check)
-    app.router.add_get('/api/v1/health', health_check)
-    
-    # Search endpoints
-    app.router.add_post('/api/v1/search/phone', phone_search)
-    app.router.add_post('/api/v1/search/family', family_search)
-    app.router.add_post('/api/v1/search/aadhar', aadhar_search)
-    app.router.add_post('/api/v1/search/vehicle', vehicle_search)
-    app.router.add_post('/api/v1/search/upi', upi_search)
-    app.router.add_post('/api/v1/search/email', email_search)
-    app.router.add_post('/api/v1/search/telegram', telegram_search)
-    app.router.add_post('/api/v1/search/imei', imei_search)
-    app.router.add_post('/api/v1/search/gst', gst_search)
-    app.router.add_post('/api/v1/search/instagram', instagram_search)
-    app.router.add_post('/api/v1/search/pakistan', pakistan_search)
-    app.router.add_post('/api/v1/search/ip', ip_search)
-    app.router.add_post('/api/v1/search/ifsc', ifsc_search)
-    app.router.add_post('/api/v1/search/leak', leak_search)
-    app.router.add_post('/api/v1/search/batch', batch_search)
-    
-    # Utility endpoints
-    app.router.add_get('/api/v1/status', status_endpoint)
-    app.router.add_get('/api/v1/balance', balance_endpoint)
-    app.router.add_get('/api/v1/usage', usage_endpoint)
-    
-    # Documentation endpoint
-    async def documentation(request):
-        docs = {
-            "service": "DarkBoxes Intelligence API",
-            "version": "2.0.0",
-            "base_url": config.API_BASE_URL,
-            "endpoints": {
-                "search": {
-                    "phone": {"method": "POST", "endpoint": "/api/v1/search/phone", "description": "Phone number intelligence"},
-                    "family": {"method": "POST", "endpoint": "/api/v1/search/family", "description": "Family network analysis"},
-                    "aadhar": {"method": "POST", "endpoint": "/api/v1/search/aadhar", "description": "Aadhar comprehensive search"},
-                    "vehicle": {"method": "POST", "endpoint": "/api/v1/search/vehicle", "description": "Vehicle intelligence"},
-                    "upi": {"method": "POST", "endpoint": "/api/v1/search/upi", "description": "UPI financial intelligence"},
-                    "email": {"method": "POST", "endpoint": "/api/v1/search/email", "description": "Email intelligence"},
-                    "telegram": {"method": "POST", "endpoint": "/api/v1/search/telegram", "description": "Telegram intelligence"},
-                    "imei": {"method": "POST", "endpoint": "/api/v1/search/imei", "description": "Device intelligence"},
-                    "gst": {"method": "POST", "endpoint": "/api/v1/search/gst", "description": "Business intelligence"},
-                    "instagram": {"method": "POST", "endpoint": "/api/v1/search/instagram", "description": "Instagram intelligence"},
-                    "pakistan": {"method": "POST", "endpoint": "/api/v1/search/pakistan", "description": "Pakistan number intelligence"},
-                    "ip": {"method": "POST", "endpoint": "/api/v1/search/ip", "description": "IP location"},
-                    "ifsc": {"method": "POST", "endpoint": "/api/v1/search/ifsc", "description": "IFSC code lookup"},
-                    "leak": {"method": "POST", "endpoint": "/api/v1/search/leak", "description": "Advanced OSINT search"},
-                    "batch": {"method": "POST", "endpoint": "/api/v1/search/batch", "description": "Batch search multiple queries"}
-                },
-                "utility": {
-                    "status": {"method": "GET", "endpoint": "/api/v1/status", "description": "API status and limits"},
-                    "balance": {"method": "GET", "endpoint": "/api/v1/balance", "description": "User credits and balance"},
-                    "usage": {"method": "GET", "endpoint": "/api/v1/usage", "description": "API usage statistics"}
-                }
-            },
-            "authentication": {
-                "header": "X-API-Key: your_api_key",
-                "query_param": "?api_key=your_api_key"
-            },
-            "example_request": {
-                "curl": "curl -X POST -H 'X-API-Key: your_api_key' -H 'Content-Type: application/json' -d '{\"query\": \"9876543210\"}' " + config.API_BASE_URL + "/api/v1/search/phone"
-            },
-            "contact": {
-                "admin": "@darkboxesAdmin",
-                "channel": "@darkboxesv1"
-            }
-        }
-        return web.json_response(docs)
-    
-    app.router.add_get('/api/v1/docs', documentation)
-    
-    # CORS middleware
-    async def cors_middleware(app, handler):
-        async def middleware_handler(request):
-            if request.method == "OPTIONS":
-                response = web.Response()
-            else:
-                response = await handler(request)
-            
-            response.headers['Access-Control-Allow-Origin'] = '*'
-            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-API-Key'
-            return response
-        return middleware_handler
-    
-    app.middlewares.append(cors_middleware)
-    
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', config.API_PORT)
-    
-    try:
-        await site.start()
-        logger.info(f"🌐 API server running on port {config.API_PORT}")
-        logger.info(f"📚 API Documentation: {config.API_BASE_URL}/api/v1/docs")
-        logger.info(f"🔑 Authentication: Use X-API-Key header or api_key query parameter")
-    except Exception as e:
-        logger.error(f"❌ API server failed: {e}")
 
 # ================== ADMIN PANEL HANDLER ==================
 
@@ -4263,24 +4093,187 @@ async def cleanup_expired_searches():
 
 # ================== WEB SERVER ==================
 
+# ================== SINGLE CONSOLIDATED WEB/API SERVER ==================
+
 async def start_web_server():
-    """Start web server"""
+    """Start consolidated web server with API endpoints"""
     app = web.Application()
     
-    async def health_check(request):
-        return web.Response(text="OK")
+    # Create API handler
+    api_handler = APIHandler(db_manager, search_engine)
     
+    # Health check endpoint
+    async def health_check(request):
+        return web.json_response({"status": "ok", "timestamp": datetime.now().isoformat()})
+    
+    # Root endpoint
+    async def root_handler(request):
+        return web.Response(text="DarkBoxes Intelligence System API\n\nUse /api/v1/docs for documentation\nUse /health for health check")
+    
+    # Search endpoints
+    async def phone_search(request):
+        return await api_handler.handle_search_request(request, "phone")
+    
+    async def family_search(request):
+        return await api_handler.handle_search_request(request, "family")
+    
+    async def aadhar_search(request):
+        return await api_handler.handle_search_request(request, "aadhar")
+    
+    async def vehicle_search(request):
+        return await api_handler.handle_search_request(request, "vehicle")
+    
+    async def upi_search(request):
+        return await api_handler.handle_search_request(request, "upi")
+    
+    async def email_search(request):
+        return await api_handler.handle_search_request(request, "email")
+    
+    async def telegram_search(request):
+        return await api_handler.handle_search_request(request, "telegram")
+    
+    async def imei_search(request):
+        return await api_handler.handle_search_request(request, "imei")
+    
+    async def gst_search(request):
+        return await api_handler.handle_search_request(request, "gst")
+    
+    async def instagram_search(request):
+        return await api_handler.handle_search_request(request, "insta")
+    
+    async def pakistan_search(request):
+        return await api_handler.handle_search_request(request, "pak")
+    
+    async def ip_search(request):
+        return await api_handler.handle_search_request(request, "ip")
+    
+    async def ifsc_search(request):
+        return await api_handler.handle_search_request(request, "ifsc")
+    
+    async def leak_search(request):
+        return await api_handler.handle_search_request(request, "leak")
+    
+    # Utility endpoints
+    async def batch_search(request):
+        return await api_handler.handle_batch_search(request)
+    
+    async def status_endpoint(request):
+        return await api_handler.handle_status_request(request)
+    
+    async def balance_endpoint(request):
+        return await api_handler.handle_balance_request(request)
+    
+    async def usage_endpoint(request):
+        return await api_handler.handle_usage_request(request)
+    
+    # Documentation endpoint
+    async def documentation(request):
+        docs = {
+            "service": "DarkBoxes Intelligence API",
+            "version": "2.0.0",
+            "base_url": f"https://{request.host}",
+            "endpoints": {
+                "search": {
+                    "phone": {"method": "POST", "endpoint": "/api/v1/search/phone", "description": "Phone number intelligence"},
+                    "family": {"method": "POST", "endpoint": "/api/v1/search/family", "description": "Family network analysis"},
+                    "aadhar": {"method": "POST", "endpoint": "/api/v1/search/aadhar", "description": "Aadhar comprehensive search"},
+                    "vehicle": {"method": "POST", "endpoint": "/api/v1/search/vehicle", "description": "Vehicle intelligence"},
+                    "upi": {"method": "POST", "endpoint": "/api/v1/search/upi", "description": "UPI financial intelligence"},
+                    "email": {"method": "POST", "endpoint": "/api/v1/search/email", "description": "Email intelligence"},
+                    "telegram": {"method": "POST", "endpoint": "/api/v1/search/telegram", "description": "Telegram intelligence"},
+                    "imei": {"method": "POST", "endpoint": "/api/v1/search/imei", "description": "Device intelligence"},
+                    "gst": {"method": "POST", "endpoint": "/api/v1/search/gst", "description": "Business intelligence"},
+                    "instagram": {"method": "POST", "endpoint": "/api/v1/search/instagram", "description": "Instagram intelligence"},
+                    "pakistan": {"method": "POST", "endpoint": "/api/v1/search/pakistan", "description": "Pakistan number intelligence"},
+                    "ip": {"method": "POST", "endpoint": "/api/v1/search/ip", "description": "IP location"},
+                    "ifsc": {"method": "POST", "endpoint": "/api/v1/search/ifsc", "description": "IFSC code lookup"},
+                    "leak": {"method": "POST", "endpoint": "/api/v1/search/leak", "description": "Advanced OSINT search"},
+                    "batch": {"method": "POST", "endpoint": "/api/v1/search/batch", "description": "Batch search multiple queries"}
+                },
+                "utility": {
+                    "status": {"method": "GET", "endpoint": "/api/v1/status", "description": "API status and limits"},
+                    "balance": {"method": "GET", "endpoint": "/api/v1/balance", "description": "User credits and balance"},
+                    "usage": {"method": "GET", "endpoint": "/api/v1/usage", "description": "API usage statistics"}
+                }
+            },
+            "authentication": {
+                "header": "X-API-Key: your_api_key",
+                "query_param": "?api_key=your_api_key"
+            },
+            "example_request": {
+                "curl": f"curl -X POST -H 'X-API-Key: your_api_key' -H 'Content-Type: application/json' -d '{{\"query\": \"9876543210\"}}' https://{request.host}/api/v1/search/phone"
+            },
+            "contact": {
+                "admin": "@darkboxesAdmin",
+                "channel": "@darkboxesv1"
+            }
+        }
+        return web.json_response(docs)
+    
+    # Add routes
+    app.router.add_get('/', root_handler)
     app.router.add_get('/health', health_check)
+    app.router.add_get('/api/v1/health', health_check)
+    
+    # Search endpoints
+    app.router.add_post('/api/v1/search/phone', phone_search)
+    app.router.add_post('/api/v1/search/family', family_search)
+    app.router.add_post('/api/v1/search/aadhar', aadhar_search)
+    app.router.add_post('/api/v1/search/vehicle', vehicle_search)
+    app.router.add_post('/api/v1/search/upi', upi_search)
+    app.router.add_post('/api/v1/search/email', email_search)
+    app.router.add_post('/api/v1/search/telegram', telegram_search)
+    app.router.add_post('/api/v1/search/imei', imei_search)
+    app.router.add_post('/api/v1/search/gst', gst_search)
+    app.router.add_post('/api/v1/search/instagram', instagram_search)
+    app.router.add_post('/api/v1/search/pakistan', pakistan_search)
+    app.router.add_post('/api/v1/search/ip', ip_search)
+    app.router.add_post('/api/v1/search/ifsc', ifsc_search)
+    app.router.add_post('/api/v1/search/leak', leak_search)
+    app.router.add_post('/api/v1/search/batch', batch_search)
+    
+    # Utility endpoints
+    app.router.add_get('/api/v1/status', status_endpoint)
+    app.router.add_get('/api/v1/balance', balance_endpoint)
+    app.router.add_get('/api/v1/usage', usage_endpoint)
+    app.router.add_get('/api/v1/docs', documentation)
+    
+    # CORS middleware
+    @web.middleware
+    async def cors_middleware(request, handler):
+        if request.method == "OPTIONS":
+            response = web.Response()
+        else:
+            response = await handler(request)
+        
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-API-Key, Authorization'
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        return response
+    
+    app.middlewares.append(cors_middleware)
     
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', config.PORT)
+    
+    # Use the PORT environment variable (Render provides this as 10000)
+    port = int(os.getenv("PORT", "10000"))
+    site = web.TCPSite(runner, '0.0.0.0', port)
     
     try:
         await site.start()
-        logger.info(f"🌐 Web server running on port {config.PORT}")
+        logger.info(f"🌐 Consolidated Web/API server running on port {port}")
+        logger.info(f"📚 API Documentation: https://{os.getenv('RENDER_EXTERNAL_HOSTNAME', 'relay-wzlz.onrender.com')}/api/v1/docs")
+        logger.info(f"🔑 Authentication: Use X-API-Key header or api_key query parameter")
+        
+        # Update the config.API_BASE_URL to use Render's URL
+        config.API_BASE_URL = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME', 'relay-wzlz.onrender.com')}"
+        logger.info(f"🌐 API Base URL: {config.API_BASE_URL}")
+        
     except Exception as e:
         logger.error(f"❌ Web server failed: {e}")
+        raise
 
 # ================== GLOBAL VARIABLES ==================
 
@@ -5188,10 +5181,9 @@ async def extend_api_command(event):
         await event.respond("❌ Error extending API key")
 
 # ================== MAIN FUNCTION ==================
-
 async def main():
     """Main function"""
-    global search_engine, admin_panel, bot_info
+    global search_engine, admin_panel, bot_info, api_handler  # Add api_handler here
     
     try:
         logger.info("🚀 Starting DarkBoxes Intelligence System with API Support...")
@@ -5222,6 +5214,9 @@ async def main():
         # Initialize search engine
         search_engine = SearchEngine(db_manager, db_manager)
         
+        # Initialize API handler (needs search_engine)
+        api_handler = APIHandler(db_manager, search_engine)
+        
         # Resolve groups
         logger.info("📡 Connecting to intelligence networks...")
         for group_name, group_data in GROUP_PRIORITIES.items():
@@ -5234,18 +5229,25 @@ async def main():
         
         # Start background tasks
         asyncio.create_task(cleanup_expired_searches())
+        
+        # Start consolidated web server (includes API endpoints)
         asyncio.create_task(start_web_server())
         
-        # Start API server if enabled
-        if config.API_ENABLED:
-            asyncio.create_task(start_api_server())
+        # Get the actual port from Render
+        port = int(os.getenv("PORT", "10000"))
+        
+        # Get Render's external URL
+        render_hostname = os.getenv('RENDER_EXTERNAL_HOSTNAME', 'relay-wzlz.onrender.com')
         
         logger.info("=" * 60)
         logger.info("🎭 DARK BOXES INTELLIGENCE SYSTEM - OPERATIONAL")
         logger.info(f"🔑 API Server: {'Enabled' if config.API_ENABLED else 'Disabled'}")
-        logger.info(f"🌐 API Base URL: {config.API_BASE_URL}")
-        logger.info(f"🔗 API Port: {config.API_PORT}")
+        logger.info(f"🌐 API Base URL: https://{render_hostname}")
+        logger.info(f"🔗 Server Port: {port}")
         logger.info("=" * 60)
+        
+        # Update the config.API_BASE_URL for API responses
+        config.API_BASE_URL = f"https://{render_hostname}"
         
         # Keep the bot running
         await bot_client.run_until_disconnected()
@@ -5265,11 +5267,3 @@ async def main():
                 db_manager.client.close()
         except:
             pass
-
-if __name__ == "__main__":
-    # Set event loop policy for Windows if needed
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-    
-    # Run the bot
-    asyncio.run(main())
