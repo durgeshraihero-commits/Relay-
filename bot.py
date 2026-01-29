@@ -967,6 +967,7 @@ class DatabaseManager:
         self.client = None
         self.db = None
         self.admin_db = None
+        self.api_db = None
     
     async def connect(self) -> bool:
         """Connect to MongoDB"""
@@ -976,6 +977,7 @@ class DatabaseManager:
             self.client.server_info()
             self.db = self.client[config.MONGODB_DBNAME]
             self.admin_db = AdminDatabaseManager(self)
+            self.api_db = APIDatabaseManager(self)
             
             # Create indexes
             await asyncio.get_running_loop().run_in_executor(
@@ -989,6 +991,17 @@ class DatabaseManager:
             )
             await asyncio.get_running_loop().run_in_executor(
                 None, lambda: self.db.payments.create_index([("timestamp", -1)])
+            )
+            
+            # Create API-specific indexes
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.api_keys.create_index([("api_key", 1)], unique=True)
+            )
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.api_keys.create_index([("user_id", 1)])
+            )
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.api_requests.create_index([("timestamp", -1)])
             )
             
             logger.info("✅ MongoDB connected")
