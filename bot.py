@@ -10,6 +10,7 @@ import re
 import json
 import time
 import uuid
+import hashlib  # <-- Add this line here
 import logging
 import asyncio
 import secrets
