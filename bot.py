@@ -256,7 +256,7 @@ GROUP_PRIORITIES = {
     },
     "secondary": {
         "name": "🌐 IntelX Network",
-        "identifier": "IntelXGroup",
+        "identifier": -1002939161140,
         "timeout": 35,
         "weight": 7,
         "enabled": True,
@@ -264,7 +264,7 @@ GROUP_PRIORITIES = {
     },
     "tertiary": {
         "name": "🔍 Basic Database",
-        "identifier": "nex_chats",
+        "identifier": -1003815353654,
         "timeout": 40,
         "weight": 5,
         "enabled": True,
@@ -362,7 +362,7 @@ SEARCH_COMMANDS = {
     "vehicle": {
         "name": "🚗 Vehicle Intelligence",
         "description": "🏎️ **Complete Vehicle & Owner Analysis**\n\n🔸 **Input:** Vehicle number (Format: UP53CZ3391)\n🔸 **Returns:** Vehicle details • Owner information • Mobile number • Address • Registration history • Insurance\n🔸 **Premium Feature:** Celebrity vehicle database access\n🔸 **Real-time:** Current registration status",
-        "commands": ["/vehicle", "/vnum", "/rc"],
+        "commands": ["/vnum", "/vnum", "/rc"],
         "example": "UP53CZ3391",
         "validation": r"^[A-Z]{2}\d{2}[A-Z]{1,2}\d{4}$",
         "cost": 2,
@@ -373,7 +373,7 @@ SEARCH_COMMANDS = {
     "upi": {
         "name": "💳 UPI Financial Intelligence",
         "description": "💰 **UPI Account & Transaction Analysis**\n\n🔸 **Input:** UPI ID (username@paytm/bank)\n🔸 **Returns:** Account holder • Linked bank • Transaction patterns • KYC status • Last active\n🔸 **Sources:** NPCI databases • Bank records • Financial institutions\n🔸 **Security:** Bank-grade encryption",
-        "commands": ["/upiinfo", "/upiinfo"],
+        "commands": ["/upi", "/upi"],
         "example": "username@paytm",
         "validation": r"^[\w\.-]+@[\w\.-]+$",
         "cost": 1,
@@ -384,7 +384,7 @@ SEARCH_COMMANDS = {
     "email": {
         "name": "📧 Email Intelligence",
         "description": "🖥️ **Complete Email Profile Analysis**\n\n🔸 **Input:** Email address\n🔸 **Returns:** Personal information • Social media links • Data breach history • Associated accounts • Location data\n🔸 **Sources:** Breach databases • Social media • Public records\n🔸 **Monitoring:** Real-time alerts",
-        "commands": ["/email", "/mail"],
+        "commands": ["/email", "/email"],
         "example": "user@example.com",
         "validation": r"^[\w\.-]+@[\w\.-]+\.\w+$",
         "cost": 1,
@@ -395,7 +395,7 @@ SEARCH_COMMANDS = {
     "telegram": {
         "name": "📲 Telegram Intelligence",
         "description": "⚡ **Telegram Profile Deep Analysis**\n\n🔸 **Input:** Telegram username or phone\n🔸 **Returns:** Mobile number • Profile details • Linked accounts • Activity patterns • Group memberships\n🔸 **Daily Limit:** 1 search for security\n🔸 **Privacy:** Encrypted processing",
-        "commands": ["/tg", "/telegram"],
+        "commands": ["/tg", "/tg"],
         "example": "@username or 9876543210",
         "validation": r"^(@?\w{5,32}|\d{10})$",
         "daily_limit": 1,
@@ -418,7 +418,7 @@ SEARCH_COMMANDS = {
     "gst": {
         "name": "🏢 Business Intelligence",
         "description": "📊 **GST Business Comprehensive Analysis**\n\n🔸 **Input:** GST number\n🔸 **Returns:** Business details • Owner information • Financial patterns • Compliance status • Tax history\n🔸 **Sources:** Government registries • Financial databases • Corporate records\n🔸 **Verification:** GST portal integration",
-        "commands": ["/gst", "/gstin"],
+        "commands": ["/gst", "/gst"],
         "example": "29ABCDE1234F1Z5",
         "validation": r"^\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}[Z]{1}[A-Z\d]{1}$",
         "cost": 1,
@@ -429,7 +429,7 @@ SEARCH_COMMANDS = {
     "insta": {
         "name": "📸 Instagram Intelligence",
         "description": "✨ **Instagram Profile Deep Analysis**\n\n🔸 **Input:** Instagram username\n🔸 **Returns:** Personal information • Contact details • Location data • Linked accounts • Activity history\n🔸 **Sources:** Social media APIs • Public databases • Metadata analysis\n🔸 **Insights:** Engagement patterns",
-        "commands": ["/insta", "/instagram"],
+        "commands": ["/insta", "/insta"],
         "example": "username",
         "validation": r"^[a-zA-Z0-9_.]{1,30}$",
         "cost": 1,
