@@ -351,7 +351,7 @@ SEARCH_COMMANDS = {
     "aadhar": {
         "name": "🆔 Aadhar Comprehensive",
         "description": "📈 **Complete Aadhar Cross-Reference**\n\n🔸 **Input:** 12-digit Aadhar number\n🔸 **Returns:** All linked numbers • Bank accounts • Addresses • Biometric status • Registration history\n🔸 **Sources:** UIDAI • Bank linkages • Government databases\n🔸 **Scope:** Pan-India coverage",
-        "commands": ["/aadhar", "/aadhar", "/aadhar"],
+        "commands": ["/aadhar", "/aadh", "/aadhar"],
         "example": "123456789012",
         "validation": r"^\d{12}$",
         "cost": 2,
