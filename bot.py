@@ -7357,6 +7357,86 @@ class SearchEngine:
         except Exception as e:
             logger.error(f"❌ Error notifying admin: {e}")
 
+# ================== ADMIN API COMMANDS ==================
+
+@bot_client.on(events.NewMessage(pattern=r'/create_api (\d+) (\w+) (\d+)'))
+async def create_api_command(event):
+    """Create API key - Admin only"""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.respond("❌ Admin only")
+            return
+        
+        target_user = int(event.pattern_match.group(1))
+        plan = event.pattern_match.group(2).lower()
+        days = int(event.pattern_match.group(3))
+        
+        result = await db_manager.api_db.create_api_key(target_user, plan, days, f"Admin created")
+        
+        if result.get('success'):
+            key = result['api_key']
+            await event.respond(
+                f"✅ **API KEY CREATED**\n\n"
+                f"👤 User: `{target_user}`\n"
+                f"🔑 Key: `{key}`\n"
+                f"📦 Plan: {plan}\n"
+                f"⏰ Days: {days}\n\n"
+                f"Test: {config.API_BASE_URL}/api/v1/docs",
+                parse_mode="md"
+            )
+            # Notify user
+            try:
+                await bot_client.send_message(target_user, f"🎉 API key created!\n`{key}`", parse_mode="md")
+            except:
+                pass
+        else:
+            await event.respond(f"❌ Failed: {result.get('error')}")
+    except Exception as e:
+        logger.error(f"create_api error: {e}")
+        await event.respond(f"❌ Error: {e}")
+
+@bot_client.on(events.NewMessage(pattern=r'/list_api'))
+async def list_api_command(event):
+    """List API keys - Admin only"""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            return
+        
+        keys = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: list(db_manager.db.api_keys.find({}).limit(10))
+        )
+        
+        if not keys:
+            await event.respond("No API keys")
+            return
+        
+        msg = "🔑 **API KEYS**\n\n"
+        for k in keys:
+            msg += f"User {k['user_id']}: `{k['api_key'][:16]}...`\n"
+        
+        await event.respond(msg, parse_mode="md")
+    except Exception as e:
+        logger.error(f"list_api error: {e}")
+
+@bot_client.on(events.CallbackQuery(pattern=r'^api_plan_(basic|pro|enterprise)$'))
+async def api_plan_callback(event):
+    """Handle plan selection"""
+    try:
+        plan = event.data.decode().split('_')[-1]
+        prices = {'basic': 499, 'pro': 999, 'enterprise': 2999}
+        
+        await event.edit(
+            f"💳 **{plan.upper()}** - ₹{prices[plan]}\n\n"
+            f"Pay to: `{config.UPI_ID}`\n"
+            f"Then contact {config.ADMIN_CONTACT}\n"
+            f"With your ID: `{event.sender_id}`",
+            buttons=[[Button.inline("« Back", "api_plans")]],
+            parse_mode="md"
+        )
+    except Exception as e:
+        logger.error(f"plan callback error: {e}")
+
+
 # ================== CLEANUP TASK ==================
 
 async def cleanup_expired_searches():
