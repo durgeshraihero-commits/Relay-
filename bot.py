@@ -28,7 +28,7 @@ from io import BytesIO
 try:
     from aiohttp import web
     from telethon import TelegramClient, events, Button
-    from telethon.tl.types import PeerChannel, PeerUser, Channel, User, MessageMediaDocument
+    from telethon.tl.types import PeerChannel, PeerUser, Channel, User, MessageMediaDocument, MessageMediaPhoto, MessageMediaVideo
     from telethon.tl.functions.channels import GetParticipantRequest
     from pymongo import MongoClient
     import pandas as pd
@@ -256,7 +256,7 @@ GROUP_PRIORITIES = {
     },
     "secondary": {
         "name": "🌐 IntelX Network",
-        "identifier": -1002939161140,
+        "identifier": "IntelXGroup",
         "timeout": 35,
         "weight": 7,
         "enabled": True,
@@ -264,7 +264,7 @@ GROUP_PRIORITIES = {
     },
     "tertiary": {
         "name": "🔍 Basic Database",
-        "identifier": -1003815353654,
+        "identifier": "nex_chats",
         "timeout": 40,
         "weight": 5,
         "enabled": True,
@@ -351,7 +351,7 @@ SEARCH_COMMANDS = {
     "aadhar": {
         "name": "🆔 Aadhar Comprehensive",
         "description": "📈 **Complete Aadhar Cross-Reference**\n\n🔸 **Input:** 12-digit Aadhar number\n🔸 **Returns:** All linked numbers • Bank accounts • Addresses • Biometric status • Registration history\n🔸 **Sources:** UIDAI • Bank linkages • Government databases\n🔸 **Scope:** Pan-India coverage",
-        "commands": ["/aadhar", "/aadh", "/aadhar"],
+        "commands": ["/aadhar", "/aadhar", "/aadhar"],
         "example": "123456789012",
         "validation": r"^\d{12}$",
         "cost": 2,
@@ -362,7 +362,7 @@ SEARCH_COMMANDS = {
     "vehicle": {
         "name": "🚗 Vehicle Intelligence",
         "description": "🏎️ **Complete Vehicle & Owner Analysis**\n\n🔸 **Input:** Vehicle number (Format: UP53CZ3391)\n🔸 **Returns:** Vehicle details • Owner information • Mobile number • Address • Registration history • Insurance\n🔸 **Premium Feature:** Celebrity vehicle database access\n🔸 **Real-time:** Current registration status",
-        "commands": ["/vnum", "/vnum", "/rc"],
+        "commands": ["/vehicle", "/vnum", "/rc"],
         "example": "UP53CZ3391",
         "validation": r"^[A-Z]{2}\d{2}[A-Z]{1,2}\d{4}$",
         "cost": 2,
@@ -373,7 +373,7 @@ SEARCH_COMMANDS = {
     "upi": {
         "name": "💳 UPI Financial Intelligence",
         "description": "💰 **UPI Account & Transaction Analysis**\n\n🔸 **Input:** UPI ID (username@paytm/bank)\n🔸 **Returns:** Account holder • Linked bank • Transaction patterns • KYC status • Last active\n🔸 **Sources:** NPCI databases • Bank records • Financial institutions\n🔸 **Security:** Bank-grade encryption",
-        "commands": ["/upi", "/upi"],
+        "commands": ["/upiinfo", "/upiinfo"],
         "example": "username@paytm",
         "validation": r"^[\w\.-]+@[\w\.-]+$",
         "cost": 1,
@@ -384,7 +384,7 @@ SEARCH_COMMANDS = {
     "email": {
         "name": "📧 Email Intelligence",
         "description": "🖥️ **Complete Email Profile Analysis**\n\n🔸 **Input:** Email address\n🔸 **Returns:** Personal information • Social media links • Data breach history • Associated accounts • Location data\n🔸 **Sources:** Breach databases • Social media • Public records\n🔸 **Monitoring:** Real-time alerts",
-        "commands": ["/email", "/email"],
+        "commands": ["/email", "/mail"],
         "example": "user@example.com",
         "validation": r"^[\w\.-]+@[\w\.-]+\.\w+$",
         "cost": 1,
@@ -395,7 +395,7 @@ SEARCH_COMMANDS = {
     "telegram": {
         "name": "📲 Telegram Intelligence",
         "description": "⚡ **Telegram Profile Deep Analysis**\n\n🔸 **Input:** Telegram username or phone\n🔸 **Returns:** Mobile number • Profile details • Linked accounts • Activity patterns • Group memberships\n🔸 **Daily Limit:** 1 search for security\n🔸 **Privacy:** Encrypted processing",
-        "commands": ["/tg", "/tg"],
+        "commands": ["/tg", "/telegram"],
         "example": "@username or 9876543210",
         "validation": r"^(@?\w{5,32}|\d{10})$",
         "daily_limit": 1,
@@ -418,7 +418,7 @@ SEARCH_COMMANDS = {
     "gst": {
         "name": "🏢 Business Intelligence",
         "description": "📊 **GST Business Comprehensive Analysis**\n\n🔸 **Input:** GST number\n🔸 **Returns:** Business details • Owner information • Financial patterns • Compliance status • Tax history\n🔸 **Sources:** Government registries • Financial databases • Corporate records\n🔸 **Verification:** GST portal integration",
-        "commands": ["/gst", "/gst"],
+        "commands": ["/gst", "/gstin"],
         "example": "29ABCDE1234F1Z5",
         "validation": r"^\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}[Z]{1}[A-Z\d]{1}$",
         "cost": 1,
@@ -429,7 +429,7 @@ SEARCH_COMMANDS = {
     "insta": {
         "name": "📸 Instagram Intelligence",
         "description": "✨ **Instagram Profile Deep Analysis**\n\n🔸 **Input:** Instagram username\n🔸 **Returns:** Personal information • Contact details • Location data • Linked accounts • Activity history\n🔸 **Sources:** Social media APIs • Public databases • Metadata analysis\n🔸 **Insights:** Engagement patterns",
-        "commands": ["/insta", "/insta"],
+        "commands": ["/insta", "/instagram"],
         "example": "username",
         "validation": r"^[a-zA-Z0-9_.]{1,30}$",
         "cost": 1,
@@ -969,6 +969,8 @@ class DatabaseManager:
         self.db = None
         self.admin_db = None
         self.api_db = None
+        self.broadcasts_collection = None
+        self.broadcast_receipts_collection = None
     
     async def connect(self) -> bool:
         """Connect to MongoDB"""
@@ -1003,6 +1005,24 @@ class DatabaseManager:
             )
             await asyncio.get_running_loop().run_in_executor(
                 None, lambda: self.db.api_requests.create_index([("timestamp", -1)])
+            )
+            
+            # Initialize broadcast collections
+            self.broadcasts_collection = self.db.broadcasts
+            self.broadcast_receipts_collection = self.db.broadcast_receipts
+            
+            # Create broadcast indexes
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.broadcasts_collection.create_index([("broadcast_id", 1)], unique=True)
+            )
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.broadcasts_collection.create_index([("timestamp", -1)])
+            )
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.broadcast_receipts_collection.create_index([("broadcast_id", 1), ("user_id", 1)], unique=True)
+            )
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.broadcast_receipts_collection.create_index([("user_id", 1)])
             )
             
             logger.info("✅ MongoDB connected")
@@ -7480,6 +7500,125 @@ async def cleanup_expired_searches():
             logger.error(f"❌ Error in cleanup: {e}")
 
 # ================== WEB SERVER ==================
+
+
+
+
+# ================== BROADCAST COMMANDS ==================
+
+@bot_client.on(events.NewMessage(pattern=r'/broadcast'))
+async def broadcast_command(event):
+    """Broadcast command - Admin only"""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.respond("❌ Admin only")
+            return
+        
+        await admin_panel.show_broadcast_panel(event)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in broadcast: {e}")
+        await event.respond(f"❌ Error: {e}")
+
+
+@bot_client.on(events.NewMessage(pattern=r'/bcstats (.+)'))
+async def broadcast_stats_command(event):
+    """View broadcast stats - Admin only"""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.respond("❌ Admin only")
+            return
+        
+        broadcast_id = event.pattern_match.group(1).strip()
+        await admin_panel.show_broadcast_stats(event, broadcast_id)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in bcstats: {e}")
+        await event.respond(f"❌ Error: {e}")
+
+
+@bot_client.on(events.NewMessage())
+async def handle_admin_broadcast_messages(event):
+    """Handle admin messages for broadcasts"""
+    try:
+        user_id = event.sender_id
+        
+        if not admin_panel.is_admin(user_id):
+            return
+        
+        if user_id in admin_panel.pending_broadcasts:
+            await admin_panel.process_broadcast_message(event)
+            
+    except Exception as e:
+        logger.error(f"❌ Error handling admin message: {e}")
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^admin_broadcasts$'))
+async def admin_broadcast_callback(event):
+    """Show broadcast panel"""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.answer("❌ Admin only", alert=True)
+            return
+        
+        await admin_panel.show_broadcast_panel(event)
+        
+    except Exception as e:
+        logger.error(f"❌ Error: {e}")
+        await event.answer(f"❌ Error: {e}", alert=True)
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^bc_'))
+async def broadcast_callbacks(event):
+    """Handle broadcast callbacks"""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.answer("❌ Admin only", alert=True)
+            return
+        
+        data = event.data.decode()
+        
+        if data == "bc_text":
+            await admin_panel.start_broadcast(event, "text")
+        elif data == "bc_photo":
+            await admin_panel.start_broadcast(event, "photo")
+        elif data == "bc_video":
+            await admin_panel.start_broadcast(event, "video")
+        elif data == "bc_stats_menu":
+            await event.answer("📊 Use /bcstats <id>", alert=True)
+        elif data == "bc_cancel":
+            if event.sender_id in admin_panel.pending_broadcasts:
+                del admin_panel.pending_broadcasts[event.sender_id]
+            await event.edit("❌ Cancelled")
+        elif data.startswith("bc_confirm_"):
+            broadcast_type = data.replace("bc_confirm_", "")
+            await admin_panel.execute_broadcast(event, broadcast_type)
+            
+    except Exception as e:
+        logger.error(f"❌ Error in broadcast callback: {e}")
+        await event.answer(f"❌ Error: {e}", alert=True)
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^br_'))
+async def broadcast_read_callback(event):
+    """Handle broadcast read receipt"""
+    try:
+        data = event.data.decode()
+        broadcast_id = data.replace("br_", "")
+        user_id = event.sender_id
+        
+        await db_manager.record_broadcast_read(broadcast_id, user_id)
+        
+        await event.answer("✅ Marked as read", alert=False)
+        
+        try:
+            await event.edit(buttons=None)
+        except:
+            pass
+            
+    except Exception as e:
+        logger.error(f"❌ Error in read callback: {e}")
+
 
 
 async def main():
