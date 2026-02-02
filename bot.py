@@ -28,7 +28,7 @@ from io import BytesIO
 try:
     from aiohttp import web
     from telethon import TelegramClient, events, Button
-    from telethon.tl.types import PeerChannel, PeerUser, Channel, User, MessageMediaDocument, MessageMediaPhoto, MessageMediaVideo
+    from telethon.tl.types import PeerChannel, PeerUser, Channel, User, MessageMediaDocument, MessageMediaPhoto
     from telethon.tl.functions.channels import GetParticipantRequest
     from pymongo import MongoClient
     import pandas as pd
