@@ -264,7 +264,7 @@ GROUP_PRIORITIES = {
     },
     "tertiary": {
         "name": "🔍 Basic Database",
-        "identifier": "nex_chats",
+        "identifier": "StarkSpaceIn",
         "timeout": 40,
         "weight": 5,
         "enabled": True,
@@ -362,7 +362,7 @@ SEARCH_COMMANDS = {
     "vehicle": {
         "name": "🚗 Vehicle Intelligence",
         "description": "🏎️ **Complete Vehicle & Owner Analysis**\n\n🔸 **Input:** Vehicle number (Format: UP53CZ3391)\n🔸 **Returns:** Vehicle details • Owner information • Mobile number • Address • Registration history • Insurance\n🔸 **Premium Feature:** Celebrity vehicle database access\n🔸 **Real-time:** Current registration status",
-        "commands": ["/vehicle", "/vnum", "/rc"],
+        "commands": ["/vnum", "/vnum", "/vnum"],
         "example": "UP53CZ3391",
         "validation": r"^[A-Z]{2}\d{2}[A-Z]{1,2}\d{4}$",
         "cost": 2,
@@ -373,7 +373,7 @@ SEARCH_COMMANDS = {
     "upi": {
         "name": "💳 UPI Financial Intelligence",
         "description": "💰 **UPI Account & Transaction Analysis**\n\n🔸 **Input:** UPI ID (username@paytm/bank)\n🔸 **Returns:** Account holder • Linked bank • Transaction patterns • KYC status • Last active\n🔸 **Sources:** NPCI databases • Bank records • Financial institutions\n🔸 **Security:** Bank-grade encryption",
-        "commands": ["/upiinfo", "/upiinfo"],
+        "commands": ["/upiinfo", "/upi"],
         "example": "username@paytm",
         "validation": r"^[\w\.-]+@[\w\.-]+$",
         "cost": 1,
