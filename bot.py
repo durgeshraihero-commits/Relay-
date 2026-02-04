@@ -272,7 +272,7 @@ GROUP_PRIORITIES = {
     },
     "advanced": {
         "name": "🚀 Advanced OSINT Engine",
-        "identifier": "IntelXGroup",  # Replace with your advanced group ID
+        "identifier": "infobot_66",  # Replace with your advanced group ID
         "timeout": 25,
         "weight": 15,
         "enabled": True,
