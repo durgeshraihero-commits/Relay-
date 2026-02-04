@@ -256,7 +256,7 @@ GROUP_PRIORITIES = {
     },
     "secondary": {
         "name": "🌐 IntelX Network",
-        "identifier": "RAJIV_THE_LOOKUP_HUB",
+        "identifier": "infobot_66",
         "timeout": 35,
         "weight": 7,
         "enabled": True,
