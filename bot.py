@@ -256,7 +256,7 @@ GROUP_PRIORITIES = {
     },
     "secondary": {
         "name": "🌐 IntelX Network",
-        "identifier": "IntelXGroup",
+        "identifier": "EncoreXgroup",
         "timeout": 35,
         "weight": 7,
         "enabled": True,
