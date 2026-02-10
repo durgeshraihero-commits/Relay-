@@ -248,7 +248,7 @@ class APIResponseFormatter:
 GROUP_PRIORITIES = {
     "primary": {
         "name": "⚡ Premium Database",
-        "identifier": -1003596998816,
+        "identifier": "epicmoders",
         "timeout": 30,
         "weight": 10,
         "enabled": True,
@@ -264,7 +264,7 @@ GROUP_PRIORITIES = {
     },
     "tertiary": {
         "name": "🔍 Basic Database",
-        "identifier": "nex_chats",
+        "identifier": "RAJIV_THE_LOOKUP_HUB",
         "timeout": 40,
         "weight": 5,
         "enabled": True,
