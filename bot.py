@@ -248,7 +248,7 @@ class APIResponseFormatter:
 GROUP_PRIORITIES = {
     "primary": {
         "name": "⚡ Premium Database",
-        "identifier": "epicmoders",
+        "identifier": "IntelXGroup",
         "timeout": 30,
         "weight": 10,
         "enabled": True,
