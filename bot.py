@@ -248,7 +248,7 @@ class APIResponseFormatter:
 GROUP_PRIORITIES = {
     "primary": {
         "name": "⚡ Premium Database",
-        "identifier": "IntelXGroup",
+        "identifier": -1003596998816,
         "timeout": 30,
         "weight": 10,
         "enabled": True,
@@ -256,7 +256,7 @@ GROUP_PRIORITIES = {
     },
     "secondary": {
         "name": "🌐 IntelX Network",
-        "identifier": "EncoreXgroup",
+        "identifier": "IntelXGroup",
         "timeout": 35,
         "weight": 7,
         "enabled": True,
@@ -264,7 +264,7 @@ GROUP_PRIORITIES = {
     },
     "tertiary": {
         "name": "🔍 Basic Database",
-        "identifier": "RAJIV_THE_LOOKUP_HUB",
+        "identifier": "nex_chats",
         "timeout": 40,
         "weight": 5,
         "enabled": True,
@@ -1005,14 +1005,6 @@ class DatabaseManager:
                 None, lambda: self.db.api_requests.create_index([("timestamp", -1)])
             )
             
-            # Create broadcast indexes
-            await asyncio.get_running_loop().run_in_executor(
-                None, lambda: self.db.broadcasts.create_index([("broadcast_id", 1)], unique=True)
-            )
-            await asyncio.get_running_loop().run_in_executor(
-                None, lambda: self.db.broadcast_views.create_index([("broadcast_id", 1), ("user_id", 1)])
-            )
-            
             logger.info("✅ MongoDB connected")
             return True
         except Exception as e:
@@ -1592,15 +1584,19 @@ class OneLineKeyboard:
         """Professional admin panel with all features"""
         buttons = [
             [Button.inline("📊 Today's Stats", "admin_today")],
-            [Button.inline("👥 User Management", "admin_users")],
+            [Button.inline("👥 User List & Management", "admin_users")],
             [Button.inline("📈 Search Analytics", "admin_analytics")],
             [Button.inline("💰 Payment Stats", "admin_payments")],
+            [Button.inline("💳 Pending Payments", "admin_pending_payments")],
             [Button.inline("🔍 Search Users", "admin_search_user")],
-            [Button.inline("📢 Broadcast", "admin_broadcast")],
+            [Button.inline("📢 Broadcast (Text)", "admin_broadcast")],
+            [Button.inline("🖼️ Broadcast (Media)", "admin_broadcast_media")],
+            [Button.inline("📋 Broadcast History", "admin_broadcast_history")],
             [Button.inline("⚙️ Bot Settings", "admin_settings")],
             [Button.inline("🚫 Ban/Unban User", "admin_ban")],
             [Button.inline("👑 Add/Remove Admin", "admin_admin")],
-            [Button.inline("🎯 Add Credits", "admin_add_credits")],
+            [Button.inline("🎯 Add Credits to User", "admin_add_credits")],
+            [Button.inline("💎 Give Subscription", "admin_give_subscription")],
             [Button.inline("📊 Export Data", "admin_export")],
             [Button.inline("« Main Menu", "main_menu")]
         ]
@@ -1865,6 +1861,23 @@ class AdminPanelHandler:
                 target_id = int(data.split("_")[-1])
                 await self.show_user_detail(event, target_id)
             
+            elif data.startswith("admin_give_sub_"):
+                target_id = int(data.split("_")[-1])
+                await self.show_give_sub_for_user(event, target_id)
+            
+            elif data.startswith("admin_add_credits_user_"):
+                target_id = int(data.split("_")[-1])
+                user_states[event.sender_id] = {
+                    "action": "admin_add_credits",
+                    "preset_user_id": target_id
+                }
+                await event.edit(
+                    f"🎯 **ADD CREDITS TO USER {target_id}**\n\n"
+                    f"Enter number of credits to add (1-1000):\n"
+                    f"Just type the number:",
+                    buttons=OneLineKeyboard.back_to_admin()
+                )
+            
         except Exception as e:
             logger.error(f"❌ Error in admin callback: {e}")
             await event.answer("❌ Error processing request", alert=True)
@@ -1923,37 +1936,69 @@ class AdminPanelHandler:
             await event.edit("❌ Error loading statistics", buttons=OneLineKeyboard.back_to_admin())
     
     async def show_user_list(self, event, page: int = 1):
-        """Show paginated user list"""
+        """Show paginated user list with full details"""
         try:
-            user_list = await self.db.admin_db.get_user_list(page, 15)
-            
-            users_text = f"👥 **USER LIST** (Page {page}/{user_list['total_pages']})\n"
-            users_text += "═══════════════════════\n\n"
-            
-            for i, user in enumerate(user_list['users'], 1):
-                idx = (page - 1) * 15 + i
-                username = f"@{user['username']}" if user.get('username') else "No username"
-                joined = user.get('joined_at', '')[:10]
-                searches = user.get('total_searches', 0)
-                
-                users_text += (
-                    f"{idx}. **{user['first_name']}**\n"
-                    f"   ├─ {username}\n"
-                    f"   ├─ ID: `{user['user_id']}`\n"
-                    f"   ├─ Joined: {joined}\n"
-                    f"   └─ Searches: {searches}\n\n"
-                )
-            
-            users_text += f"📊 **Total Users:** {user_list['total_users']}"
-            
-            await event.edit(
-                users_text,
-                buttons=OneLineKeyboard.user_list_buttons(page, user_list['total_pages']),
-                parse_mode="md"
+            # Fetch from DB with all fields
+            limit = 10
+            skip = (page - 1) * limit
+            loop = asyncio.get_running_loop()
+
+            users = await loop.run_in_executor(
+                None, lambda: list(self.db.db.users.find(
+                    {},
+                    {"user_id": 1, "username": 1, "first_name": 1, "joined_at": 1,
+                     "total_searches": 1, "searches_remaining": 1, "subscription": 1,
+                     "is_banned": 1}
+                ).sort("joined_at", -1).skip(skip).limit(limit))
             )
+            total_users = await loop.run_in_executor(
+                None, self.db.db.users.count_documents, {}
+            )
+            total_pages = max(1, (total_users + limit - 1) // limit)
+
+            users_text = (
+                f"👥 **USER LIST** — Page {page}/{total_pages}\n"
+                f"📊 Total Registered: **{total_users}**\n"
+                "═══════════════════════\n\n"
+            )
+
+            if not users:
+                users_text += "No users found on this page."
+            else:
+                for i, user in enumerate(users, 1):
+                    idx = (page - 1) * limit + i
+                    username = f"@{user['username']}" if user.get('username') else "—"
+                    joined = user.get('joined_at', '')[:10]
+                    searches = user.get('total_searches', 0)
+                    credits = user.get('searches_remaining', 0)
+                    sub = user.get('subscription') or "None"
+                    banned = "🚫" if user.get('is_banned') else "✅"
+
+                    users_text += (
+                        f"{banned} **{idx}. {user.get('first_name', 'N/A')}**\n"
+                        f"   ├─ {username} | ID: `{user['user_id']}`\n"
+                        f"   ├─ Joined: {joined}\n"
+                        f"   ├─ Searches: {searches} | Credits: {credits}\n"
+                        f"   └─ Plan: {sub}\n\n"
+                    )
+
+            # Build nav buttons
+            buttons = []
+            nav_row = []
+            if page > 1:
+                nav_row.append(Button.inline("⬅️ Prev", f"admin_user_list_{page-1}"))
+            nav_row.append(Button.inline(f"{page}/{total_pages}", "noop"))
+            if page < total_pages:
+                nav_row.append(Button.inline("Next ➡️", f"admin_user_list_{page+1}"))
+            if nav_row:
+                buttons.append(nav_row)
+            buttons.append([Button.inline("🔍 Search User", "admin_search_user")])
+            buttons.append([Button.inline("« User Mgmt", "admin_users"), Button.inline("« Admin", "admin_panel")])
+
+            await event.edit(users_text, buttons=buttons, parse_mode="md")
         except Exception as e:
             logger.error(f"Error showing user list: {e}")
-            await event.edit("❌ Error loading user list", buttons=OneLineKeyboard.back_to_admin())
+            await event.edit(f"❌ Error loading user list: {e}", buttons=OneLineKeyboard.back_to_admin())
     
     async def show_user_management(self, event):
         """Show user management panel"""
@@ -2748,6 +2793,7 @@ class AdminPanelHandler:
                 buttons.append([Button.inline("👑 Add Admin", f"confirm_add_admin_{user_id}")])
             
             buttons.append([Button.inline("🎯 Add Credits", f"admin_add_credits_user_{user_id}")])
+            buttons.append([Button.inline("💎 Give Subscription", f"admin_give_sub_{user_id}")])
             buttons.append([Button.inline("« User Management", "admin_users")])
             
             await event.edit(detail_text, buttons=buttons, parse_mode="md")
@@ -2813,6 +2859,33 @@ class AdminPanelHandler:
         except Exception as e:
             logger.error(f"Error removing admin: {e}")
             await event.answer("❌ Error removing admin", alert=True)
+    
+    async def show_give_sub_for_user(self, event, user_id: int):
+        """Show subscription options for a specific user"""
+        try:
+            user = await self.db.get_user(user_id)
+            if not user:
+                await event.answer("❌ User not found", alert=True)
+                return
+            
+            text = (
+                f"💎 **GIVE SUBSCRIPTION**\n\n"
+                f"👤 User: {user.get('first_name', 'N/A')} (`{user_id}`)\n"
+                f"Current plan: {user.get('subscription', 'None')}\n\n"
+                f"Select a plan to grant:"
+            )
+            
+            buttons = [
+                [Button.inline("💰 Basic (7 days, 10 searches)", f"grant_sub_{user_id}_basic")],
+                [Button.inline("🚀 Standard (15 days, 30 searches)", f"grant_sub_{user_id}_standard")],
+                [Button.inline("👑 Premium (30 days, Unlimited)", f"grant_sub_{user_id}_premium")],
+                [Button.inline("« Back", f"user_detail_{user_id}")]
+            ]
+            
+            await event.edit(text, buttons=buttons, parse_mode="md")
+        except Exception as e:
+            logger.error(f"Error in show_give_sub_for_user: {e}")
+            await event.answer("❌ Error", alert=True)
 
 # ================== SEARCH ENGINE WITH PRIORITY MANAGEMENT ==================
 
@@ -4338,6 +4411,69 @@ async def admin_callback_handler(event):
     """Handle admin panel callbacks"""
     await admin_panel.handle_admin_callback(event)
 
+
+@bot_client.on(events.CallbackQuery(pattern=r'^grant_sub_(\d+)_(.+)$'))
+async def grant_sub_callback(event):
+    """Grant subscription to a user directly"""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.answer("❌ Admin only", alert=True)
+            return
+        
+        data = event.data.decode()
+        parts = data.split('_')
+        user_id = int(parts[2])
+        plan_id = parts[3]
+        
+        plan = SUBSCRIPTION_PLANS.get(plan_id)
+        if not plan:
+            await event.answer("❌ Invalid plan", alert=True)
+            return
+        
+        validity_days = {"basic": 7, "standard": 15, "premium": 30}.get(plan_id, 30)
+        expiry = datetime.now(timezone.utc) + timedelta(days=validity_days)
+        searches = plan.get('searches', 0)
+        
+        update_data = {
+            "$set": {
+                "subscription": plan_id,
+                "subscription_expiry": expiry.isoformat(),
+                "last_seen": datetime.now(timezone.utc).isoformat()
+            }
+        }
+        if isinstance(searches, int):
+            update_data["$inc"] = {"searches_remaining": searches}
+        
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: db_manager.db.users.update_one({"user_id": user_id}, update_data)
+        )
+        
+        # Notify user
+        try:
+            await bot_client.send_message(
+                user_id,
+                f"🎁 **SUBSCRIPTION GRANTED BY ADMIN!**\n\n"
+                f"✅ **{plan['name']}** has been activated!\n"
+                f"📅 Valid until: {expiry.strftime('%d %b %Y')}\n"
+                f"🔍 Searches: {'Unlimited' if plan_id == 'premium' else searches}\n\n"
+                f"Enjoy your DarkBoxes subscription! 🚀\nUse /start to begin.",
+                parse_mode="md"
+            )
+        except Exception:
+            pass
+        
+        await event.edit(
+            f"✅ **SUBSCRIPTION GRANTED**\n\n"
+            f"User `{user_id}` → **{plan['name']}**\n"
+            f"Valid until: {expiry.strftime('%d %b %Y')}\n\n"
+            f"User has been notified.",
+            buttons=OneLineKeyboard.back_to_admin(),
+            parse_mode="md"
+        )
+    except Exception as e:
+        logger.error(f"❌ Error in grant_sub_callback: {e}")
+        await event.answer("❌ Error granting subscription", alert=True)
+
 @bot_client.on(events.CallbackQuery(pattern=r'^search_(.+)$'))
 async def search_callback(event):
     """Handle search type selection"""
@@ -4547,16 +4683,17 @@ async def premium_callback(event):
 
 @bot_client.on(events.CallbackQuery(pattern=r'^plan_(.+)$'))
 async def plan_selection_callback(event):
-    """Handle plan selection"""
+    """Handle plan selection - guides user through payment + screenshot flow"""
     try:
         plan_id = event.data.decode().split('_', 1)[1]
-        
+
         if plan_id not in SUBSCRIPTION_PLANS:
             await event.answer("❌ Invalid plan selection", alert=True)
             return
-        
+
         plan = SUBSCRIPTION_PLANS[plan_id]
-        
+        user_id = event.sender_id
+
         plan_details = (
             f"{plan['icon']} **{plan['name']}**\n"
             f"═══════════════════════\n\n"
@@ -4565,29 +4702,71 @@ async def plan_selection_callback(event):
             f"📅 **Validity:** {plan['validity']}\n\n"
             f"🌟 **Features:**\n"
         )
-        
         for feature in plan['features']:
             plan_details += f"• {feature}\n"
-        
-        plan_details += f"\n🎯 **Perfect For:** {plan['for']}\n\n"
-        
-        plan_details += f"📞 **To Purchase:**\n"
-        plan_details += f"1. Send ₹{plan['price']} to UPI: `{config.UPI_ID}`\n"
-        plan_details += f"2. Send payment screenshot to @darkboxesAdmin\n"
-        plan_details += f"3. Include your User ID: `{event.sender_id}`\n"
-        plan_details += f"4. Your account will be upgraded within 5 minutes\n\n"
-        plan_details += f"💡 **Note:** Contact @darkboxesAdmin for bulk discounts"
-        
+
+        plan_details += (
+            f"\n🎯 **Perfect For:** {plan['for']}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💳 **HOW TO PURCHASE:**\n\n"
+            f"**Step 1:** Pay ₹{plan['price']} via UPI\n"
+            f"🔗 UPI ID: `{config.UPI_ID}`\n\n"
+            f"**Step 2:** Take a screenshot of your payment\n\n"
+            f"**Step 3:** Tap the button below to submit your screenshot\n"
+            f"Include your User ID automatically: `{user_id}`\n\n"
+            f"⏱️ Admin will approve within **5-10 minutes**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━"
+        )
+
         buttons = [
+            [Button.inline(f"📤 Submit Payment Screenshot", f"submit_payment_{plan_id}")],
             [Button.inline("« Back to Plans", "premium")],
             [Button.inline("« Main Menu", "main_menu")]
         ]
-        
+
         await event.edit(plan_details, buttons=buttons, parse_mode="md")
-        
+
     except Exception as e:
         logger.error(f"❌ Error in plan_selection_callback: {e}")
         await event.answer("❌ Error loading plan details", alert=True)
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^submit_payment_(.+)$'))
+async def submit_payment_callback(event):
+    """Guide user to send payment screenshot"""
+    try:
+        plan_id = event.data.decode().split('_', 2)[2]
+        user_id = event.sender_id
+
+        if plan_id not in SUBSCRIPTION_PLANS:
+            await event.answer("❌ Invalid plan", alert=True)
+            return
+
+        plan = SUBSCRIPTION_PLANS[plan_id]
+
+        # Set state to await screenshot
+        user_states[user_id] = {
+            "action": "awaiting_payment_screenshot",
+            "plan_id": plan_id,
+            "plan_name": plan['name'],
+            "plan_price": plan['price']
+        }
+
+        instructions = (
+            f"📸 **SEND PAYMENT SCREENSHOT**\n\n"
+            f"Plan: **{plan['name']}** — ₹{plan['price']}\n\n"
+            f"✅ Please send your payment screenshot **as a photo** in this chat now.\n\n"
+            f"The screenshot will be forwarded to admin for approval.\n"
+            f"🕐 Approval time: 5–10 minutes\n\n"
+            f"Your User ID is attached automatically: `{user_id}`"
+        )
+
+        buttons = [[Button.inline("❌ Cancel", "main_menu")]]
+        await event.edit(instructions, buttons=buttons, parse_mode="md")
+
+    except Exception as e:
+        logger.error(f"❌ Error in submit_payment_callback: {e}")
+        await event.answer("❌ Error", alert=True)
 
 @bot_client.on(events.CallbackQuery(pattern=r'^referrals$'))
 async def referrals_callback(event):
@@ -4841,35 +5020,435 @@ async def contact_admin_callback(event):
 
 @bot_client.on(events.NewMessage(func=lambda e: e.is_private and not e.text.startswith('/')))
 async def private_message_handler(event):
-    """Handle private messages (queries and admin actions)"""
+    """Handle private messages (queries, admin actions, payment screenshots)"""
     try:
         user_id = event.sender_id
-        
+
         if user_id not in user_states:
             return
-        
+
         state = user_states[user_id]
-        
+
         if state.get("action") == "search":
             await handle_search_query(event, state)
-        
+
+        elif state.get("action") == "awaiting_payment_screenshot":
+            await handle_payment_screenshot(event, state)
+
         elif state.get("action") == "admin_search_user":
             await handle_admin_search_user(event)
-        
+
         elif state.get("action") == "admin_broadcast":
             await handle_admin_broadcast(event)
-        
+
+        elif state.get("action") == "admin_broadcast_media":
+            await handle_admin_broadcast_media(event)
+
         elif state.get("action") == "admin_ban":
             await handle_admin_ban(event)
-        
+
         elif state.get("action") == "admin_management":
             await handle_admin_management(event)
-        
+
         elif state.get("action") == "admin_add_credits":
             await handle_admin_add_credits(event)
-        
+
+        elif state.get("action") == "admin_give_subscription":
+            await handle_admin_give_subscription(event)
+
     except Exception as e:
         logger.error(f"❌ Error in private_message_handler: {e}")
+
+async def handle_payment_screenshot(event, state):
+    """Handle payment screenshot submission from user"""
+    try:
+        user_id = event.sender_id
+        plan_id = state.get("plan_id")
+        plan_name = state.get("plan_name")
+        plan_price = state.get("plan_price")
+
+        # Check if message has photo/document
+        if not (event.photo or event.document):
+            await event.respond(
+                "⚠️ Please send your **payment screenshot as a photo**.\n"
+                "No text or file — just the screenshot image."
+            )
+            return
+
+        user_doc = await db_manager.get_user(user_id)
+        username = f"@{user_doc.get('username', 'N/A')}" if user_doc else "N/A"
+        first_name = user_doc.get('first_name', 'N/A') if user_doc else 'N/A'
+
+        # Store pending payment in DB
+        payment_id = str(uuid.uuid4())[:8].upper()
+        pending_payment = {
+            "payment_id": payment_id,
+            "user_id": user_id,
+            "username": user_doc.get('username', ''),
+            "first_name": first_name,
+            "plan_id": plan_id,
+            "plan_name": plan_name,
+            "amount": plan_price,
+            "status": "pending",
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: db_manager.db.pending_payments.insert_one(pending_payment)
+        )
+
+        # Forward screenshot to admin with action buttons
+        admin_caption = (
+            f"💳 **NEW PAYMENT SCREENSHOT**\n\n"
+            f"🆔 Payment ID: `{payment_id}`\n"
+            f"👤 User: {first_name} ({username})\n"
+            f"🔢 User ID: `{user_id}`\n"
+            f"📦 Plan: {plan_name}\n"
+            f"💰 Amount: ₹{plan_price}\n"
+            f"🕐 Time: {datetime.now().strftime('%d %b %Y %H:%M')}\n\n"
+            f"✅ Approve or ❌ Reject below:"
+        )
+
+        admin_buttons = [
+            [Button.inline(f"✅ APPROVE — {plan_name}", f"approve_payment_{payment_id}_{user_id}_{plan_id}")],
+            [Button.inline(f"❌ REJECT", f"reject_payment_{payment_id}_{user_id}")]
+        ]
+
+        # Forward screenshot to admin
+        try:
+            await bot_client.send_file(
+                config.ADMIN_USER_ID,
+                file=event.media,
+                caption=admin_caption,
+                buttons=admin_buttons,
+                parse_mode="md"
+            )
+        except Exception as e:
+            logger.error(f"Error forwarding screenshot to admin: {e}")
+
+        # Confirm to user
+        await event.respond(
+            f"✅ **SCREENSHOT RECEIVED!**\n\n"
+            f"📋 Payment ID: `{payment_id}`\n"
+            f"📦 Plan: {plan_name}\n"
+            f"💰 Amount: ₹{plan_price}\n\n"
+            f"🕐 Admin will review and approve within **5–10 minutes**.\n"
+            f"You'll receive a notification once approved.\n\n"
+            f"📞 For urgent help: @darkboxesAdmin",
+            parse_mode="md"
+        )
+
+        user_states.pop(user_id, None)
+
+    except Exception as e:
+        logger.error(f"❌ Error handling payment screenshot: {e}")
+        await event.respond("❌ Error processing your screenshot. Please try again or contact @darkboxesAdmin.")
+        user_states.pop(user_id, None)
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^approve_payment_([A-Z0-9]+)_(\d+)_(.+)$'))
+async def approve_payment_callback(event):
+    """Admin approves payment"""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.answer("❌ Admin only", alert=True)
+            return
+
+        data = event.data.decode()
+        parts = data.split('_')
+        # approve_payment_PAYID_USERID_PLANID
+        payment_id = parts[2]
+        user_id = int(parts[3])
+        plan_id = parts[4]
+
+        plan = SUBSCRIPTION_PLANS.get(plan_id)
+        if not plan:
+            await event.answer("❌ Invalid plan", alert=True)
+            return
+
+        # Grant subscription
+        validity_days = {"basic": 7, "standard": 15, "premium": 30}.get(plan_id, 30)
+        expiry = datetime.now(timezone.utc) + timedelta(days=validity_days)
+        searches = plan.get('searches', 0)
+
+        update_data = {
+            "$set": {
+                "subscription": plan_id,
+                "subscription_expiry": expiry.isoformat(),
+                "last_seen": datetime.now(timezone.utc).isoformat()
+            }
+        }
+        if isinstance(searches, int):
+            update_data["$inc"] = {"searches_remaining": searches}
+
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: db_manager.db.users.update_one({"user_id": user_id}, update_data)
+        )
+
+        # Update payment status
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: db_manager.db.pending_payments.update_one(
+                {"payment_id": payment_id},
+                {"$set": {"status": "approved", "approved_at": datetime.now(timezone.utc).isoformat(),
+                          "approved_by": event.sender_id}}
+            )
+        )
+
+        # Record payment
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: db_manager.db.payments.insert_one({
+                "user_id": user_id,
+                "plan_id": plan_id,
+                "amount": plan.get('price', 0),
+                "status": "completed",
+                "payment_id": payment_id,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+        )
+
+        # Notify user
+        try:
+            await bot_client.send_message(
+                user_id,
+                f"🎉 **PAYMENT APPROVED!**\n\n"
+                f"✅ Your **{plan['name']}** is now active!\n"
+                f"📅 Valid until: {expiry.strftime('%d %b %Y')}\n"
+                f"🔍 Searches: {'Unlimited' if plan_id == 'premium' else searches}\n\n"
+                f"Thank you for subscribing to DarkBoxes! 🚀\n"
+                f"Use /start to begin searching.",
+                parse_mode="md"
+            )
+        except Exception as e:
+            logger.error(f"Failed to notify user {user_id}: {e}")
+
+        await event.edit(
+            f"✅ **PAYMENT APPROVED**\n\n"
+            f"Payment ID: `{payment_id}`\n"
+            f"User ID: `{user_id}`\n"
+            f"Plan: {plan['name']}\n"
+            f"User has been notified.",
+            parse_mode="md"
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Error approving payment: {e}")
+        await event.answer("❌ Error approving payment", alert=True)
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^reject_payment_([A-Z0-9]+)_(\d+)$'))
+async def reject_payment_callback(event):
+    """Admin rejects payment"""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.answer("❌ Admin only", alert=True)
+            return
+
+        data = event.data.decode()
+        parts = data.split('_')
+        payment_id = parts[2]
+        user_id = int(parts[3])
+
+        # Update payment status
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: db_manager.db.pending_payments.update_one(
+                {"payment_id": payment_id},
+                {"$set": {"status": "rejected", "rejected_at": datetime.now(timezone.utc).isoformat()}}
+            )
+        )
+
+        # Notify user
+        try:
+            await bot_client.send_message(
+                user_id,
+                f"❌ **PAYMENT REJECTED**\n\n"
+                f"Payment ID: `{payment_id}`\n\n"
+                f"Your payment screenshot could not be verified.\n\n"
+                f"Possible reasons:\n"
+                f"• Screenshot was unclear\n"
+                f"• Wrong amount paid\n"
+                f"• Wrong UPI ID used\n\n"
+                f"📞 Contact @darkboxesAdmin to resolve this issue.",
+                parse_mode="md"
+            )
+        except Exception as e:
+            logger.error(f"Failed to notify user {user_id}: {e}")
+
+        await event.edit(
+            f"❌ **PAYMENT REJECTED**\n\nPayment ID: `{payment_id}`\nUser `{user_id}` has been notified.",
+            parse_mode="md"
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Error rejecting payment: {e}")
+        await event.answer("❌ Error rejecting payment", alert=True)
+
+
+async def handle_admin_give_subscription(event):
+    """Handle admin giving subscription to selected user"""
+    try:
+        user_input = event.text.strip()
+        parts = user_input.split()
+
+        if len(parts) != 2:
+            await event.respond(
+                "❌ Invalid format.\n"
+                "Use: `user_id plan_name`\n"
+                "Plans: basic, standard, premium\n\n"
+                "Example: `123456789 premium`",
+                parse_mode="md"
+            )
+            return
+
+        if not parts[0].isdigit():
+            await event.respond("❌ User ID must be a number.")
+            return
+
+        user_id = int(parts[0])
+        plan_id = parts[1].lower()
+
+        if plan_id not in SUBSCRIPTION_PLANS:
+            await event.respond(f"❌ Invalid plan. Choose: basic, standard, premium")
+            return
+
+        plan = SUBSCRIPTION_PLANS[plan_id]
+        validity_days = {"basic": 7, "standard": 15, "premium": 30}.get(plan_id, 30)
+        expiry = datetime.now(timezone.utc) + timedelta(days=validity_days)
+        searches = plan.get('searches', 0)
+
+        user = await db_manager.get_user(user_id)
+        if not user:
+            await event.respond(f"❌ User {user_id} not found.")
+            user_states.pop(event.sender_id, None)
+            return
+
+        update_data = {
+            "$set": {
+                "subscription": plan_id,
+                "subscription_expiry": expiry.isoformat(),
+                "last_seen": datetime.now(timezone.utc).isoformat()
+            }
+        }
+        if isinstance(searches, int):
+            update_data["$inc"] = {"searches_remaining": searches}
+
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: db_manager.db.users.update_one({"user_id": user_id}, update_data)
+        )
+
+        await event.respond(
+            f"✅ **SUBSCRIPTION GRANTED**\n\n"
+            f"👤 User: {user.get('first_name', 'N/A')} (`{user_id}`)\n"
+            f"📦 Plan: {plan['name']}\n"
+            f"📅 Expires: {expiry.strftime('%d %b %Y')}\n\n"
+            f"User has been notified.",
+            parse_mode="md"
+        )
+
+        # Notify user
+        try:
+            await bot_client.send_message(
+                user_id,
+                f"🎁 **FREE SUBSCRIPTION GRANTED!**\n\n"
+                f"✅ Admin has activated **{plan['name']}** for you!\n"
+                f"📅 Valid until: {expiry.strftime('%d %b %Y')}\n"
+                f"🔍 Searches: {'Unlimited' if plan_id == 'premium' else searches}\n\n"
+                f"Use /start to start searching! 🚀",
+                parse_mode="md"
+            )
+        except Exception:
+            pass
+
+        user_states.pop(event.sender_id, None)
+
+    except Exception as e:
+        logger.error(f"❌ Error giving subscription: {e}")
+        await event.respond("❌ Error processing subscription.")
+
+
+async def handle_admin_broadcast_media(event):
+    """Handle admin media broadcast (photo/video with caption)"""
+    try:
+        sender_id = event.sender_id
+        state = user_states.get(sender_id, {})
+        target_type = state.get("broadcast_target", "all")  # "all" or user_id list
+        caption = state.get("broadcast_caption", "")
+
+        if not (event.photo or event.video or event.document):
+            await event.respond(
+                "⚠️ Please send a **photo or video** (with optional caption).\n"
+                "Or type /cancel to cancel."
+            )
+            return
+
+        media = event.media
+        final_caption = event.message.message or caption or "📢 Announcement from DarkBoxes"
+
+        await event.respond("📢 **SENDING MEDIA BROADCAST...**\n\nPlease wait...")
+
+        if target_type == "all":
+            users = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: list(db_manager.db.users.find({}, {"user_id": 1}))
+            )
+            target_ids = [u["user_id"] for u in users]
+        else:
+            target_ids = target_type if isinstance(target_type, list) else [target_type]
+
+        # Create broadcast record for seen tracking
+        broadcast_id = str(uuid.uuid4())[:12].upper()
+        broadcast_doc = {
+            "broadcast_id": broadcast_id,
+            "sender_id": sender_id,
+            "media_type": "photo" if event.photo else "video",
+            "caption": final_caption,
+            "total_recipients": len(target_ids),
+            "sent_count": 0,
+            "failed_count": 0,
+            "seen_by": [],
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: db_manager.db.broadcasts.insert_one(broadcast_doc)
+        )
+
+        sent = 0
+        failed = 0
+
+        for uid in target_ids:
+            try:
+                msg = await bot_client.send_file(
+                    uid,
+                    file=media,
+                    caption=f"{final_caption}\n\n[BC:{broadcast_id}]",
+                    parse_mode="md"
+                )
+                sent += 1
+                await asyncio.sleep(0.1)
+            except Exception:
+                failed += 1
+
+        # Update broadcast record
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: db_manager.db.broadcasts.update_one(
+                {"broadcast_id": broadcast_id},
+                {"$set": {"sent_count": sent, "failed_count": failed}}
+            )
+        )
+
+        user_states.pop(sender_id, None)
+
+        await event.respond(
+            f"✅ **MEDIA BROADCAST SENT**\n\n"
+            f"📊 Broadcast ID: `{broadcast_id}`\n"
+            f"📤 Sent: {sent}\n"
+            f"❌ Failed: {failed}\n"
+            f"📋 Total: {len(target_ids)}\n\n"
+            f"Use Admin Panel → View Broadcasts to see who has seen it.",
+            parse_mode="md"
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Error in handle_admin_broadcast_media: {e}")
+        await event.respond("❌ Error sending media broadcast.")
+
 
 async def handle_search_query(event, state):
     """Handle search queries"""
@@ -5206,21 +5785,36 @@ async def handle_admin_add_credits(event):
     """Handle admin add credits"""
     try:
         user_input = event.text.strip()
-        parts = user_input.split()
+        state = user_states.get(event.sender_id, {})
+        preset_user_id = state.get("preset_user_id")
         
-        if len(parts) != 2:
-            await event.respond("❌ Invalid format. Use: `user_id credits`")
-            return
+        if preset_user_id:
+            # Only credits amount needed
+            if not user_input.isdigit():
+                await event.respond("❌ Please enter a valid number of credits.")
+                return
+            user_id = preset_user_id
+            credits = int(user_input)
+        else:
+            parts = user_input.split()
+            if len(parts) != 2:
+                await event.respond(
+                    "❌ Invalid format.\n"
+                    "Use: `user_id credits`\n"
+                    "Example: `123456789 10`",
+                    parse_mode="md"
+                )
+                return
+            
+            if not parts[0].isdigit() or not parts[1].isdigit():
+                await event.respond("❌ Both user ID and credits must be numbers.")
+                return
+            
+            user_id = int(parts[0])
+            credits = int(parts[1])
         
-        if not parts[0].isdigit() or not parts[1].isdigit():
-            await event.respond("❌ Both user ID and credits must be numbers.")
-            return
-        
-        user_id = int(parts[0])
-        credits = int(parts[1])
-        
-        if credits <= 0 or credits > 1000:
-            await event.respond("❌ Credits must be between 1 and 1000.")
+        if credits <= 0 or credits > 10000:
+            await event.respond("❌ Credits must be between 1 and 10,000.")
             return
         
         user = await db_manager.get_user(user_id)
@@ -5233,25 +5827,29 @@ async def handle_admin_add_credits(event):
         success = await db_manager.add_credits(user_id, credits)
         
         if success:
+            new_balance = user.get('searches_remaining', 0) + credits
             await event.respond(
                 f"✅ **CREDITS ADDED SUCCESSFULLY**\n\n"
                 f"👤 User: {user.get('first_name', 'N/A')}\n"
                 f"🆔 ID: `{user_id}`\n"
-                f"🎯 Credits Added: {credits}\n"
-                f"💰 New Balance: {user.get('searches_remaining', 0) + credits}\n\n"
+                f"🎯 Credits Added: **{credits}**\n"
+                f"💰 New Balance: **{new_balance}**\n\n"
                 f"User has been notified.",
                 parse_mode="md"
             )
             
             # Notify user
-            await bot_client.send_message(
-                user_id,
-                f"🎁 **CREDITS ADDED**\n\n"
-                f"Administrator has added {credits} credits to your account.\n"
-                f"💰 New Balance: {user.get('searches_remaining', 0) + credits}\n\n"
-                f"Thank you for using DarkBoxes!",
-                parse_mode="md"
-            )
+            try:
+                await bot_client.send_message(
+                    user_id,
+                    f"🎁 **{credits} CREDITS ADDED!**\n\n"
+                    f"Administrator has added **{credits} credits** to your account.\n"
+                    f"💰 New Balance: **{new_balance} credits**\n\n"
+                    f"Thank you for using DarkBoxes! 🚀",
+                    parse_mode="md"
+                )
+            except Exception:
+                pass
         else:
             await event.respond("❌ Failed to add credits.")
         
@@ -5319,8 +5917,72 @@ async def confirm_broadcast_handler(event):
         logger.error(f"❌ Error in confirm_broadcast_handler: {e}")
         await event.answer("❌ Error sending broadcast", alert=True)
 
-@bot_client.on(events.CallbackQuery(pattern=r'^main_menu$'))
-async def main_menu_callback(event):
+
+@bot_client.on(events.CallbackQuery(pattern=r'^broadcast_media_(all|selected)$'))
+async def broadcast_media_target_callback(event):
+    """Handle broadcast media target selection"""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.answer("❌ Admin only", alert=True)
+            return
+        
+        target = event.data.decode().split('_')[-1]
+        sender_id = event.sender_id
+        
+        if target == "all":
+            user_states[sender_id] = {
+                "action": "admin_broadcast_media",
+                "broadcast_target": "all",
+                "broadcast_caption": ""
+            }
+            await event.edit(
+                "🖼️ **MEDIA BROADCAST — ALL USERS**\n\n"
+                "Send your photo or video now.\n"
+                "You can add a caption directly in your message.\n\n"
+                "📌 Supported: Photos, Videos, GIFs",
+                buttons=[[Button.inline("❌ Cancel", "admin_panel")]]
+            )
+        else:
+            await event.edit(
+                "🔍 **MEDIA BROADCAST — SELECTED USERS**\n\n"
+                "Enter the user IDs separated by commas:\n"
+                "Example: `123456, 789012, 345678`\n\n"
+                "Then send the media after confirming.",
+                buttons=[[Button.inline("❌ Cancel", "admin_panel")]]
+            )
+            user_states[sender_id] = {
+                "action": "admin_broadcast_select_users",
+                "broadcast_target": "selected"
+            }
+    except Exception as e:
+        logger.error(f"❌ Error in broadcast_media_target_callback: {e}")
+        await event.answer("❌ Error", alert=True)
+
+@bot_client.on(events.CallbackQuery(pattern=r'^buy_credits$'))
+async def buy_credits_callback(event):
+    """Handle buy credits callback"""
+    try:
+        await event.edit(
+            "💳 **BUY CREDITS / UPGRADE PLAN**\n\n"
+            "Select a plan to purchase:\n",
+            buttons=OneLineKeyboard.subscription_plans(),
+            parse_mode="md"
+        )
+    except Exception as e:
+        logger.error(f"Error in buy_credits_callback: {e}")
+        await event.answer("❌ Error", alert=True)
+
+
+@bot_client.on(events.NewMessage(func=lambda e: e.is_private and e.text and '[BC:' in e.text))
+async def track_broadcast_seen(event):
+    """Track when users interact with broadcast messages (passive seen tracking)"""
+    pass  # Seen tracking happens via read receipts in Telegram naturally
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^noop$'))
+async def noop_callback(event):
+    """No-op callback for pagination display"""
+    await event.answer("", alert=False)
     """Return to main menu"""
     try:
         user_id = event.sender_id
@@ -5420,6 +6082,27 @@ async def stats_command_handler(event):
     except Exception as e:
         logger.error(f"❌ Error in stats_command_handler: {e}")
 
+@bot_client.on(events.NewMessage(pattern=r'/broadcast (.+)'))
+async def broadcast_command_handler(event):
+    """Handle /broadcast command"""
+    try:
+        user_id = event.sender_id
+        
+        if not admin_panel.is_admin(user_id):
+            await event.respond("❌ Access denied. Admin privileges required.")
+            return
+        
+        message = event.pattern_match.group(1)
+        user_states[user_id] = {
+            "action": "confirm_broadcast",
+            "message": message
+        }
+        
+        await admin_panel.ask_for_broadcast(event)
+        
+    except Exception as e:
+        logger.error(f"❌ Error in broadcast_command_handler: {e}")
+
 @bot_client.on(events.NewMessage(pattern=r'/ban (\d+)'))
 async def ban_command_handler(event):
     """Handle /ban command"""
@@ -5431,66 +6114,14 @@ async def ban_command_handler(event):
             return
         
         target_id = int(event.pattern_match.group(1))
+        user_states[user_id] = {"action": "admin_ban"}
         
-        # Ban the user
-        result = await asyncio.get_running_loop().run_in_executor(
-            None, lambda: db_manager.db.users.update_one(
-                {"user_id": target_id},
-                {"$set": {"is_banned": True, "banned_at": datetime.now(timezone.utc).isoformat()}}
-            )
-        )
-        
-        if result.modified_count > 0:
-            await event.respond(f"✅ User `{target_id}` has been banned", parse_mode="md")
-            try:
-                await bot_client.send_message(
-                    target_id,
-                    "🚫 Your account has been banned. Contact @darkboxesAdmin for assistance."
-                )
-            except:
-                pass
-        else:
-            await event.respond(f"❌ User `{target_id}` not found", parse_mode="md")
+        # Simulate message event
+        event.text = str(target_id)
+        await handle_admin_ban(event)
         
     except Exception as e:
         logger.error(f"❌ Error in ban_command_handler: {e}")
-        await event.respond(f"❌ Error: {e}")
-
-@bot_client.on(events.NewMessage(pattern=r'/unban (\d+)'))
-async def unban_command_handler(event):
-    """Handle /unban command"""
-    try:
-        user_id = event.sender_id
-        
-        if not admin_panel.is_admin(user_id):
-            await event.respond("❌ Access denied. Admin privileges required.")
-            return
-        
-        target_id = int(event.pattern_match.group(1))
-        
-        # Unban the user
-        result = await asyncio.get_running_loop().run_in_executor(
-            None, lambda: db_manager.db.users.update_one(
-                {"user_id": target_id},
-                {"$set": {"is_banned": False}, "$unset": {"banned_at": ""}}
-            )
-        )
-        
-        if result.modified_count > 0:
-            await event.respond(f"✅ User `{target_id}` has been unbanned", parse_mode="md")
-            try:
-                await bot_client.send_message(
-                    target_id,
-                    "✅ Your account has been unbanned. You can now use the bot again."
-                )
-            except:
-                pass
-        else:
-            await event.respond(f"❌ User `{target_id}` not found or not banned", parse_mode="md")
-        
-    except Exception as e:
-        logger.error(f"❌ Error in unban_command_handler: {e}")
-        await event.respond(f"❌ Error: {e}")
 
 @bot_client.on(events.NewMessage(pattern=r'/addcredits (\d+) (\d+)'))
 async def add_credits_command_handler(event):
@@ -5504,49 +6135,14 @@ async def add_credits_command_handler(event):
         
         target_id = int(event.pattern_match.group(1))
         credits = int(event.pattern_match.group(2))
+        user_states[user_id] = {"action": "admin_add_credits"}
         
-        # Add credits to user
-        result = await asyncio.get_running_loop().run_in_executor(
-            None, lambda: db_manager.db.users.update_one(
-                {"user_id": target_id},
-                {"$inc": {"searches_remaining": credits}}
-            )
-        )
-        
-        if result.modified_count > 0:
-            # Get updated user info
-            user_info = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: db_manager.db.users.find_one({"user_id": target_id})
-            )
-            
-            new_balance = user_info.get('searches_remaining', 0) if user_info else 0
-            
-            await event.respond(
-                f"✅ **CREDITS ADDED**\n\n"
-                f"User: `{target_id}`\n"
-                f"Added: {credits} credits\n"
-                f"New Balance: {new_balance} credits",
-                parse_mode="md"
-            )
-            
-            # Notify user
-            try:
-                await bot_client.send_message(
-                    target_id,
-                    f"🎉 **CREDITS ADDED**\n\n"
-                    f"You received {credits} search credits!\n"
-                    f"New balance: {new_balance} credits\n\n"
-                    f"— DarkBoxes Admin Team",
-                    parse_mode="md"
-                )
-            except:
-                pass
-        else:
-            await event.respond(f"❌ User `{target_id}` not found", parse_mode="md")
+        # Simulate message event
+        event.text = f"{target_id} {credits}"
+        await handle_admin_add_credits(event)
         
     except Exception as e:
         logger.error(f"❌ Error in add_credits_command_handler: {e}")
-        await event.respond(f"❌ Error: {e}")
 
 @bot_client.on(events.NewMessage(pattern=r'/reply (\d+) (.+)'))
 async def admin_reply_handler(event):
@@ -5560,195 +6156,13 @@ async def admin_reply_handler(event):
         
         await bot_client.send_message(
             user_id,
-            f"👤 **ADMINISTRATOR RESPONSE**\n\n{message}\n\n— DarkBoxes Support Team",
-            parse_mode="md"
+            f"👤 **ADMINISTRATOR RESPONSE**\n\n{message}\n\n— DarkBoxes Support Team"
         )
         
         await event.respond(f"✅ Reply sent to user {user_id}")
         
     except Exception as e:
         logger.error(f"❌ Error in admin_reply_handler: {e}")
-        await event.respond(f"❌ Error: {e}")
-
-
-@bot_client.on(events.NewMessage(pattern=r'/userinfo (\d+)'))
-async def user_info_command(event):
-    """Get detailed user information"""
-    try:
-        if not admin_panel.is_admin(event.sender_id):
-            await event.respond("❌ Admin only")
-            return
-        
-        target_id = int(event.pattern_match.group(1))
-        
-        # Get user info
-        user = await asyncio.get_running_loop().run_in_executor(
-            None, lambda: db_manager.db.users.find_one({"user_id": target_id})
-        )
-        
-        if not user:
-            await event.respond(f"❌ User `{target_id}` not found", parse_mode="md")
-            return
-        
-        # Get search history
-        search_count = await asyncio.get_running_loop().run_in_executor(
-            None, lambda: db_manager.db.search_logs.count_documents({"user_id": target_id})
-        )
-        
-        msg = f"👤 **USER INFORMATION**\n\n"
-        msg += f"🆔 ID: `{target_id}`\n"
-        msg += f"👤 Name: {user.get('first_name', 'N/A')}\n"
-        msg += f"📱 Username: @{user.get('username', 'N/A')}\n"
-        msg += f"📅 Joined: {user.get('joined_at', 'N/A')[:10]}\n"
-        msg += f"💳 Credits: {user.get('searches_remaining', 0)}\n"
-        msg += f"🔍 Total Searches: {search_count}\n"
-        msg += f"👥 Referrals: {user.get('referrals', 0)}\n"
-        msg += f"🎫 Referral Code: `{user.get('referral_code', 'N/A')}`\n"
-        
-        if user.get('subscription'):
-            msg += f"\n👑 **SUBSCRIPTION**\n"
-            msg += f"Plan: {user.get('subscription')}\n"
-            msg += f"Expiry: {user.get('subscription_expiry', 'N/A')[:10]}\n"
-        
-        if user.get('is_banned'):
-            msg += f"\n🚫 **STATUS: BANNED**\n"
-            msg += f"Banned at: {user.get('banned_at', 'N/A')}\n"
-        
-        await event.respond(msg, parse_mode="md")
-        
-    except Exception as e:
-        logger.error(f"❌ User info error: {e}")
-        await event.respond(f"❌ Error: {e}")
-
-
-@bot_client.on(events.NewMessage(pattern=r'/listusers'))
-async def list_users_command(event):
-    """List recent users"""
-    try:
-        if not admin_panel.is_admin(event.sender_id):
-            await event.respond("❌ Admin only")
-            return
-        
-        # Get recent users
-        users = await asyncio.get_running_loop().run_in_executor(
-            None, lambda: list(db_manager.db.users.find().sort("joined_at", -1).limit(20))
-        )
-        
-        if not users:
-            await event.respond("📋 No users found")
-            return
-        
-        msg = f"📋 **RECENT USERS ({len(users)})**\n\n"
-        for i, user in enumerate(users, 1):
-            status = "🚫" if user.get('is_banned') else "✅"
-            sub = "👑" if user.get('subscription') else ""
-            msg += f"{i}. {status}{sub} {user.get('first_name', 'N/A')} - `{user['user_id']}`\n"
-            msg += f"   Credits: {user.get('searches_remaining', 0)} | Joined: {user.get('joined_at', 'N/A')[:10]}\n"
-        
-        msg += f"\nUse /userinfo <id> for details"
-        
-        await event.respond(msg, parse_mode="md")
-        
-    except Exception as e:
-        logger.error(f"❌ List users error: {e}")
-        await event.respond(f"❌ Error: {e}")
-
-
-@bot_client.on(events.NewMessage(pattern=r'/grantpremium (\d+) (\d+)'))
-async def grant_premium_command(event):
-    """Grant premium subscription to user"""
-    try:
-        if not admin_panel.is_admin(event.sender_id):
-            await event.respond("❌ Admin only")
-            return
-        
-        target_id = int(event.pattern_match.group(1))
-        days = int(event.pattern_match.group(2))
-        
-        expiry = datetime.now(timezone.utc) + timedelta(days=days)
-        
-        # Update user
-        result = await asyncio.get_running_loop().run_in_executor(
-            None, lambda: db_manager.db.users.update_one(
-                {"user_id": target_id},
-                {"$set": {
-                    "subscription": "premium",
-                    "subscription_expiry": expiry.isoformat(),
-                    "subscription_granted_at": datetime.now(timezone.utc).isoformat()
-                }}
-            )
-        )
-        
-        if result.modified_count > 0:
-            await event.respond(
-                f"✅ **PREMIUM GRANTED**\n\n"
-                f"User: `{target_id}`\n"
-                f"Duration: {days} days\n"
-                f"Expires: {expiry.strftime('%Y-%m-%d')}",
-                parse_mode="md"
-            )
-            
-            # Notify user
-            try:
-                await bot_client.send_message(
-                    target_id,
-                    f"🎉 **PREMIUM ACTIVATED**\n\n"
-                    f"You've been granted {days} days of Premium!\n\n"
-                    f"✨ Unlimited searches\n"
-                    f"⚡ Priority processing\n"
-                    f"📊 All premium databases\n\n"
-                    f"Expires: {expiry.strftime('%Y-%m-%d')}\n\n"
-                    f"— DarkBoxes Admin Team",
-                    parse_mode="md"
-                )
-            except:
-                pass
-        else:
-            await event.respond(f"❌ User `{target_id}` not found", parse_mode="md")
-        
-    except Exception as e:
-        logger.error(f"❌ Grant premium error: {e}")
-        await event.respond(f"❌ Error: {e}")
-
-
-@bot_client.on(events.NewMessage(pattern=r'/adminhelp'))
-async def admin_help_command(event):
-    """Show admin commands"""
-    try:
-        if not admin_panel.is_admin(event.sender_id):
-            await event.respond("❌ Admin only")
-            return
-        
-        help_msg = (
-            "🔧 **ADMIN COMMANDS**\n\n"
-            "**📊 Statistics**\n"
-            "`/admin` - Admin panel\n"
-            "`/stats` - Today's statistics\n"
-            "`/userinfo <id>` - User details\n"
-            "`/listusers` - Recent users\n\n"
-            "**👥 User Management**\n"
-            "`/ban <id>` - Ban user\n"
-            "`/unban <id>` - Unban user\n"
-            "`/addcredits <id> <amount>` - Add credits\n"
-            "`/grantpremium <id> <days>` - Grant premium\n\n"
-            "**📢 Broadcasting**\n"
-            "`/broadcast` - Start broadcast\n"
-            "`/cancel` - Cancel broadcast\n"
-            "`/confirm` - Confirm broadcast\n"
-            "`/broadcasts` - List broadcasts\n"
-            "`/broadcast_stats <id>` - View stats\n\n"
-            "**💬 Communication**\n"
-            "`/reply <id> <msg>` - Reply to user\n\n"
-            "**🔑 API Management**\n"
-            "`/create_api <id> <plan> <days>` - Create API key\n"
-            "`/list_api` - List API keys\n"
-        )
-        
-        await event.respond(help_msg, parse_mode="md")
-        
-    except Exception as e:
-        logger.error(f"❌ Admin help error: {e}")
-        await event.respond(f"❌ Error: {e}")
 
 @bot_client.on(events.NewMessage(pattern=r'/leak (.+)'))
 async def leak_command_handler(event):
@@ -6162,11 +6576,27 @@ class AdminPanelHandler:
             elif data == "admin_add_credits":
                 await self.ask_for_add_credits(event)
             
+            elif data == "admin_give_subscription":
+                await self.ask_for_give_subscription(event)
+            
             elif data == "admin_settings":
                 await self.show_bot_settings(event)
             
             elif data == "admin_export":
                 await self.export_data(event)
+            
+            elif data == "admin_broadcast_media":
+                await self.ask_for_broadcast_media(event)
+            
+            elif data == "admin_broadcast_history":
+                await self.show_broadcast_history(event)
+            
+            elif data == "admin_pending_payments":
+                await self.show_pending_payments(event)
+            
+            elif data.startswith("admin_broadcast_seen_"):
+                broadcast_id = data.split("admin_broadcast_seen_")[1]
+                await self.show_broadcast_seen(event, broadcast_id)
             
             elif data.startswith("confirm_ban_"):
                 target_id = int(data.split("_")[-1])
@@ -6903,6 +7333,166 @@ class AdminPanelHandler:
         )
         
         user_states[event.sender_id] = {"action": "admin_broadcast"}
+    
+    async def ask_for_broadcast_media(self, event):
+        """Ask admin to send media for broadcast"""
+        user_id = event.sender_id
+        
+        target_text = (
+            "🖼️ **MEDIA BROADCAST**\n\n"
+            "Choose broadcast target:\n"
+        )
+        buttons = [
+            [Button.inline("👥 All Users", "broadcast_media_all")],
+            [Button.inline("🔍 Selected Users", "broadcast_media_selected")],
+            [Button.inline("« Admin Panel", "admin_panel")]
+        ]
+        await event.edit(target_text, buttons=buttons, parse_mode="md")
+    
+    async def show_broadcast_history(self, event):
+        """Show broadcast history with seen counts"""
+        try:
+            broadcasts = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: list(db_manager.db.broadcasts.find(
+                    {}, {"broadcast_id": 1, "caption": 1, "total_recipients": 1,
+                         "sent_count": 1, "seen_by": 1, "timestamp": 1, "media_type": 1}
+                ).sort("timestamp", -1).limit(10))
+            )
+            
+            if not broadcasts:
+                await event.edit(
+                    "📋 **BROADCAST HISTORY**\n\nNo broadcasts sent yet.",
+                    buttons=OneLineKeyboard.back_to_admin()
+                )
+                return
+            
+            hist_text = "📋 **BROADCAST HISTORY** (Last 10)\n═══════════════════════\n\n"
+            buttons = []
+            
+            for bc in broadcasts:
+                bc_id = bc.get("broadcast_id", "N/A")
+                caption = (bc.get("caption", "")[:40] + "...") if len(bc.get("caption", "")) > 40 else bc.get("caption", "N/A")
+                sent = bc.get("sent_count", 0)
+                seen = len(bc.get("seen_by", []))
+                timestamp = bc.get("timestamp", "")[:16]
+                media_type = bc.get("media_type", "text")
+                
+                hist_text += (
+                    f"📡 ID: `{bc_id}`\n"
+                    f"   ├─ Type: {media_type}\n"
+                    f"   ├─ Caption: {caption}\n"
+                    f"   ├─ Sent: {sent} | Seen: {seen}\n"
+                    f"   └─ Time: {timestamp}\n\n"
+                )
+                buttons.append([Button.inline(f"👁️ {bc_id} — Seen by {seen}", f"admin_broadcast_seen_{bc_id}")])
+            
+            buttons.append([Button.inline("« Admin Panel", "admin_panel")])
+            
+            await event.edit(hist_text, buttons=buttons, parse_mode="md")
+            
+        except Exception as e:
+            logger.error(f"Error showing broadcast history: {e}")
+            await event.edit("❌ Error loading broadcast history", buttons=OneLineKeyboard.back_to_admin())
+    
+    async def show_broadcast_seen(self, event, broadcast_id: str):
+        """Show who has seen a broadcast"""
+        try:
+            broadcast = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: db_manager.db.broadcasts.find_one({"broadcast_id": broadcast_id})
+            )
+            
+            if not broadcast:
+                await event.answer("❌ Broadcast not found", alert=True)
+                return
+            
+            seen_by = broadcast.get("seen_by", [])
+            sent_count = broadcast.get("sent_count", 0)
+            
+            seen_text = (
+                f"👁️ **BROADCAST SEEN REPORT**\n\n"
+                f"📡 Broadcast ID: `{broadcast_id}`\n"
+                f"📤 Total Sent: {sent_count}\n"
+                f"👁️ Total Seen: {len(seen_by)}\n"
+                f"📊 Seen Rate: {(len(seen_by)/sent_count*100):.1f}% \n\n" if sent_count > 0 else f"📊 No sent data\n\n"
+            )
+            
+            if seen_by:
+                seen_text += "**Users who have seen:**\n"
+                for uid in seen_by[:20]:
+                    seen_text += f"• `{uid}`\n"
+                if len(seen_by) > 20:
+                    seen_text += f"... and {len(seen_by)-20} more\n"
+            else:
+                seen_text += "No users have seen this broadcast yet."
+            
+            await event.edit(seen_text, buttons=[[Button.inline("« Broadcast History", "admin_broadcast_history")]], parse_mode="md")
+            
+        except Exception as e:
+            logger.error(f"Error showing broadcast seen: {e}")
+            await event.answer("❌ Error loading seen report", alert=True)
+    
+    async def show_pending_payments(self, event):
+        """Show pending payments waiting for admin approval"""
+        try:
+            pending = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: list(db_manager.db.pending_payments.find(
+                    {"status": "pending"}
+                ).sort("timestamp", -1).limit(20))
+            )
+            
+            if not pending:
+                await event.edit(
+                    "💳 **PENDING PAYMENTS**\n\n✅ No pending payments!\nAll payments have been processed.",
+                    buttons=OneLineKeyboard.back_to_admin()
+                )
+                return
+            
+            text = f"💳 **PENDING PAYMENTS** ({len(pending)} awaiting)\n═══════════════════════\n\n"
+            buttons = []
+            
+            for p in pending:
+                pay_id = p.get("payment_id", "N/A")
+                uid = p.get("user_id", "N/A")
+                fname = p.get("first_name", "N/A")
+                plan = p.get("plan_name", "N/A")
+                amount = p.get("amount", 0)
+                ts = p.get("timestamp", "")[:16]
+                
+                text += (
+                    f"🔖 ID: `{pay_id}`\n"
+                    f"   ├─ User: {fname} (`{uid}`)\n"
+                    f"   ├─ Plan: {plan} — ₹{amount}\n"
+                    f"   └─ Time: {ts}\n\n"
+                )
+                plan_id = p.get("plan_id", "basic")
+                buttons.append([
+                    Button.inline(f"✅ Approve {pay_id}", f"approve_payment_{pay_id}_{uid}_{plan_id}"),
+                    Button.inline(f"❌ Reject", f"reject_payment_{pay_id}_{uid}")
+                ])
+            
+            buttons.append([Button.inline("« Admin Panel", "admin_panel")])
+            
+            await event.edit(text, buttons=buttons, parse_mode="md")
+            
+        except Exception as e:
+            logger.error(f"Error showing pending payments: {e}")
+            await event.edit("❌ Error loading pending payments", buttons=OneLineKeyboard.back_to_admin())
+    
+    async def ask_for_give_subscription(self, event):
+        """Ask admin to give subscription to user"""
+        await event.edit(
+            "💎 **GIVE SUBSCRIPTION**\n\n"
+            "Enter: `user_id plan_name`\n\n"
+            "Available plans:\n"
+            "• `basic` — 10 searches, 7 days\n"
+            "• `standard` — 30 searches, 15 days\n"
+            "• `premium` — Unlimited, 30 days\n\n"
+            "**Example:** `123456789 premium`\n\n"
+            "Or to select from user list, first search the user via Search Users.",
+            buttons=OneLineKeyboard.back_to_admin(),
+            parse_mode="md"
+        )
+        user_states[event.sender_id] = {"action": "admin_give_subscription"}
 
 # ================== SEARCH ENGINE WITH PRIORITY MANAGEMENT ==================
 
@@ -7677,473 +8267,66 @@ async def list_api_command(event):
 
 @bot_client.on(events.CallbackQuery(pattern=r'^api_plan_(basic|pro|enterprise)$'))
 async def api_plan_callback(event):
-    """Handle plan selection"""
+    """Handle plan selection with screenshot payment flow"""
     try:
         plan = event.data.decode().split('_')[-1]
         prices = {'basic': 499, 'pro': 999, 'enterprise': 2999}
+        calls = {'basic': 1000, 'pro': 5000, 'enterprise': 20000}
+        user_id = event.sender_id
         
-        await event.edit(
-            f"💳 **{plan.upper()}** - ₹{prices[plan]}\n\n"
-            f"Pay to: `{config.UPI_ID}`\n"
-            f"Then contact {config.ADMIN_CONTACT}\n"
-            f"With your ID: `{event.sender_id}`",
-            buttons=[[Button.inline("« Back", "api_plans")]],
-            parse_mode="md"
+        plan_text = (
+            f"🔑 **API {plan.upper()} PLAN**\n\n"
+            f"💰 Price: ₹{prices[plan]}/month\n"
+            f"📊 API Calls: {calls[plan]:,}/month\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"**How to purchase:**\n\n"
+            f"1️⃣ Pay ₹{prices[plan]} to UPI:\n"
+            f"   `{config.UPI_ID}`\n\n"
+            f"2️⃣ Take screenshot of payment\n\n"
+            f"3️⃣ Tap button below to submit screenshot\n"
+            f"   Your ID: `{user_id}`\n\n"
+            f"⏱️ Activation within 5-10 minutes\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━"
         )
+        
+        buttons = [
+            [Button.inline(f"📤 Submit Payment Screenshot", f"submit_api_payment_{plan}")],
+            [Button.inline("« Back", "api_plans")]
+        ]
+        
+        await event.edit(plan_text, buttons=buttons, parse_mode="md")
     except Exception as e:
         logger.error(f"plan callback error: {e}")
-
-
-# ================== BROADCAST FUNCTIONALITY ==================
-
-class BroadcastManager:
-    """Manage broadcasts and track views"""
-    
-    def __init__(self, db_manager, bot_client):
-        self.db = db_manager.db
-        self.bot = bot_client
-        self.active_broadcast = None
-    
-    async def create_broadcast(self, message_text: str = None, photo_path: str = None, admin_id: int = None) -> str:
-        """Create a new broadcast"""
-        try:
-            broadcast_id = str(uuid.uuid4())
-            
-            broadcast_doc = {
-                "broadcast_id": broadcast_id,
-                "admin_id": admin_id,
-                "message_text": message_text,
-                "photo_path": photo_path,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "total_sent": 0,
-                "total_views": 0,
-                "total_users": 0,
-                "status": "pending"
-            }
-            
-            await asyncio.get_running_loop().run_in_executor(
-                None, lambda: self.db.broadcasts.insert_one(broadcast_doc)
-            )
-            
-            logger.info(f"📢 Created broadcast: {broadcast_id}")
-            return broadcast_id
-            
-        except Exception as e:
-            logger.error(f"❌ Error creating broadcast: {e}")
-            return None
-    
-    async def send_broadcast(self, broadcast_id: str, message_text: str = None, photo_path: str = None) -> Dict:
-        """Send broadcast to all users"""
-        try:
-            # Get all active users
-            users = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: list(self.db.users.find({"is_banned": {"$ne": True}}))
-            )
-            
-            total_users = len(users)
-            success_count = 0
-            failed_count = 0
-            
-            for user in users:
-                try:
-                    user_id = user['user_id']
-                    
-                    # Create view tracking button
-                    buttons = [[Button.inline("✅ Mark as Read", f"broadcast_view_{broadcast_id}")]]
-                    
-                    # Send message
-                    if photo_path:
-                        await self.bot.send_file(
-                            user_id,
-                            photo_path,
-                            caption=message_text,
-                            buttons=buttons,
-                            parse_mode="md"
-                        )
-                    else:
-                        await self.bot.send_message(
-                            user_id,
-                            message_text,
-                            buttons=buttons,
-                            parse_mode="md"
-                        )
-                    
-                    success_count += 1
-                    await asyncio.sleep(0.05)  # Rate limiting
-                    
-                except Exception as e:
-                    failed_count += 1
-                    logger.warning(f"Failed to send to {user_id}: {e}")
-            
-            # Update broadcast stats
-            await asyncio.get_running_loop().run_in_executor(
-                None, lambda: self.db.broadcasts.update_one(
-                    {"broadcast_id": broadcast_id},
-                    {"$set": {
-                        "total_sent": success_count,
-                        "total_users": total_users,
-                        "status": "completed",
-                        "completed_at": datetime.now(timezone.utc).isoformat()
-                    }}
-                )
-            )
-            
-            return {
-                "success": True,
-                "total_users": total_users,
-                "success_count": success_count,
-                "failed_count": failed_count
-            }
-            
-        except Exception as e:
-            logger.error(f"❌ Error sending broadcast: {e}")
-            return {"success": False, "error": str(e)}
-    
-    async def record_view(self, broadcast_id: str, user_id: int) -> bool:
-        """Record that a user viewed the broadcast"""
-        try:
-            view_doc = {
-                "broadcast_id": broadcast_id,
-                "user_id": user_id,
-                "viewed_at": datetime.now(timezone.utc).isoformat()
-            }
-            
-            await asyncio.get_running_loop().run_in_executor(
-                None, lambda: self.db.broadcast_views.update_one(
-                    {"broadcast_id": broadcast_id, "user_id": user_id},
-                    {"$setOnInsert": view_doc},
-                    upsert=True
-                )
-            )
-            
-            # Update broadcast view count
-            total_views = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: self.db.broadcast_views.count_documents({"broadcast_id": broadcast_id})
-            )
-            
-            await asyncio.get_running_loop().run_in_executor(
-                None, lambda: self.db.broadcasts.update_one(
-                    {"broadcast_id": broadcast_id},
-                    {"$set": {"total_views": total_views}}
-                )
-            )
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Error recording view: {e}")
-            return False
-    
-    async def get_broadcast_stats(self, broadcast_id: str) -> Dict:
-        """Get statistics for a broadcast"""
-        try:
-            broadcast = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: self.db.broadcasts.find_one({"broadcast_id": broadcast_id})
-            )
-            
-            if not broadcast:
-                return {"success": False, "error": "Broadcast not found"}
-            
-            # Get viewers
-            viewers = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: list(self.db.broadcast_views.find({"broadcast_id": broadcast_id}))
-            )
-            
-            # Get viewer details
-            viewer_details = []
-            for view in viewers:
-                user = await asyncio.get_running_loop().run_in_executor(
-                    None, lambda: self.db.users.find_one({"user_id": view['user_id']})
-                )
-                if user:
-                    viewer_details.append({
-                        "user_id": view['user_id'],
-                        "username": user.get('username', 'N/A'),
-                        "first_name": user.get('first_name', 'N/A'),
-                        "viewed_at": view['viewed_at']
-                    })
-            
-            return {
-                "success": True,
-                "broadcast": broadcast,
-                "total_sent": broadcast.get('total_sent', 0),
-                "total_views": broadcast.get('total_views', 0),
-                "total_users": broadcast.get('total_users', 0),
-                "viewers": viewer_details,
-                "view_percentage": round((broadcast.get('total_views', 0) / broadcast.get('total_sent', 1)) * 100, 2)
-            }
-            
-        except Exception as e:
-            logger.error(f"❌ Error getting broadcast stats: {e}")
-            return {"success": False, "error": str(e)}
-
-
-# Initialize broadcast manager (will be set in main())
-broadcast_manager = None
-
-
-@bot_client.on(events.NewMessage(pattern=r'/broadcast'))
-async def broadcast_command(event):
-    """Admin command to start broadcast"""
-    try:
-        if not admin_panel.is_admin(event.sender_id):
-            await event.respond("❌ Admin only")
-            return
-        
-        await event.respond(
-            "📢 **BROADCAST MESSAGE**\n\n"
-            "Send your message or photo with caption to broadcast.\n\n"
-            "Commands:\n"
-            "• Send text message to broadcast text\n"
-            "• Send photo with caption to broadcast photo\n"
-            "• /cancel - Cancel broadcast\n\n"
-            "⚠️ Next message will be broadcasted to all users!",
-            parse_mode="md"
-        )
-        
-        # Set admin in broadcast mode
-        broadcast_manager.active_broadcast = {
-            "admin_id": event.sender_id,
-            "waiting_for": "message",
-            "started_at": datetime.now(timezone.utc)
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ Broadcast command error: {e}")
-        await event.respond(f"❌ Error: {e}")
-
-
-@bot_client.on(events.NewMessage(pattern=r'/cancel'))
-async def cancel_broadcast_command(event):
-    """Cancel active broadcast"""
-    try:
-        if not admin_panel.is_admin(event.sender_id):
-            return
-        
-        if broadcast_manager.active_broadcast and broadcast_manager.active_broadcast.get('admin_id') == event.sender_id:
-            broadcast_manager.active_broadcast = None
-            await event.respond("✅ Broadcast cancelled")
-        else:
-            await event.respond("❌ No active broadcast to cancel")
-            
-    except Exception as e:
-        logger.error(f"❌ Cancel broadcast error: {e}")
-
-
-@bot_client.on(events.NewMessage())
-async def handle_broadcast_message(event):
-    """Handle broadcast message from admin"""
-    try:
-        # Check if admin is in broadcast mode
-        if not broadcast_manager.active_broadcast:
-            return
-        
-        if broadcast_manager.active_broadcast.get('admin_id') != event.sender_id:
-            return
-        
-        # Skip command messages
-        if event.message.text and event.message.text.startswith('/'):
-            return
-        
-        # Get message content
-        message_text = event.message.text or event.message.message
-        photo_path = None
-        
-        # Check for photo
-        if event.message.photo:
-            # Download photo
-            photo_path = f"/tmp/broadcast_{uuid.uuid4()}.jpg"
-            await bot_client.download_media(event.message.photo, photo_path)
-        
-        # Create broadcast
-        broadcast_id = await broadcast_manager.create_broadcast(
-            message_text=message_text,
-            photo_path=photo_path,
-            admin_id=event.sender_id
-        )
-        
-        if not broadcast_id:
-            await event.respond("❌ Failed to create broadcast")
-            broadcast_manager.active_broadcast = None
-            return
-        
-        # Confirm with admin
-        confirm_msg = "📢 **CONFIRM BROADCAST**\n\n"
-        if photo_path:
-            confirm_msg += "📸 Type: Photo with caption\n"
-        else:
-            confirm_msg += "📝 Type: Text message\n"
-        confirm_msg += f"\n**Preview:**\n{message_text[:200]}{'...' if len(message_text) > 200 else ''}\n\n"
-        confirm_msg += "Send /confirm to broadcast or /cancel to cancel"
-        
-        await event.respond(confirm_msg, parse_mode="md")
-        
-        # Update broadcast mode
-        broadcast_manager.active_broadcast.update({
-            "broadcast_id": broadcast_id,
-            "message_text": message_text,
-            "photo_path": photo_path,
-            "waiting_for": "confirmation"
-        })
-        
-    except Exception as e:
-        logger.error(f"❌ Handle broadcast message error: {e}")
-        broadcast_manager.active_broadcast = None
-
-
-@bot_client.on(events.NewMessage(pattern=r'/confirm'))
-async def confirm_broadcast_command(event):
-    """Confirm and send broadcast"""
-    try:
-        if not admin_panel.is_admin(event.sender_id):
-            return
-        
-        if not broadcast_manager.active_broadcast or broadcast_manager.active_broadcast.get('admin_id') != event.sender_id:
-            await event.respond("❌ No broadcast to confirm")
-            return
-        
-        if broadcast_manager.active_broadcast.get('waiting_for') != "confirmation":
-            await event.respond("❌ No broadcast pending confirmation")
-            return
-        
-        # Get broadcast details
-        broadcast_id = broadcast_manager.active_broadcast['broadcast_id']
-        message_text = broadcast_manager.active_broadcast['message_text']
-        photo_path = broadcast_manager.active_broadcast.get('photo_path')
-        
-        # Send status message
-        status_msg = await event.respond("📤 **Broadcasting...**\n\nPlease wait...", parse_mode="md")
-        
-        # Send broadcast
-        result = await broadcast_manager.send_broadcast(broadcast_id, message_text, photo_path)
-        
-        # Clear broadcast mode
-        broadcast_manager.active_broadcast = None
-        
-        # Send result
-        if result['success']:
-            await status_msg.edit(
-                f"✅ **BROADCAST COMPLETE**\n\n"
-                f"📊 Total Users: {result['total_users']}\n"
-                f"✅ Sent: {result['success_count']}\n"
-                f"❌ Failed: {result['failed_count']}\n\n"
-                f"🆔 Broadcast ID: `{broadcast_id}`\n\n"
-                f"Use /broadcast_stats {broadcast_id} to view stats",
-                parse_mode="md"
-            )
-        else:
-            await status_msg.edit(f"❌ Broadcast failed: {result.get('error')}", parse_mode="md")
-        
-        # Clean up photo if exists
-        if photo_path and os.path.exists(photo_path):
-            try:
-                os.remove(photo_path)
-            except:
-                pass
-        
-    except Exception as e:
-        logger.error(f"❌ Confirm broadcast error: {e}")
-        await event.respond(f"❌ Error: {e}")
-        broadcast_manager.active_broadcast = None
-
-
-@bot_client.on(events.NewMessage(pattern=r'/broadcast_stats\s+(.+)'))
-async def broadcast_stats_command(event):
-    """View broadcast statistics"""
-    try:
-        if not admin_panel.is_admin(event.sender_id):
-            await event.respond("❌ Admin only")
-            return
-        
-        broadcast_id = event.pattern_match.group(1).strip()
-        
-        stats = await broadcast_manager.get_broadcast_stats(broadcast_id)
-        
-        if not stats['success']:
-            await event.respond(f"❌ {stats.get('error', 'Unknown error')}")
-            return
-        
-        # Format stats message
-        msg = f"📊 **BROADCAST STATISTICS**\n\n"
-        msg += f"🆔 ID: `{broadcast_id}`\n"
-        msg += f"📅 Created: {stats['broadcast'].get('created_at', 'N/A')}\n"
-        msg += f"📊 Status: {stats['broadcast'].get('status', 'Unknown')}\n\n"
-        msg += f"📈 **METRICS**\n"
-        msg += f"├─ Total Sent: {stats['total_sent']}\n"
-        msg += f"├─ Total Views: {stats['total_views']}\n"
-        msg += f"└─ View Rate: {stats['view_percentage']}%\n\n"
-        
-        if stats['viewers']:
-            msg += f"👁️ **VIEWERS ({len(stats['viewers'])})**\n"
-            for i, viewer in enumerate(stats['viewers'][:20], 1):
-                msg += f"{i}. {viewer['first_name']} (@{viewer['username']}) - `{viewer['user_id']}`\n"
-            
-            if len(stats['viewers']) > 20:
-                msg += f"\n... and {len(stats['viewers']) - 20} more"
-        else:
-            msg += "👁️ **VIEWERS**: None yet"
-        
-        await event.respond(msg, parse_mode="md")
-        
-    except Exception as e:
-        logger.error(f"❌ Broadcast stats error: {e}")
-        await event.respond(f"❌ Error: {e}")
-
-
-@bot_client.on(events.CallbackQuery(pattern=r'^broadcast_view_(.+)$'))
-async def broadcast_view_callback(event):
-    """Handle broadcast view tracking"""
-    try:
-        broadcast_id = event.data.decode().split('_')[-1]
-        
-        # Record view
-        success = await broadcast_manager.record_view(broadcast_id, event.sender_id)
-        
-        if success:
-            await event.answer("✅ Marked as read", alert=False)
-            # Update button
-            try:
-                await event.edit(buttons=[[Button.inline("✅ Read", f"broadcast_viewed_{broadcast_id}")]])
-            except:
-                pass
-        else:
-            await event.answer("❌ Failed to mark as read", alert=True)
-        
-    except Exception as e:
-        logger.error(f"❌ Broadcast view callback error: {e}")
         await event.answer("❌ Error", alert=True)
 
 
-@bot_client.on(events.NewMessage(pattern=r'/broadcasts'))
-async def list_broadcasts_command(event):
-    """List all broadcasts"""
+@bot_client.on(events.CallbackQuery(pattern=r'^submit_api_payment_(basic|pro|enterprise)$'))
+async def submit_api_payment_callback(event):
+    """Handle API plan payment screenshot submission"""
     try:
-        if not admin_panel.is_admin(event.sender_id):
-            await event.respond("❌ Admin only")
-            return
+        plan = event.data.decode().split('_')[-1]
+        prices = {'basic': 499, 'pro': 999, 'enterprise': 2999}
+        user_id = event.sender_id
         
-        broadcasts = await asyncio.get_running_loop().run_in_executor(
-            None, lambda: list(db_manager.db.broadcasts.find().sort("created_at", -1).limit(10))
+        user_states[user_id] = {
+            "action": "awaiting_payment_screenshot",
+            "plan_id": f"api_{plan}",
+            "plan_name": f"API {plan.title()} Plan",
+            "plan_price": prices[plan]
+        }
+        
+        await event.edit(
+            f"📸 **SEND API PAYMENT SCREENSHOT**\n\n"
+            f"Plan: **API {plan.title()}** — ₹{prices[plan]}/month\n\n"
+            f"Please send your payment screenshot as a **photo** now.\n"
+            f"Admin will verify and activate your API key shortly.\n\n"
+            f"Your ID: `{user_id}`",
+            buttons=[[Button.inline("❌ Cancel", "api_menu")]],
+            parse_mode="md"
         )
-        
-        if not broadcasts:
-            await event.respond("📢 No broadcasts found")
-            return
-        
-        msg = "📢 **RECENT BROADCASTS**\n\n"
-        for i, bc in enumerate(broadcasts, 1):
-            msg += f"{i}. `{bc['broadcast_id']}`\n"
-            msg += f"   ├─ Sent: {bc.get('total_sent', 0)}\n"
-            msg += f"   ├─ Views: {bc.get('total_views', 0)}\n"
-            msg += f"   └─ Date: {bc.get('created_at', 'N/A')[:10]}\n\n"
-        
-        msg += "Use /broadcast_stats <id> to view details"
-        
-        await event.respond(msg, parse_mode="md")
-        
     except Exception as e:
-        logger.error(f"❌ List broadcasts error: {e}")
-        await event.respond(f"❌ Error: {e}")
+        logger.error(f"submit_api_payment error: {e}")
+        await event.answer("❌ Error", alert=True)
 
 
 # ================== CLEANUP TASK ==================
@@ -8192,7 +8375,7 @@ async def cleanup_expired_searches():
 
 async def main():
     """Main function"""
-    global search_engine, admin_panel, bot_info, api_handler, broadcast_manager
+    global search_engine, admin_panel, bot_info, api_handler
     
     try:
         logger.info("🚀 Starting DarkBoxes Intelligence System...")
@@ -8226,10 +8409,6 @@ async def main():
         # Initialize API handler
         logger.info("🔑 Initializing API handler...")
         api_handler = APIHandler(db_manager, search_engine)
-        
-        # Initialize broadcast manager
-        logger.info("📢 Initializing broadcast manager...")
-        broadcast_manager = BroadcastManager(db_manager, bot_client)
         
         # Resolve groups
         logger.info("📡 Connecting to intelligence networks...")
