@@ -1002,7 +1002,7 @@ class DatabaseManager:
                 None, lambda: self.db.api_keys.create_index([("user_id", 1)])
             )
             await asyncio.get_running_loop().run_in_executor(
-                None, lambda: self.db.api_requests.create_index([("timestamp", -1)])
+                None, lambda: self.db.api_logs.create_index([("timestamp", -1)])
             )
             
             logger.info("✅ MongoDB connected")
@@ -1767,104 +1767,97 @@ class AdminPanelHandler:
         """Handle admin panel callbacks"""
         try:
             user_id = event.sender_id
-            
+
             if not self.is_admin(user_id):
                 await event.answer("❌ Access denied", alert=True)
                 return
-            
+
             data = event.data.decode()
-            
+
             if data == "admin_panel":
                 await self.show_admin_panel(event)
-            
             elif data == "admin_today":
                 await self.show_today_stats(event)
-            
             elif data.startswith("admin_user_list_"):
                 page = int(data.split("_")[-1])
                 await self.show_user_list(event, page)
-            
             elif data == "admin_users":
                 await self.show_user_management(event)
-            
             elif data == "admin_top_users":
                 await self.show_top_users(event)
-            
             elif data == "admin_referrals":
                 await self.show_referral_stats(event)
-            
             elif data == "admin_analytics":
                 await self.show_analytics_panel(event)
-            
             elif data == "admin_command_stats":
                 await self.show_command_stats(event)
-            
             elif data == "admin_top_commands":
                 await self.show_top_commands(event)
-            
             elif data == "admin_user_activity":
                 await self.show_user_activity(event)
-            
             elif data == "admin_graph_daily":
                 await self.generate_daily_graph(event)
-            
             elif data == "admin_payments":
                 await self.show_payment_panel(event)
-            
             elif data == "admin_today_payments":
                 await self.show_today_payments(event)
-            
             elif data == "admin_total_revenue":
                 await self.show_total_revenue(event)
-            
             elif data == "admin_graph_revenue":
                 await self.generate_revenue_graph(event)
-            
             elif data == "admin_search_user":
                 await self.ask_for_user_search(event)
-            
             elif data == "admin_broadcast":
                 await self.ask_for_broadcast(event)
-            
+            elif data == "admin_broadcast_media":
+                await self.ask_for_broadcast_media(event)
+            elif data == "admin_broadcast_history":
+                await self.show_broadcast_history(event)
+            elif data == "admin_pending_payments":
+                await self.show_pending_payments(event)
+            elif data.startswith("admin_broadcast_seen_"):
+                broadcast_id = data[len("admin_broadcast_seen_"):]
+                await self.show_broadcast_seen(event, broadcast_id)
             elif data == "admin_ban":
                 await self.ask_for_ban_user(event)
-            
             elif data == "admin_admin":
                 await self.ask_for_admin_management(event)
-            
             elif data == "admin_add_credits":
                 await self.ask_for_add_credits(event)
-            
+            elif data == "admin_give_subscription":
+                await self.ask_for_give_subscription(event)
             elif data == "admin_settings":
                 await self.show_bot_settings(event)
-            
             elif data == "admin_export":
                 await self.export_data(event)
-            
+            elif data == "admin_api":
+                await self.show_api_panel(event)
+            elif data == "admin_api_stats":
+                await self.show_api_stats(event)
+            elif data == "admin_api_user":
+                await self.ask_for_api_user_management(event)
+            elif data == "admin_api_analytics":
+                await self.show_api_analytics(event)
+            elif data == "admin_api_revoke":
+                await self.ask_for_api_revoke(event)
             elif data.startswith("confirm_ban_"):
                 target_id = int(data.split("_")[-1])
                 await self.confirm_ban_user(event, target_id)
-            
             elif data.startswith("confirm_unban_"):
                 target_id = int(data.split("_")[-1])
                 await self.confirm_unban_user(event, target_id)
-            
             elif data.startswith("confirm_add_admin_"):
                 target_id = int(data.split("_")[-1])
                 await self.confirm_add_admin(event, target_id)
-            
             elif data.startswith("confirm_remove_admin_"):
                 target_id = int(data.split("_")[-1])
                 await self.confirm_remove_admin(event, target_id)
-            
             elif data.startswith("user_detail_"):
                 target_id = int(data.split("_")[-1])
                 await self.show_user_detail(event, target_id)
-            
             elif data.startswith("admin_give_sub_"):
                 target_id = int(data.split("_")[-1])
                 await self.show_give_sub_for_user(event, target_id)
-            
             elif data.startswith("admin_add_credits_user_"):
                 target_id = int(data.split("_")[-1])
                 user_states[event.sender_id] = {
@@ -1872,12 +1865,37 @@ class AdminPanelHandler:
                     "preset_user_id": target_id
                 }
                 await event.edit(
-                    f"🎯 **ADD CREDITS TO USER {target_id}**\n\n"
-                    f"Enter number of credits to add (1-1000):\n"
+                    f"🎯 **ADD CREDITS TO USER** `{target_id}`\n\n"
+                    f"Enter number of credits to add (1–10000):\n"
                     f"Just type the number:",
-                    buttons=OneLineKeyboard.back_to_admin()
+                    buttons=OneLineKeyboard.back_to_admin(),
+                    parse_mode="md"
                 )
-            
+            elif data.startswith("confirm_create_api_"):
+                parts = data.split("_")
+                if len(parts) >= 5:
+                    plan_id = parts[3]
+                    days = int(parts[4])
+                    await self.confirm_create_api_key(event, plan_id, days)
+            elif data.startswith("confirm_revoke_api_"):
+                api_key = data.split("_", 3)[3]
+                await self.confirm_revoke_api_key(event, api_key)
+            elif data == "api_menu":
+                await self.show_api_menu(event)
+            elif data == "my_api_keys":
+                await self.show_my_api_keys(event)
+            elif data == "api_usage":
+                await self.show_api_usage(event)
+            elif data == "api_plans":
+                await self.show_api_plans(event)
+            elif data == "api_docs":
+                await self.show_api_docs(event)
+            elif data.startswith("api_plan_"):
+                plan_id = data.split("_", 2)[2]
+                await self.show_api_plan_details(event, plan_id)
+            elif data == "create_api_key":
+                await self.ask_for_api_plan_selection(event)
+
         except Exception as e:
             logger.error(f"❌ Error in admin callback: {e}")
             await event.answer("❌ Error processing request", alert=True)
@@ -2887,11 +2905,445 @@ class AdminPanelHandler:
             logger.error(f"Error in show_give_sub_for_user: {e}")
             await event.answer("❌ Error", alert=True)
 
+    async def ask_for_broadcast_media(self, event):
+        """Ask admin to choose media broadcast target"""
+        buttons = [
+            [Button.inline("👥 All Users", "broadcast_media_all")],
+            [Button.inline("🎯 Selected Users (by ID)", "broadcast_media_selected")],
+            [Button.inline("« Admin Panel", "admin_panel")]
+        ]
+        await event.edit(
+            "🖼️ **MEDIA BROADCAST**\n\n"
+            "Send a photo or video with caption to users.\n\n"
+            "Choose target audience:",
+            buttons=buttons,
+            parse_mode="md"
+        )
+
+    async def show_broadcast_history(self, event):
+        """Show broadcast history with seen counts"""
+        try:
+            broadcasts = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: list(db_manager.db.broadcasts.find(
+                    {}, {"broadcast_id": 1, "caption": 1, "total_recipients": 1,
+                         "sent_count": 1, "seen_by": 1, "timestamp": 1, "media_type": 1}
+                ).sort("timestamp", -1).limit(10))
+            )
+
+            if not broadcasts:
+                await event.edit(
+                    "📋 **BROADCAST HISTORY**\n\nNo broadcasts sent yet.",
+                    buttons=[[Button.inline("« Admin Panel", "admin_panel")]]
+                )
+                return
+
+            hist_text = "📋 **BROADCAST HISTORY** (Last 10)\n═══════════════════════\n\n"
+            buttons = []
+
+            for bc in broadcasts:
+                bc_id = bc.get("broadcast_id", "N/A")
+                caption_raw = bc.get("caption", "N/A")
+                caption = (caption_raw[:35] + "...") if len(caption_raw) > 35 else caption_raw
+                sent = bc.get("sent_count", 0)
+                seen = len(bc.get("seen_by", []))
+                timestamp = bc.get("timestamp", "")[:16]
+                media_type = bc.get("media_type", "text")
+
+                hist_text += (
+                    f"📡 **{bc_id}** [{media_type}]\n"
+                    f"   ├─ {caption}\n"
+                    f"   ├─ Sent: {sent} | Seen: {seen}\n"
+                    f"   └─ {timestamp}\n\n"
+                )
+                buttons.append([Button.inline(
+                    f"👁️ {bc_id} — {seen} seen",
+                    f"admin_broadcast_seen_{bc_id}"
+                )])
+
+            buttons.append([Button.inline("« Admin Panel", "admin_panel")])
+            await event.edit(hist_text, buttons=buttons, parse_mode="md")
+
+        except Exception as e:
+            logger.error(f"Error showing broadcast history: {e}")
+            await event.edit("❌ Error loading broadcast history", buttons=OneLineKeyboard.back_to_admin())
+
+    async def show_broadcast_seen(self, event, broadcast_id: str):
+        """Show who has seen a specific broadcast"""
+        try:
+            broadcast = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: db_manager.db.broadcasts.find_one({"broadcast_id": broadcast_id})
+            )
+
+            if not broadcast:
+                await event.answer("❌ Broadcast not found", alert=True)
+                return
+
+            seen_by = broadcast.get("seen_by", [])
+            sent_count = broadcast.get("sent_count", 0)
+            seen_rate = f"{(len(seen_by)/sent_count*100):.1f}%" if sent_count > 0 else "N/A"
+
+            seen_text = (
+                f"👁️ **BROADCAST SEEN REPORT**\n\n"
+                f"📡 ID: `{broadcast_id}`\n"
+                f"📤 Total Sent: {sent_count}\n"
+                f"👁️ Seen By: {len(seen_by)}\n"
+                f"📊 Seen Rate: {seen_rate}\n\n"
+            )
+
+            if seen_by:
+                seen_text += "**Users who have seen:**\n"
+                for uid in seen_by[:25]:
+                    seen_text += f"• `{uid}`\n"
+                if len(seen_by) > 25:
+                    seen_text += f"... and {len(seen_by)-25} more\n"
+            else:
+                seen_text += "_No users have seen this broadcast yet._"
+
+            await event.edit(
+                seen_text,
+                buttons=[[Button.inline("« Broadcast History", "admin_broadcast_history")]],
+                parse_mode="md"
+            )
+
+        except Exception as e:
+            logger.error(f"Error showing broadcast seen: {e}")
+            await event.answer("❌ Error loading seen report", alert=True)
+
+    async def show_pending_payments(self, event):
+        """Show all pending payment screenshots awaiting approval"""
+        try:
+            pending = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: list(db_manager.db.pending_payments.find(
+                    {"status": "pending"}
+                ).sort("timestamp", -1).limit(20))
+            )
+
+            if not pending:
+                await event.edit(
+                    "💳 **PENDING PAYMENTS**\n\n✅ No pending payments! All clear.",
+                    buttons=[[Button.inline("« Admin Panel", "admin_panel")]]
+                )
+                return
+
+            text = f"💳 **PENDING PAYMENTS** ({len(pending)} awaiting)\n═══════════════════════\n\n"
+            buttons = []
+
+            for p in pending:
+                pay_id = p.get("payment_id", "N/A")
+                uid = p.get("user_id", "N/A")
+                fname = p.get("first_name", "N/A")
+                plan_name = p.get("plan_name", "N/A")
+                amount = p.get("amount", 0)
+                ts = p.get("timestamp", "")[:16]
+                plan_id = p.get("plan_id", "basic")
+
+                text += (
+                    f"🔖 **{pay_id}**\n"
+                    f"   ├─ {fname} (`{uid}`)\n"
+                    f"   ├─ {plan_name} — ₹{amount}\n"
+                    f"   └─ {ts}\n\n"
+                )
+                buttons.append([
+                    Button.inline(f"✅ {pay_id}", f"approve_payment_{pay_id}_{uid}_{plan_id}"),
+                    Button.inline("❌ Reject", f"reject_payment_{pay_id}_{uid}")
+                ])
+
+            buttons.append([Button.inline("« Admin Panel", "admin_panel")])
+            await event.edit(text, buttons=buttons, parse_mode="md")
+
+        except Exception as e:
+            logger.error(f"Error showing pending payments: {e}")
+            await event.edit("❌ Error loading pending payments", buttons=OneLineKeyboard.back_to_admin())
+
+    async def ask_for_give_subscription(self, event):
+        """Ask admin for user ID and plan to give subscription"""
+        await event.edit(
+            "💎 **GIVE SUBSCRIPTION TO USER**\n\n"
+            "Type: `user_id plan`\n\n"
+            "Available plans:\n"
+            "• `basic` — 10 searches, 7 days\n"
+            "• `standard` — 30 searches, 15 days\n"
+            "• `premium` — Unlimited, 30 days\n\n"
+            "**Example:** `123456789 premium`\n\n"
+            "💡 Tip: Use 'Search Users' to find a user first, then give sub from their detail page.",
+            buttons=OneLineKeyboard.back_to_admin(),
+            parse_mode="md"
+        )
+        user_states[event.sender_id] = {"action": "admin_give_subscription"}
+
+    async def show_api_panel(self, event):
+        """Show API admin panel"""
+        await event.edit(
+            "🔑 **API ADMIN PANEL**\n═══════════════════════\n\n"
+            "Manage API keys and access for users.\n\n"
+            "Select an option:",
+            buttons=OneLineKeyboard.api_admin_panel(),
+            parse_mode="md"
+        )
+
+    async def show_api_stats(self, event):
+        """Show API statistics"""
+        try:
+            stats = await db_manager.api_db.get_api_stats()
+            text = (
+                f"📊 **API STATISTICS**\n═══════════════════════\n\n"
+                f"🔑 Total Keys: {stats.get('total_keys', 0)}\n"
+                f"✅ Active Keys: {stats.get('active_keys', 0)}\n"
+                f"📡 Total Requests: {stats.get('total_requests', 0)}\n"
+                f"📈 Requests Used: {stats.get('requests_used', 0)}\n"
+            )
+            await event.edit(text, buttons=OneLineKeyboard.back_to_admin(), parse_mode="md")
+        except Exception as e:
+            logger.error(f"Error showing API stats: {e}")
+            await event.edit("❌ Error loading API stats", buttons=OneLineKeyboard.back_to_admin())
+
+    async def ask_for_api_user_management(self, event):
+        """Ask for user ID for API management"""
+        await event.edit(
+            "🔑 **API USER MANAGEMENT**\n\n"
+            "Enter user ID to manage their API keys:",
+            buttons=OneLineKeyboard.back_to_admin()
+        )
+        user_states[event.sender_id] = {"action": "admin_api_user"}
+
+    async def show_api_analytics(self, event):
+        """Show API analytics"""
+        try:
+            keys = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: list(db_manager.db.api_keys.find({}).limit(20))
+            )
+            text = f"📈 **API ANALYTICS**\n═══════════════════════\n\n"
+            if not keys:
+                text += "No API keys found."
+            else:
+                for k in keys:
+                    uid = k.get("user_id", "N/A")
+                    plan = k.get("plan_id", "N/A")
+                    used = k.get("requests_used", 0)
+                    active = "✅" if k.get("is_active") else "❌"
+                    text += f"{active} User `{uid}` | {plan} | {used} calls\n"
+            await event.edit(text, buttons=OneLineKeyboard.back_to_admin(), parse_mode="md")
+        except Exception as e:
+            logger.error(f"Error in API analytics: {e}")
+            await event.edit("❌ Error", buttons=OneLineKeyboard.back_to_admin())
+
+    async def ask_for_api_revoke(self, event):
+        """Ask for API key to revoke"""
+        await event.edit(
+            "🔑 **REVOKE API KEY**\n\n"
+            "Enter the API key to revoke (first 16 chars are enough):",
+            buttons=OneLineKeyboard.back_to_admin()
+        )
+        user_states[event.sender_id] = {"action": "admin_api_revoke"}
+
+    async def confirm_revoke_api_key(self, event, api_key: str):
+        """Confirm revoke API key"""
+        try:
+            success = await db_manager.api_db.delete_api_key(api_key)
+            if success:
+                await event.answer("✅ API key revoked", alert=True)
+            else:
+                await event.answer("❌ Failed to revoke key", alert=True)
+            await self.show_api_panel(event)
+        except Exception as e:
+            logger.error(f"Error revoking API key: {e}")
+            await event.answer("❌ Error", alert=True)
+
+    async def show_api_menu(self, event):
+        """Show API menu for users"""
+        api_text = (
+            "🔑 **DARKBOXES API ACCESS**\n═══════════════════════\n\n"
+            "🚀 Programmatic access to all DarkBoxes intelligence tools.\n\n"
+            "Select an option:"
+        )
+        await event.edit(api_text, buttons=OneLineKeyboard.api_menu(), parse_mode="md")
+
+    async def show_my_api_keys(self, event):
+        """Show user's API keys"""
+        try:
+            user_id = event.sender_id
+            api_keys = await db_manager.api_db.get_user_api_keys(user_id)
+
+            keys_text = "🔑 **MY API KEYS**\n═══════════════════════\n\n"
+
+            if not api_keys:
+                keys_text += "⚠️ You don't have any API keys yet.\n\n💡 Purchase an API plan to get started!"
+            else:
+                for i, key_info in enumerate(api_keys, 1):
+                    api_key = key_info['api_key']
+                    created = key_info.get('created_at', '')[:10]
+                    expires = key_info.get('expires_at', '')[:10]
+                    is_active = key_info.get('is_active', True)
+                    requests_used = key_info.get('total_requests', 0)
+                    status = "✅ Active" if is_active else "❌ Inactive"
+
+                    keys_text += (
+                        f"**Key #{i}**\n"
+                        f"├─ Key: `{api_key[:16]}...{api_key[-8:]}`\n"
+                        f"├─ Status: {status}\n"
+                        f"├─ Created: {created}\n"
+                        f"├─ Expires: {expires}\n"
+                        f"└─ Requests: {requests_used}\n\n"
+                    )
+
+            await event.edit(keys_text, buttons=OneLineKeyboard.api_menu(), parse_mode="md")
+
+        except Exception as e:
+            logger.error(f"❌ Error in show_my_api_keys: {e}")
+            await event.answer("❌ Error loading API keys", alert=True)
+
+    async def show_api_usage(self, event):
+        """Show API usage for user"""
+        try:
+            user_id = event.sender_id
+            stats = await db_manager.api_db.get_api_stats(user_id)
+
+            usage_text = "📊 **API USAGE STATISTICS**\n═══════════════════════\n\n"
+
+            if stats.get('total_requests', 0) == 0:
+                usage_text += "⚠️ No API usage recorded yet.\n\n💡 Start using your API key to see statistics here!"
+            else:
+                usage_text += (
+                    f"📈 **Overall Statistics**\n"
+                    f"├─ Total Requests: {stats['total_requests']}\n"
+                    f"├─ Requests Used: {stats['requests_used']}\n"
+                    f"└─ Active Keys: {stats.get('active_keys', 0)}\n\n"
+                )
+
+                if stats.get('recent_activity'):
+                    usage_text += "🕐 **Recent Activity**\n"
+                    for req in stats['recent_activity'][:5]:
+                        endpoint = req.get('endpoint', 'Unknown')
+                        timestamp = req.get('timestamp', '')[:16]
+                        success = "✅" if req.get('success') else "❌"
+                        usage_text += f"{success} {endpoint} - {timestamp}\n"
+
+            await event.edit(usage_text, buttons=OneLineKeyboard.api_menu(), parse_mode="md")
+
+        except Exception as e:
+            logger.error(f"❌ Error in show_api_usage: {e}")
+            await event.answer("❌ Error loading API usage", alert=True)
+
+    async def show_api_plans(self, event):
+        """Show API plans"""
+        plans_text = (
+            "💎 **API SUBSCRIPTION PLANS**\n═══════════════════════\n\n"
+            "💰 **BASIC API** — ₹499/month\n"
+            "├─ 1,000 API calls/month\n"
+            "└─ All search endpoints\n\n"
+            "🚀 **PRO API** — ₹999/month\n"
+            "├─ 5,000 API calls/month\n"
+            "└─ Priority support + webhooks\n\n"
+            "👑 **ENTERPRISE API** — ₹2,999/month\n"
+            "├─ 20,000 API calls/month\n"
+            "└─ Dedicated manager + custom integrations\n\n"
+            "📤 Tap a plan to pay via screenshot:"
+        )
+        await event.edit(plans_text, buttons=OneLineKeyboard.api_plans_menu(), parse_mode="md")
+
+    async def show_api_plan_details(self, event, plan_id: str):
+        """Show details for a specific API plan"""
+        prices = {'basic': 499, 'pro': 999, 'enterprise': 2999}
+        calls = {'basic': 1000, 'pro': 5000, 'enterprise': 20000}
+        user_id = event.sender_id
+
+        if plan_id not in prices:
+            await event.answer("❌ Invalid plan", alert=True)
+            return
+
+        text = (
+            f"🔑 **API {plan_id.upper()} PLAN**\n\n"
+            f"💰 Price: ₹{prices[plan_id]}/month\n"
+            f"📊 API Calls: {calls[plan_id]:,}/month\n\n"
+            f"**To purchase:**\n"
+            f"1️⃣ Pay ₹{prices[plan_id]} to: `{config.UPI_ID}`\n"
+            f"2️⃣ Tap the button below to submit screenshot\n"
+            f"3️⃣ Activated within 5–10 minutes\n\n"
+            f"Your ID: `{user_id}`"
+        )
+
+        buttons = [
+            [Button.inline("📤 Submit Payment Screenshot", f"submit_api_payment_{plan_id}")],
+            [Button.inline("« Back", "api_plans")]
+        ]
+        await event.edit(text, buttons=buttons, parse_mode="md")
+
+    async def show_api_docs(self, event):
+        """Show API documentation"""
+        docs_text = (
+            "📖 **API DOCUMENTATION**\n═══════════════════════\n\n"
+            f"🌐 **Base URL:** `{config.API_BASE_URL}`\n\n"
+            "🔑 **Auth:** Include API key in header:\n"
+            "`X-API-Key: your_api_key_here`\n\n"
+            "📡 **Endpoints:**\n"
+            "• `POST /api/v1/search/phone`\n"
+            "• `POST /api/v1/search/email`\n"
+            "• `POST /api/v1/search/aadhar`\n"
+            "• `POST /api/v1/search/vehicle`\n"
+            "• `POST /api/v1/search/leak`\n"
+            "• `GET /api/v1/status`\n"
+            "• `GET /api/v1/balance`\n\n"
+            f"📚 Full docs: {config.API_BASE_URL}/api/v1/docs\n"
+            f"💬 Support: @darkboxesAdmin"
+        )
+        await event.edit(docs_text, buttons=OneLineKeyboard.api_menu(), parse_mode="md")
+
+    async def ask_for_api_plan_selection(self, event):
+        """Ask admin to select API plan for creation"""
+        await event.edit(
+            "🔑 **CREATE API KEY**\n\n"
+            "Select plan to create for user:",
+            buttons=[
+                [Button.inline("💰 Basic (30 days)", "confirm_create_api_basic_30")],
+                [Button.inline("🚀 Pro (30 days)", "confirm_create_api_pro_30")],
+                [Button.inline("👑 Enterprise (30 days)", "confirm_create_api_enterprise_30")],
+                [Button.inline("« Admin Panel", "admin_panel")]
+            ]
+        )
+
+    async def confirm_create_api_key(self, event, plan_id: str, days: int):
+        """Create API key for the last searched user"""
+        try:
+            # Get the user from state
+            user_id = event.sender_id
+            state = user_states.get(user_id, {})
+            target_user = state.get("target_user_id")
+
+            if not target_user:
+                await event.answer("❌ No user selected. Search a user first.", alert=True)
+                return
+
+            result = await db_manager.api_db.create_api_key(target_user, plan_id, days, "Admin created")
+
+            if result:
+                api_key = result.get("api_key", "N/A")
+                await event.edit(
+                    f"✅ **API KEY CREATED**\n\n"
+                    f"👤 User: `{target_user}`\n"
+                    f"🔑 Key: `{api_key}`\n"
+                    f"📦 Plan: {plan_id}\n"
+                    f"⏰ Days: {days}\n\n"
+                    f"User notified.",
+                    buttons=OneLineKeyboard.back_to_admin(),
+                    parse_mode="md"
+                )
+                try:
+                    await bot_client.send_message(target_user, f"🎉 **API KEY ACTIVATED!**\n\nKey: `{api_key}`\nPlan: {plan_id}\n\nTest at: {config.API_BASE_URL}/api/v1/docs", parse_mode="md")
+                except Exception:
+                    pass
+            else:
+                await event.edit("❌ Failed to create API key", buttons=OneLineKeyboard.back_to_admin())
+
+        except Exception as e:
+            logger.error(f"Error creating API key: {e}")
+            await event.answer("❌ Error creating API key", alert=True)
+
+
 # ================== SEARCH ENGINE WITH PRIORITY MANAGEMENT ==================
 
 class APIHandler:
     """Handle API requests"""
-    
+
     def __init__(self, db_manager: DatabaseManager, search_engine):
         self.db = db_manager
         self.search_engine = search_engine
@@ -5018,9 +5470,9 @@ async def contact_admin_callback(event):
         logger.error(f"❌ Error in contact_admin_callback: {e}")
         await event.answer("❌ Error loading contact info", alert=True)
 
-@bot_client.on(events.NewMessage(func=lambda e: e.is_private and not e.text.startswith('/')))
+@bot_client.on(events.NewMessage(func=lambda e: e.is_private and not (e.text or '').startswith('/')))
 async def private_message_handler(event):
-    """Handle private messages (queries, admin actions, payment screenshots)"""
+    """Handle private messages (queries, admin actions, payment screenshots, media)"""
     try:
         user_id = event.sender_id
 
@@ -5043,6 +5495,9 @@ async def private_message_handler(event):
 
         elif state.get("action") == "admin_broadcast_media":
             await handle_admin_broadcast_media(event)
+
+        elif state.get("action") == "admin_broadcast_select_users":
+            await handle_admin_broadcast_select_users(event)
 
         elif state.get("action") == "admin_ban":
             await handle_admin_ban(event)
@@ -5362,6 +5817,43 @@ async def handle_admin_give_subscription(event):
     except Exception as e:
         logger.error(f"❌ Error giving subscription: {e}")
         await event.respond("❌ Error processing subscription.")
+
+
+async def handle_admin_broadcast_select_users(event):
+    """Handle admin entering user IDs for selected media broadcast"""
+    try:
+        sender_id = event.sender_id
+        text = (event.text or "").strip()
+
+        # Parse user IDs from comma-separated input
+        raw_ids = [x.strip() for x in text.replace(" ", ",").split(",") if x.strip().isdigit()]
+        if not raw_ids:
+            await event.respond(
+                "❌ No valid user IDs found.\n\n"
+                "Enter numeric user IDs separated by commas:\n"
+                "Example: `123456789, 987654321`"
+            )
+            return
+
+        target_ids = [int(uid) for uid in raw_ids]
+
+        # Update state to await media
+        user_states[sender_id] = {
+            "action": "admin_broadcast_media",
+            "broadcast_target": target_ids,
+            "broadcast_caption": ""
+        }
+
+        await event.respond(
+            f"✅ **{len(target_ids)} users selected**\n\n"
+            f"IDs: {', '.join(raw_ids[:5])}{'...' if len(raw_ids) > 5 else ''}\n\n"
+            f"Now send your **photo or video** (with optional caption):",
+            buttons=[[Button.inline("❌ Cancel", "admin_panel")]]
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Error in handle_admin_broadcast_select_users: {e}")
+        await event.respond("❌ Error processing user IDs.")
 
 
 async def handle_admin_broadcast_media(event):
@@ -6460,1750 +6952,6 @@ async def api_plans_callback(event):
         await event.answer("❌ Error loading API plans", alert=True)
 
 
-# ================== MAIN FUNCTION ==================
-
-
-# ================== ADMIN PANEL HANDLER ==================
-
-class AdminPanelHandler:
-    def __init__(self, db_manager: DatabaseManager, bot_client: TelegramClient):
-        self.db = db_manager
-        self.bot = bot_client
-        self.admin_users = set()
-        
-        # Load admin users from database
-        asyncio.create_task(self.load_admin_users())
-    
-    async def load_admin_users(self):
-        """Load admin users from database"""
-        try:
-            admins = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: list(self.db.db.users.find({"is_admin": True}, {"user_id": 1}))
-            )
-            self.admin_users = {admin["user_id"] for admin in admins}
-            logger.info(f"✅ Loaded {len(self.admin_users)} admin users")
-        except Exception as e:
-            logger.error(f"❌ Error loading admin users: {e}")
-    
-    def is_admin(self, user_id: int) -> bool:
-        """Check if user is admin"""
-        return user_id in self.admin_users or user_id == config.ADMIN_USER_ID
-    
-    async def handle_admin_callback(self, event):
-        """Handle admin panel callbacks"""
-        try:
-            user_id = event.sender_id
-            
-            if not self.is_admin(user_id):
-                await event.answer("❌ Access denied", alert=True)
-                return
-            
-            data = event.data.decode()
-            
-            if data == "admin_panel":
-                await self.show_admin_panel(event)
-            
-            elif data == "admin_today":
-                await self.show_today_stats(event)
-            
-            elif data.startswith("admin_user_list_"):
-                page = int(data.split("_")[-1])
-                await self.show_user_list(event, page)
-            
-            elif data == "admin_users":
-                await self.show_user_management(event)
-            
-            elif data == "admin_top_users":
-                await self.show_top_users(event)
-            
-            elif data == "admin_referrals":
-                await self.show_referral_stats(event)
-            
-            elif data == "admin_analytics":
-                await self.show_analytics_panel(event)
-            
-            elif data == "admin_command_stats":
-                await self.show_command_stats(event)
-            
-            elif data == "admin_top_commands":
-                await self.show_top_commands(event)
-            
-            elif data == "admin_user_activity":
-                await self.show_user_activity(event)
-            
-            elif data == "admin_graph_daily":
-                await self.generate_daily_graph(event)
-            
-            elif data == "admin_payments":
-                await self.show_payment_panel(event)
-            
-            elif data == "admin_today_payments":
-                await self.show_today_payments(event)
-            
-            elif data == "admin_total_revenue":
-                await self.show_total_revenue(event)
-            
-            elif data == "admin_graph_revenue":
-                await self.generate_revenue_graph(event)
-            
-            elif data == "admin_api":
-                await self.show_api_panel(event)
-            
-            elif data == "admin_api_stats":
-                await self.show_api_stats(event)
-            
-            elif data == "admin_api_user":
-                await self.ask_for_api_user_management(event)
-            
-            elif data == "admin_api_analytics":
-                await self.show_api_analytics(event)
-            
-            elif data == "admin_api_revoke":
-                await self.ask_for_api_revoke(event)
-            
-            elif data == "admin_search_user":
-                await self.ask_for_user_search(event)
-            
-            elif data == "admin_broadcast":
-                await self.ask_for_broadcast(event)
-            
-            elif data == "admin_ban":
-                await self.ask_for_ban_user(event)
-            
-            elif data == "admin_admin":
-                await self.ask_for_admin_management(event)
-            
-            elif data == "admin_add_credits":
-                await self.ask_for_add_credits(event)
-            
-            elif data == "admin_give_subscription":
-                await self.ask_for_give_subscription(event)
-            
-            elif data == "admin_settings":
-                await self.show_bot_settings(event)
-            
-            elif data == "admin_export":
-                await self.export_data(event)
-            
-            elif data == "admin_broadcast_media":
-                await self.ask_for_broadcast_media(event)
-            
-            elif data == "admin_broadcast_history":
-                await self.show_broadcast_history(event)
-            
-            elif data == "admin_pending_payments":
-                await self.show_pending_payments(event)
-            
-            elif data.startswith("admin_broadcast_seen_"):
-                broadcast_id = data.split("admin_broadcast_seen_")[1]
-                await self.show_broadcast_seen(event, broadcast_id)
-            
-            elif data.startswith("confirm_ban_"):
-                target_id = int(data.split("_")[-1])
-                await self.confirm_ban_user(event, target_id)
-            
-            elif data.startswith("confirm_unban_"):
-                target_id = int(data.split("_")[-1])
-                await self.confirm_unban_user(event, target_id)
-            
-            elif data.startswith("confirm_add_admin_"):
-                target_id = int(data.split("_")[-1])
-                await self.confirm_add_admin(event, target_id)
-            
-            elif data.startswith("confirm_remove_admin_"):
-                target_id = int(data.split("_")[-1])
-                await self.confirm_remove_admin(event, target_id)
-            
-            elif data.startswith("user_detail_"):
-                target_id = int(data.split("_")[-1])
-                await self.show_user_detail(event, target_id)
-            
-            elif data.startswith("confirm_create_api_"):
-                # Handle API key creation confirmation
-                parts = data.split("_")
-                if len(parts) >= 5:
-                    plan_id = parts[3]
-                    days = int(parts[4])
-                    await self.confirm_create_api_key(event, plan_id, days)
-            
-            elif data.startswith("confirm_revoke_api_"):
-                api_key = data.split("_", 3)[3]
-                await self.confirm_revoke_api_key(event, api_key)
-            
-            # API Menu Callbacks
-            elif data == "api_menu":
-                await self.show_api_menu(event)
-            
-            elif data == "my_api_keys":
-                await self.show_my_api_keys(event)
-            
-            elif data == "api_usage":
-                await self.show_api_usage(event)
-            
-            elif data == "api_plans":
-                await self.show_api_plans(event)
-            
-            elif data == "api_docs":
-                await self.show_api_docs(event)
-            
-            elif data.startswith("api_plan_"):
-                plan_id = data.split("_", 2)[2]
-                await self.show_api_plan_details(event, plan_id)
-            
-            elif data == "create_api_key":
-                await self.ask_for_api_plan_selection(event)
-            
-        except Exception as e:
-            logger.error(f"❌ Error in admin callback: {e}")
-            await event.answer("❌ Error processing request", alert=True)
-    
-    async def show_api_menu(self, event):
-        """Show API menu"""
-        api_text = (
-            "🔑 **DARKBOXES API ACCESS**\n"
-            "═══════════════════════\n\n"
-            "🚀 **Programmatic Access** to all DarkBoxes intelligence tools\n\n"
-            "🌟 **Features:**\n"
-            "• RESTful API endpoints\n"
-            "• JSON responses\n"
-            "• Batch processing\n"
-            "• Rate limiting\n"
-            "• Webhook support\n"
-            "• 24/7 availability\n\n"
-            "💼 **Perfect For:**\n"
-            "• Developers\n"
-            "• OSINT tools\n"
-            "• Automation scripts\n"
-            "• Business integrations\n\n"
-            "Select an option below:"
-        )
-        
-        await event.edit(api_text, buttons=OneLineKeyboard.api_menu(), parse_mode="md")
-    
-    async def show_my_api_keys(self, event):
-        """Show user's API keys"""
-        try:
-            user_id = event.sender_id
-            api_keys = await self.db.api_db.get_user_api_keys(user_id)
-            
-            api_text = "🔑 **MY API KEYS**\n"
-            api_text += "═══════════════════════\n\n"
-            
-            if api_keys:
-                for i, api_key in enumerate(api_keys, 1):
-                    status = "✅ Active" if api_key.get("is_active") else "❌ Inactive"
-                    created = api_key.get("created_at", "")[:10]
-                    expires = api_key.get("expires_at", "")[:10]
-                    requests = api_key.get("requests_used", 0)
-                    remaining = api_key.get("requests_remaining", 0)
-                    unlimited = "♾️" if api_key.get("unlimited") else ""
-                    
-                    api_text += (
-                        f"{i}. **{api_key.get('description', 'Unnamed')}** {unlimited}\n"
-                        f"   ├─ Status: {status}\n"
-                        f"   ├─ Plan: {api_key.get('plan_id', 'N/A')}\n"
-                        f"   ├─ Key: `{api_key['api_key'][:8]}...{api_key['api_key'][-4:]}`\n"
-                        f"   ├─ Created: {created}\n"
-                        f"   ├─ Expires: {expires}\n"
-                        f"   ├─ Requests: {requests} used, {remaining} remaining\n"
-                        f"   └─ Token: `{api_key.get('client_token', 'N/A')}`\n\n"
-                    )
-                
-                api_text += "📝 **Usage Instructions:**\n"
-                api_text += f"• Base URL: `{config.API_BASE_URL}`\n"
-                api_text += "• Add header: `X-API-Key: your_api_key`\n"
-                api_text += "• Or query param: `?api_key=your_api_key`\n"
-                api_text += "• See /api_docs for endpoint details\n"
-            else:
-                api_text += "📭 No API keys found.\n\n"
-                api_text += "💡 **Get started:**\n"
-                api_text += "1. Purchase API access from @darkboxesAdmin\n"
-                api_text += "2. Once activated, create your API key\n"
-                api_text += "3. Start integrating with your tools!\n"
-            
-            await event.edit(api_text, buttons=OneLineKeyboard.api_keys_menu(), parse_mode="md")
-            
-        except Exception as e:
-            logger.error(f"❌ Error showing API keys: {e}")
-            await event.edit("❌ Error loading API keys", buttons=OneLineKeyboard.api_menu())
-    
-    async def show_api_usage(self, event):
-        """Show API usage statistics"""
-        try:
-            user_id = event.sender_id
-            api_stats = await self.db.api_db.get_api_stats(user_id)
-            
-            usage_text = "📊 **API USAGE STATISTICS**\n"
-            usage_text += "═══════════════════════\n\n"
-            
-            usage_text += f"📈 **Summary**\n"
-            usage_text += f"├─ Total API Keys: {api_stats.get('total_keys', 0)}\n"
-            usage_text += f"├─ Active Keys: {api_stats.get('active_keys', 0)}\n"
-            usage_text += f"├─ Total Requests: {api_stats.get('total_requests', 0)}\n"
-            usage_text += f"└─ Requests Used: {api_stats.get('requests_used', 0)}\n\n"
-            
-            if api_stats.get('recent_activity'):
-                usage_text += "🕒 **Recent Activity**\n"
-                for activity in api_stats['recent_activity'][:5]:
-                    time_str = activity.get('timestamp', '')[:16]
-                    endpoint = activity.get('endpoint', 'N/A')
-                    success = "✅" if activity.get('success') else "❌"
-                    
-                    usage_text += f"{success} {time_str} - {endpoint}\n"
-            
-            usage_text += "\n📋 **Available Endpoints:**\n"
-            for cmd_key, cmd_info in API_COMMANDS.items():
-                if cmd_key not in ['batch', 'status', 'balance', 'usage']:
-                    usage_text += f"• {cmd_info['endpoint']} ({cmd_info['method']})\n"
-            
-            await event.edit(usage_text, buttons=OneLineKeyboard.api_keys_menu(), parse_mode="md")
-            
-        except Exception as e:
-            logger.error(f"❌ Error showing API usage: {e}")
-            await event.edit("❌ Error loading API usage", buttons=OneLineKeyboard.api_menu())
-    
-    async def show_api_plans(self, event):
-        """Show API plans"""
-        api_text = "🛒 **API ACCESS PLANS**\n"
-        api_text += "═══════════════════════\n\n"
-        
-        for plan_id, plan in API_PLANS.items():
-            unlimited_symbol = "♾️" if plan.get('unlimited') else ""
-            api_text += f"{plan.get('icon', '🔑')} **{plan['name']}** {unlimited_symbol}\n"
-            api_text += f"💰 **Price:** ₹{plan['price']}\n"
-            api_text += f"📊 **Requests:** {plan['requests']}\n"
-            api_text += f"📅 **Validity:** {plan['validity_days']} days\n"
-            api_text += f"⚡ **Rate Limit:** {plan['rate_limit']}/min\n"
-            api_text += f"🔗 **Concurrent:** {plan['concurrent']}\n\n"
-            
-            api_text += "🌟 **Features:**\n"
-            for feature in plan['features']:
-                api_text += f"• {feature}\n"
-            
-            api_text += "\n" + "─" * 30 + "\n\n"
-        
-        api_text += "📞 **Contact @darkboxesAdmin to purchase API access**\n"
-        api_text += f"💳 **UPI ID:** `{config.UPI_ID}`\n\n"
-        api_text += "🔒 **Instructions:**\n"
-        api_text += "1. Send payment via UPI\n"
-        api_text += "2. Send screenshot to @darkboxesAdmin\n"
-        api_text += "3. Include your User ID and desired plan\n"
-        api_text += "4. API access will be activated within 5 minutes"
-        
-        await event.edit(api_text, buttons=OneLineKeyboard.api_plans(), parse_mode="md")
-    
-    async def show_api_plan_details(self, event, plan_id: str):
-        """Show API plan details"""
-        if plan_id not in API_PLANS:
-            await event.answer("❌ Invalid plan", alert=True)
-            return
-        
-        plan = API_PLANS[plan_id]
-        unlimited_symbol = "♾️" if plan.get('unlimited') else ""
-        
-        plan_text = f"{plan.get('icon', '🔑')} **{plan['name']}** {unlimited_symbol}\n"
-        plan_text += "═══════════════════════\n\n"
-        
-        plan_text += f"💰 **Price:** ₹{plan['price']}\n"
-        plan_text += f"📊 **Requests:** {plan['requests']}\n"
-        plan_text += f"📅 **Validity:** {plan['validity_days']} days\n"
-        plan_text += f"⚡ **Rate Limit:** {plan['rate_limit']} requests/minute\n"
-        plan_text += f"🔗 **Concurrent Connections:** {plan['concurrent']}\n\n"
-        
-        plan_text += "🌟 **Features:**\n"
-        for feature in plan['features']:
-            plan_text += f"• {feature}\n"
-        
-        plan_text += f"\n🎯 **Perfect For:** {plan.get('for', 'Developers and businesses')}\n\n"
-        
-        if plan.get('unlimited'):
-            plan_text += "💡 **Unlimited Plan:**\n"
-            plan_text += "• No request limits\n"
-            plan_text += "• Best for high-volume usage\n"
-            plan_text += "• Perfect for OSINT tools\n\n"
-        
-        plan_text += "📞 **To Purchase:**\n"
-        plan_text += f"1. Send ₹{plan['price']} to UPI: `{config.UPI_ID}`\n"
-        plan_text += f"2. Send payment screenshot to @darkboxesAdmin\n"
-        plan_text += f"3. Include your User ID: `{event.sender_id}`\n"
-        plan_text += f"4. Specify plan: {plan['name']}\n"
-        plan_text += f"5. API access will be activated within 5 minutes\n\n"
-        
-        plan_text += "💡 **Note:** Contact @darkboxesAdmin for custom plans or bulk discounts"
-        
-        buttons = [
-            [Button.inline("🛒 Purchase This Plan", f"purchase_api_{plan_id}")],
-            [Button.inline("« Back to Plans", "api_plans")],
-            [Button.inline("« API Menu", "api_menu")]
-        ]
-        
-        await event.edit(plan_text, buttons=buttons, parse_mode="md")
-    
-    async def show_api_docs(self, event):
-        """Show API documentation"""
-        docs_text = "📖 **API DOCUMENTATION**\n"
-        docs_text += "═══════════════════════\n\n"
-        
-        docs_text += "🚀 **Getting Started**\n"
-        docs_text += "1. Purchase API access from @darkboxesAdmin\n"
-        docs_text += "2. Once activated, create your API key\n"
-        docs_text += "3. Use the API key in your requests\n"
-        docs_text += "4. Call the desired endpoint\n\n"
-        
-        docs_text += "🔐 **Authentication**\n"
-        docs_text += "Add to headers:\n"
-        docs_text += "```\n"
-        docs_text += f"X-API-Key: your_api_key_here\n"
-        docs_text += "```\n\n"
-        docs_text += "Or as query parameter:\n"
-        docs_text += "```\n"
-        docs_text += f"?api_key=your_api_key_here\n"
-        docs_text += "```\n\n"
-        
-        docs_text += f"🌐 **Base URL**\n"
-        docs_text += "```\n"
-        docs_text += f"{config.API_BASE_URL}\n"
-        docs_text += "```\n\n"
-        
-        docs_text += "🔍 **Search Endpoints**\n"
-        for cmd_key, cmd_info in API_COMMANDS.items():
-            if cmd_key not in ['batch', 'status', 'balance', 'usage']:
-                cmd = SEARCH_COMMANDS.get(cmd_key, {})
-                example = cmd.get('example', 'query_value')
-                
-                docs_text += f"**{cmd_info['endpoint']}**\n"
-                docs_text += f"Method: {cmd_info['method']}\n"
-                docs_text += f"Example: {{\"query\": \"{example}\"}}\n\n"
-        
-        docs_text += "📦 **Batch Search**\n"
-        docs_text += "**Endpoint:** `/api/v1/search/batch`\n"
-        docs_text += "**Method:** POST\n"
-        docs_text += "**Request Body:**\n"
-        docs_text += "```json\n"
-        docs_text += '{\n'
-        docs_text += '  "searches": [\n'
-        docs_text += '    {"type": "phone", "query": "9876543210"},\n'
-        docs_text += '    {"type": "email", "query": "test@example.com"}\n'
-        docs_text += '  ]\n'
-        docs_text += '}\n'
-        docs_text += "```\n\n"
-        
-        docs_text += "📊 **Utility Endpoints**\n"
-        docs_text += "• `GET /api/v1/status` - API status and limits\n"
-        docs_text += "• `GET /api/v1/balance` - User credits and balance\n"
-        docs_text += "• `GET /api/v1/usage` - API usage statistics\n\n"
-        
-        docs_text += "✅ **Response Format**\n"
-        docs_text += "```json\n"
-        docs_text += '{\n'
-        docs_text += '  "status": "success",\n'
-        docs_text += '  "message": "Search completed",\n'
-        docs_text += '  "data": {\n'
-        docs_text += '    "query": "9876543210",\n'
-        docs_text += '    "type": "phone",\n'
-        docs_text += '    "parsed_data": {\n'
-        docs_text += '      "Name": "John Doe",\n'
-        docs_text += '      "Location": "Mumbai"\n'
-        docs_text += '    }\n'
-        docs_text += '  },\n'
-        docs_text += '  "timestamp": "2024-01-01T12:00:00Z"\n'
-        docs_text += '}\n'
-        docs_text += "```\n\n"
-        
-        docs_text += "❌ **Error Response**\n"
-        docs_text += "```json\n"
-        docs_text += '{\n'
-        docs_text += '  "status": "error",\n'
-        docs_text += '  "message": "Invalid API key",\n'
-        docs_text += '  "code": "AUTH_FAILED",\n'
-        docs_text += '  "timestamp": "2024-01-01T12:00:00Z"\n'
-        docs_text += '}\n'
-        docs_text += "```\n\n"
-        
-        docs_text += "💡 **Kali Linux Integration Example:**\n"
-        docs_text += "```bash\n"
-        docs_text += "#!/bin/bash\n"
-        docs_text += 'API_KEY="your_api_key_here"\n'
-        docs_text += 'QUERY="$1"\n'
-        docs_text += 'curl -s -X POST \\\n'
-        docs_text += f'  -H "X-API-Key: $API_KEY" \\\n'
-        docs_text += f'  -H "Content-Type: application/json" \\\n'
-        docs_text += f'  -d \'{{"query": "\'$QUERY\'"}}\' \\\n'
-        docs_text += f'  {config.API_BASE_URL}/api/v1/search/phone\n'
-        docs_text += "```\n\n"
-        
-        docs_text += "💡 **Need Help?**\n"
-        docs_text += "Contact @darkboxesAdmin for API support"
-        
-        buttons = [
-            [Button.inline("🔑 My API Keys", "my_api_keys")],
-            [Button.inline("🛒 API Plans", "api_plans")],
-            [Button.inline("« API Menu", "api_menu")]
-        ]
-        
-        await event.edit(docs_text, buttons=buttons, parse_mode="md")
-    
-    async def ask_for_api_plan_selection(self, event):
-        """Ask for API plan selection"""
-        try:
-            user_id = event.sender_id
-            user_doc = await self.db.get_user(user_id)
-            
-            if not user_doc:
-                await event.answer("❌ User not found", alert=True)
-                return
-            
-            # Check if user has API access
-            if not user_doc.get('has_api_access'):
-                await event.edit(
-                    "❌ **API ACCESS REQUIRED**\n\n"
-                    "You need to purchase API access before creating API keys.\n\n"
-                    "💰 **Available Plans:**\n"
-                    "• 🚀 Unlimited API - ₹999 (30 days, unlimited searches)\n"
-                    "• 🔑 Basic API - ₹999 (30 days, 1000 requests)\n"
-                    "• ⚡ Professional API - ₹2499 (30 days, 5000 requests)\n"
-                    "• 🏢 Enterprise API - ₹4999 (30 days, unlimited requests)\n\n"
-                    "📞 **Contact @darkboxesAdmin to purchase API access**\n",
-                    buttons=OneLineKeyboard.api_plans()
-                )
-                return
-            
-            # Check API access expiry
-            api_expiry = user_doc.get('api_expiry')
-            if api_expiry:
-                expiry_date = datetime.fromisoformat(api_expiry)
-                if expiry_date < datetime.now(timezone.utc):
-                    await event.edit(
-                        "❌ **API ACCESS EXPIRED**\n\n"
-                        "Your API access has expired. Please renew your subscription.\n\n"
-                        "📞 **Contact @darkboxesAdmin to renew API access**\n",
-                        buttons=OneLineKeyboard.api_plans()
-                    )
-                    return
-            
-            api_plan = user_doc.get('api_plan', 'unlimited')
-            
-            plan_text = f"🔑 **CREATE API KEY**\n\n"
-            plan_text += f"📊 **Your API Plan:** {API_PLANS.get(api_plan, {}).get('name', 'Unlimited')}\n"
-            plan_text += f"📅 **Access Valid Until:** {user_doc.get('api_expiry', 'N/A')[:10]}\n\n"
-            
-            plan_text += "Select validity period for your new API key:\n\n"
-            
-            buttons = [
-                [Button.inline("🔄 30 Days", f"confirm_create_api_{api_plan}_30")],
-                [Button.inline("📅 60 Days", f"confirm_create_api_{api_plan}_60")],
-                [Button.inline("📆 90 Days", f"confirm_create_api_{api_plan}_90")],
-                [Button.inline("❌ Cancel", "my_api_keys")]
-            ]
-            
-            await event.edit(plan_text, buttons=buttons, parse_mode="md")
-            
-        except Exception as e:
-            logger.error(f"❌ Error in API plan selection: {e}")
-            await event.answer("❌ Error processing request", alert=True)
-    
-    async def confirm_create_api_key(self, event, plan_id: str, days: int):
-        """Confirm and create API key"""
-        try:
-            user_id = event.sender_id
-            user_doc = await self.db.get_user(user_id)
-            
-            if not user_doc:
-                await event.answer("❌ User not found", alert=True)
-                return
-            
-            # Check if user has API access
-            if not user_doc.get('has_api_access'):
-                await event.answer("❌ API access required", alert=True)
-                return
-            
-            # Check API access expiry
-            api_expiry = user_doc.get('api_expiry')
-            if api_expiry:
-                expiry_date = datetime.fromisoformat(api_expiry)
-                if expiry_date < datetime.now(timezone.utc):
-                    await event.answer("❌ API access expired", alert=True)
-                    return
-            
-            # Create API key
-            description = f"{API_PLANS.get(plan_id, {}).get('name', 'API')} - {days} days"
-            api_info = await self.db.api_db.create_api_key(user_id, plan_id, days, description)
-            
-            if api_info:
-                # Send API key details
-                api_key_msg = (
-                    f"✅ **API KEY CREATED SUCCESSFULLY**\n\n"
-                    f"🔑 **API Key:** `{api_info['api_key']}`\n"
-                    f"🔐 **Client Token:** `{api_info['client_token']}`\n"
-                    f"📅 **Expires:** {api_info['expires_at'][:10]}\n"
-                    f"📊 **Plan:** {api_info['plan_id']}\n"
-                    f"📝 **Description:** {description}\n\n"
-                    f"🌐 **Base URL:** `{config.API_BASE_URL}`\n\n"
-                    f"📝 **Usage Example:**\n"
-                    f"```bash\n"
-                    f"curl -X POST \\\n"
-                    f"  -H \"X-API-Key: {api_info['api_key']}\" \\\n"
-                    f"  -H \"Content-Type: application/json\" \\\n"
-                    f"  -d '{{\"query\": \"9876543210\"}}' \\\n"
-                    f"  {config.API_BASE_URL}/api/v1/search/phone\n"
-                    f"```\n\n"
-                    f"⚠️ **Save this information securely!**\n"
-                    f"API key will not be shown again."
-                )
-                
-                await event.edit(api_key_msg, parse_mode="md", buttons=OneLineKeyboard.api_keys_menu())
-                
-                # Also send to user's private chat
-                try:
-                    await self.bot.send_message(
-                        user_id,
-                        f"🔑 **New API Key Created**\n\n"
-                        f"Key: `{api_info['api_key'][:8]}...{api_info['api_key'][-4:]}`\n"
-                        f"Plan: {api_info['plan_id']}\n"
-                        f"Expires: {api_info['expires_at'][:10]}\n\n"
-                        f"Use with: {config.API_BASE_URL}",
-                        parse_mode="md"
-                    )
-                except:
-                    pass
-                
-            else:
-                await event.answer("❌ Failed to create API key", alert=True)
-                await self.show_my_api_keys(event)
-            
-        except Exception as e:
-            logger.error(f"❌ Error creating API key: {e}")
-            await event.answer("❌ Error creating API key", alert=True)
-    
-    async def show_api_panel(self, event):
-        """Show API management panel"""
-        api_text = (
-            "🔑 **API MANAGEMENT**\n"
-            "═══════════════════════\n\n"
-            "📊 **Manage API keys and monitor API usage**\n\n"
-            "🛠️ **Available Actions:**\n"
-            "• View API statistics\n"
-            "• Manage user API keys\n"
-            "• View API analytics\n"
-            "• Revoke API keys\n"
-            "• Monitor API usage\n\n"
-            "Select an option below:"
-        )
-        
-        await event.edit(api_text, buttons=OneLineKeyboard.admin_api_panel(), parse_mode="md")
-    
-    async def show_api_stats(self, event):
-        """Show API statistics"""
-        try:
-            api_stats = await self.db.admin_db.get_api_stats_detailed()
-            
-            stats_text = "📊 **API STATISTICS**\n"
-            stats_text += "═══════════════════════\n\n"
-            
-            # Summary
-            summary = api_stats.get('summary', {})
-            stats_text += f"📈 **Summary**\n"
-            stats_text += f"├─ Total API Keys: {summary.get('total_keys', 0)}\n"
-            stats_text += f"├─ Active Keys: {summary.get('active_keys', 0)}\n"
-            stats_text += f"├─ Total Requests: {summary.get('total_requests', 0)}\n"
-            stats_text += f"└─ Requests Used: {summary.get('requests_used', 0)}\n\n"
-            
-            # Plan distribution
-            if api_stats.get('plan_distribution'):
-                stats_text += "📋 **Plan Distribution**\n"
-                for plan in api_stats['plan_distribution']:
-                    plan_name = API_PLANS.get(plan['_id'], {}).get('name', plan['_id'])
-                    unlimited = "♾️" if API_PLANS.get(plan['_id'], {}).get('unlimited') else ""
-                    stats_text += (
-                        f"• {plan_name} {unlimited}\n"
-                        f"  ├─ Total Keys: {plan['count']}\n"
-                        f"  ├─ Active: {plan['active_keys']}\n"
-                        f"  └─ Requests: {plan['total_requests']}\n\n"
-                    )
-            
-            # Daily requests
-            if api_stats.get('daily_requests'):
-                stats_text += "📅 **Recent Daily Requests**\n"
-                for day in api_stats['daily_requests'][:5]:
-                    stats_text += (
-                        f"• {day['_id']}\n"
-                        f"  ├─ Total: {day['count']}\n"
-                        f"  ├─ Success: {day['success']}\n"
-                        f"  └─ Failed: {day['failed']}\n\n"
-                    )
-            
-            # Top endpoints
-            if api_stats.get('top_endpoints'):
-                stats_text += "🔝 **Top Endpoints**\n"
-                for endpoint in api_stats['top_endpoints'][:5]:
-                    stats_text += (
-                        f"• {endpoint['_id']}\n"
-                        f"  ├─ Calls: {endpoint['count']}\n"
-                        f"  ├─ Success Rate: {endpoint['success']/endpoint['count']*100:.1f}%\n"
-                        f"  └─ Failed: {endpoint['failed']}\n\n"
-                    )
-            
-            stats_text += f"🌐 **API Base URL:** `{config.API_BASE_URL}`\n"
-            stats_text += f"🔐 **API Documentation:** {config.API_BASE_URL}/api/v1/docs\n"
-            
-            await event.edit(stats_text, buttons=OneLineKeyboard.back_to_admin(), parse_mode="md")
-            
-        except Exception as e:
-            logger.error(f"❌ Error showing API stats: {e}")
-            await event.edit("❌ Error loading API statistics", buttons=OneLineKeyboard.back_to_admin())
-    
-    async def ask_for_api_user_management(self, event):
-        """Ask for user ID for API management"""
-        await event.edit(
-            "👤 **MANAGE USER API KEYS**\n\n"
-            "Enter user ID to manage their API keys:\n"
-            "(Numeric user ID)\n\n"
-            "Type the user ID:",
-            buttons=OneLineKeyboard.back_to_admin()
-        )
-        
-        user_states[event.sender_id] = {"action": "admin_api_user"}
-    
-    async def show_api_analytics(self, event):
-        """Show API analytics with graphs"""
-        try:
-            api_stats = await self.db.admin_db.get_api_stats_detailed()
-            
-            if not api_stats.get('daily_requests'):
-                await event.edit("📊 No API analytics data available.", 
-                               buttons=OneLineKeyboard.back_to_admin())
-                return
-            
-            # Create visualization
-            daily_data = api_stats['daily_requests']
-            dates = [data['_id'][5:] for data in daily_data]  # Remove year
-            counts = [data['count'] for data in daily_data]
-            successes = [data['success'] for data in daily_data]
-            failures = [data['failed'] for data in daily_data]
-            
-            plt.figure(figsize=(14, 8))
-            
-            # Success vs Failure stacked bar chart
-            x = range(len(dates))
-            width = 0.6
-            
-            plt.bar(x, successes, width, label='Success', color='lightgreen', alpha=0.8)
-            plt.bar(x, failures, width, bottom=successes, label='Failure', color='lightcoral', alpha=0.8)
-            
-            plt.title('API Requests - Success vs Failure (Last 30 Days)', fontsize=14, fontweight='bold')
-            plt.xlabel('Date', fontsize=12)
-            plt.ylabel('Number of Requests', fontsize=12)
-            plt.xticks(x, dates, rotation=45)
-            plt.legend()
-            plt.grid(True, alpha=0.3)
-            
-            # Add value labels
-            for i, (s, f) in enumerate(zip(successes, failures)):
-                total = s + f
-                if total > 0:
-                    plt.text(i, total + max(counts)*0.01, str(total), 
-                            ha='center', va='bottom', fontsize=9, fontweight='bold')
-            
-            plt.tight_layout()
-            
-            # Save to bytes
-            buf = BytesIO()
-            plt.savefig(buf, format='png', dpi=100)
-            buf.seek(0)
-            plt.close()
-            
-            # Calculate statistics
-            total_requests = sum(counts)
-            total_success = sum(successes)
-            total_failed = sum(failures)
-            success_rate = (total_success / total_requests * 100) if total_requests > 0 else 0
-            
-            caption = (
-                f"📈 **API Analytics Dashboard**\n\n"
-                f"📊 **Last 30 Days Summary:**\n"
-                f"├─ Total Requests: {total_requests}\n"
-                f"├─ Successful: {total_success}\n"
-                f"├─ Failed: {total_failed}\n"
-                f"├─ Success Rate: {success_rate:.1f}%\n"
-                f"└─ Average Daily: {total_requests/len(dates):.1f}\n\n"
-                f"📅 **Peak Day:** {dates[counts.index(max(counts))]} ({max(counts)} requests)\n"
-                f"🌐 **API Base URL:** `{config.API_BASE_URL}`"
-            )
-            
-            # Send image
-            await event.delete()
-            await self.bot.send_file(
-                event.chat_id,
-                buf,
-                caption=caption,
-                buttons=OneLineKeyboard.back_to_admin()
-            )
-            
-        except Exception as e:
-            logger.error(f"❌ Error generating API analytics: {e}")
-            await event.edit("❌ Error generating API analytics", 
-                           buttons=OneLineKeyboard.back_to_admin())
-    
-    async def ask_for_api_revoke(self, event):
-        """Ask for API key to revoke"""
-        await event.edit(
-            "🚫 **REVOKE API KEY**\n\n"
-            "Enter API key to revoke:\n"
-            "(Full API key or first 8 characters)\n\n"
-            "Type the API key:",
-            buttons=OneLineKeyboard.back_to_admin()
-        )
-        
-        user_states[event.sender_id] = {"action": "admin_api_revoke"}
-    
-    async def confirm_revoke_api_key(self, event, api_key: str):
-        """Confirm API key revocation"""
-        try:
-            # Revoke API key
-            success = await self.db.api_db.delete_api_key(api_key)
-            
-            if success:
-                # Get API key info for notification
-                api_info = await self.db.api_db.get_api_key(api_key)
-                if api_info and api_info.get("user_id"):
-                    # Notify user
-                    try:
-                        await self.bot.send_message(
-                            api_info["user_id"],
-                            f"🚫 **API KEY REVOKED**\n\n"
-                            f"Your API key has been revoked by administrator.\n"
-                            f"🔑 Key: `{api_key[:8]}...{api_key[-4:]}`\n"
-                            f"📝 Description: {api_info.get('description', 'N/A')}\n\n"
-                            f"Contact @darkboxesAdmin for more information.",
-                            parse_mode="md"
-                        )
-                    except:
-                        pass
-                
-                await event.answer("✅ API key revoked successfully", alert=True)
-            else:
-                await event.answer("❌ Failed to revoke API key", alert=True)
-            
-            await self.show_api_panel(event)
-            
-        except Exception as e:
-            logger.error(f"❌ Error revoking API key: {e}")
-            await event.answer("❌ Error revoking API key", alert=True)
-    
-    async def show_admin_panel(self, event):
-        """Show main admin panel"""
-        admin_text = (
-            "⚙️ **DARKBOXES ADMIN PANEL**\n\n"
-            "📊 **Quick Stats**\n"
-        )
-        
-        # Get quick stats
-        try:
-            today_stats = await self.db.admin_db.get_today_stats()
-            admin_text += f"├─ Today's Users: {today_stats['new_users']}\n"
-            admin_text += f"├─ Today's Searches: {today_stats['total_searches']}\n"
-            admin_text += f"├─ Today's Payments: ₹{today_stats['total_payments']}\n"
-            admin_text += f"├─ Today's API Requests: {today_stats['api_requests']}\n"
-            
-            total_users = await asyncio.get_running_loop().run_in_executor(
-                None, self.db.db.users.count_documents, {}
-            )
-            admin_text += f"└─ Total Users: {total_users}\n"
-        except Exception as e:
-            logger.error(f"Error getting stats: {e}")
-            admin_text += "⚠️ Error loading stats\n"
-        
-        admin_text += f"\n🌐 **API Status:** {'✅ Running' if config.API_ENABLED else '❌ Disabled'}\n"
-        admin_text += f"🔗 **API URL:** {config.API_BASE_URL}\n"
-        
-        admin_text += "\n🔧 **Select an option below:**"
-        
-        await event.edit(admin_text, buttons=OneLineKeyboard.admin_panel(), parse_mode="md")
-    
-    # ... (rest of the admin panel methods remain the same as before, just add API-related handlers)
-
-    async def ask_for_broadcast(self, event):
-        """Ask for broadcast message"""
-        await event.edit(
-            "📢 **BROADCAST MESSAGE**\n\n"
-            "Enter message to broadcast to all users:\n"
-            "(Supports Markdown formatting)\n\n"
-            "Type your message:",
-            buttons=OneLineKeyboard.back_to_admin()
-        )
-        
-        user_states[event.sender_id] = {"action": "admin_broadcast"}
-    
-    async def ask_for_broadcast_media(self, event):
-        """Ask admin to send media for broadcast"""
-        user_id = event.sender_id
-        
-        target_text = (
-            "🖼️ **MEDIA BROADCAST**\n\n"
-            "Choose broadcast target:\n"
-        )
-        buttons = [
-            [Button.inline("👥 All Users", "broadcast_media_all")],
-            [Button.inline("🔍 Selected Users", "broadcast_media_selected")],
-            [Button.inline("« Admin Panel", "admin_panel")]
-        ]
-        await event.edit(target_text, buttons=buttons, parse_mode="md")
-    
-    async def show_broadcast_history(self, event):
-        """Show broadcast history with seen counts"""
-        try:
-            broadcasts = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: list(db_manager.db.broadcasts.find(
-                    {}, {"broadcast_id": 1, "caption": 1, "total_recipients": 1,
-                         "sent_count": 1, "seen_by": 1, "timestamp": 1, "media_type": 1}
-                ).sort("timestamp", -1).limit(10))
-            )
-            
-            if not broadcasts:
-                await event.edit(
-                    "📋 **BROADCAST HISTORY**\n\nNo broadcasts sent yet.",
-                    buttons=OneLineKeyboard.back_to_admin()
-                )
-                return
-            
-            hist_text = "📋 **BROADCAST HISTORY** (Last 10)\n═══════════════════════\n\n"
-            buttons = []
-            
-            for bc in broadcasts:
-                bc_id = bc.get("broadcast_id", "N/A")
-                caption = (bc.get("caption", "")[:40] + "...") if len(bc.get("caption", "")) > 40 else bc.get("caption", "N/A")
-                sent = bc.get("sent_count", 0)
-                seen = len(bc.get("seen_by", []))
-                timestamp = bc.get("timestamp", "")[:16]
-                media_type = bc.get("media_type", "text")
-                
-                hist_text += (
-                    f"📡 ID: `{bc_id}`\n"
-                    f"   ├─ Type: {media_type}\n"
-                    f"   ├─ Caption: {caption}\n"
-                    f"   ├─ Sent: {sent} | Seen: {seen}\n"
-                    f"   └─ Time: {timestamp}\n\n"
-                )
-                buttons.append([Button.inline(f"👁️ {bc_id} — Seen by {seen}", f"admin_broadcast_seen_{bc_id}")])
-            
-            buttons.append([Button.inline("« Admin Panel", "admin_panel")])
-            
-            await event.edit(hist_text, buttons=buttons, parse_mode="md")
-            
-        except Exception as e:
-            logger.error(f"Error showing broadcast history: {e}")
-            await event.edit("❌ Error loading broadcast history", buttons=OneLineKeyboard.back_to_admin())
-    
-    async def show_broadcast_seen(self, event, broadcast_id: str):
-        """Show who has seen a broadcast"""
-        try:
-            broadcast = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: db_manager.db.broadcasts.find_one({"broadcast_id": broadcast_id})
-            )
-            
-            if not broadcast:
-                await event.answer("❌ Broadcast not found", alert=True)
-                return
-            
-            seen_by = broadcast.get("seen_by", [])
-            sent_count = broadcast.get("sent_count", 0)
-            
-            seen_text = (
-                f"👁️ **BROADCAST SEEN REPORT**\n\n"
-                f"📡 Broadcast ID: `{broadcast_id}`\n"
-                f"📤 Total Sent: {sent_count}\n"
-                f"👁️ Total Seen: {len(seen_by)}\n"
-                f"📊 Seen Rate: {(len(seen_by)/sent_count*100):.1f}% \n\n" if sent_count > 0 else f"📊 No sent data\n\n"
-            )
-            
-            if seen_by:
-                seen_text += "**Users who have seen:**\n"
-                for uid in seen_by[:20]:
-                    seen_text += f"• `{uid}`\n"
-                if len(seen_by) > 20:
-                    seen_text += f"... and {len(seen_by)-20} more\n"
-            else:
-                seen_text += "No users have seen this broadcast yet."
-            
-            await event.edit(seen_text, buttons=[[Button.inline("« Broadcast History", "admin_broadcast_history")]], parse_mode="md")
-            
-        except Exception as e:
-            logger.error(f"Error showing broadcast seen: {e}")
-            await event.answer("❌ Error loading seen report", alert=True)
-    
-    async def show_pending_payments(self, event):
-        """Show pending payments waiting for admin approval"""
-        try:
-            pending = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: list(db_manager.db.pending_payments.find(
-                    {"status": "pending"}
-                ).sort("timestamp", -1).limit(20))
-            )
-            
-            if not pending:
-                await event.edit(
-                    "💳 **PENDING PAYMENTS**\n\n✅ No pending payments!\nAll payments have been processed.",
-                    buttons=OneLineKeyboard.back_to_admin()
-                )
-                return
-            
-            text = f"💳 **PENDING PAYMENTS** ({len(pending)} awaiting)\n═══════════════════════\n\n"
-            buttons = []
-            
-            for p in pending:
-                pay_id = p.get("payment_id", "N/A")
-                uid = p.get("user_id", "N/A")
-                fname = p.get("first_name", "N/A")
-                plan = p.get("plan_name", "N/A")
-                amount = p.get("amount", 0)
-                ts = p.get("timestamp", "")[:16]
-                
-                text += (
-                    f"🔖 ID: `{pay_id}`\n"
-                    f"   ├─ User: {fname} (`{uid}`)\n"
-                    f"   ├─ Plan: {plan} — ₹{amount}\n"
-                    f"   └─ Time: {ts}\n\n"
-                )
-                plan_id = p.get("plan_id", "basic")
-                buttons.append([
-                    Button.inline(f"✅ Approve {pay_id}", f"approve_payment_{pay_id}_{uid}_{plan_id}"),
-                    Button.inline(f"❌ Reject", f"reject_payment_{pay_id}_{uid}")
-                ])
-            
-            buttons.append([Button.inline("« Admin Panel", "admin_panel")])
-            
-            await event.edit(text, buttons=buttons, parse_mode="md")
-            
-        except Exception as e:
-            logger.error(f"Error showing pending payments: {e}")
-            await event.edit("❌ Error loading pending payments", buttons=OneLineKeyboard.back_to_admin())
-    
-    async def ask_for_give_subscription(self, event):
-        """Ask admin to give subscription to user"""
-        await event.edit(
-            "💎 **GIVE SUBSCRIPTION**\n\n"
-            "Enter: `user_id plan_name`\n\n"
-            "Available plans:\n"
-            "• `basic` — 10 searches, 7 days\n"
-            "• `standard` — 30 searches, 15 days\n"
-            "• `premium` — Unlimited, 30 days\n\n"
-            "**Example:** `123456789 premium`\n\n"
-            "Or to select from user list, first search the user via Search Users.",
-            buttons=OneLineKeyboard.back_to_admin(),
-            parse_mode="md"
-        )
-        user_states[event.sender_id] = {"action": "admin_give_subscription"}
-
-# ================== SEARCH ENGINE WITH PRIORITY MANAGEMENT ==================
-
-class SearchEngine:
-    def __init__(self, db_manager, user_manager):
-        self.db = db_manager
-        self.user_manager = user_manager
-        self.active_searches = {}
-        self.waiting_for_files = {}
-        self.group_performance = {}
-    
-    async def perform_search(self, search_type: str, query: str, user_id: int) -> Dict:
-        """Perform cascading search with priority management"""
-        logger.info(f"🚀 Starting {search_type} search: {query} (User: {user_id})")
-        
-        # Check for leak search
-        if search_type == "leak":
-            return await self.perform_leak_search(query, user_id)
-        
-        # Get command priority
-        cmd = SEARCH_COMMANDS.get(search_type, {})
-        preferred_priority = cmd.get("priority", "primary")
-        
-        # Sort groups based on command priority and performance
-        sorted_groups = self._get_priority_groups(preferred_priority)
-        
-        for group in sorted_groups:
-            if not group.get("entity"):
-                logger.warning(f"⚠️ Group {group['name']} not resolved")
-                continue
-            
-            # Get appropriate command for this group
-            command_list = cmd["commands"]
-            primary_command = command_list[0]
-            
-            logger.info(f"📤 Trying {group['name']}: {primary_command} {query}")
-            
-            try:
-                # Send message to group
-                sent_msg = await user_client.send_message(group["entity"], f"{primary_command} {query}")
-                
-                # Create search tracking
-                search_id = f"{user_id}_{int(time.time())}_{group['name']}"
-                future = asyncio.get_running_loop().create_future()
-                
-                self.active_searches[search_id] = {
-                    "user_id": user_id,
-                    "future": future,
-                    "start_time": time.time(),
-                    "group": group,
-                    "message_id": sent_msg.id,
-                    "search_type": search_type,
-                    "query": query,
-                    "chat_id": group["entity"].id if hasattr(group["entity"], 'id') else str(group["entity"]),
-                    "expecting_file": False,
-                    "file_wait_start": None,
-                    "priority": group["weight"]
-                }
-                
-                # Wait for response
-                try:
-                    result = await asyncio.wait_for(future, timeout=group["timeout"])
-                    
-                    if result["success"]:
-                        # Update group performance
-                        self._update_group_performance(group["name"], True)
-                        logger.info(f"✅ Success from {group['name']}")
-                        return result
-                    else:
-                        self._update_group_performance(group["name"], False)
-                        logger.info(f"⚠️ No result from {group['name']}, trying next...")
-                        continue
-                        
-                except asyncio.TimeoutError:
-                    self._update_group_performance(group["name"], False)
-                    logger.info(f"⏱️ Timeout from {group['name']}")
-                    continue
-                    
-            except Exception as e:
-                logger.error(f"❌ Error sending to {group['name']}: {e}")
-                self._update_group_performance(group["name"], False)
-                continue
-        
-        # All groups failed
-        await self._notify_admin(user_id, search_type, query)
-        return {
-            "success": False,
-            "error": f"🔍 **INTELLIGENCE GATHERING FAILED**\n\nQuery: `{query}`\n\n⚠️ **Premium Notice:** Your query has been escalated to our premium database.\nAdministrator will review and respond within 24 hours.\n\n💎 **For instant access, upgrade to:**\n• 👑 Premium Tier: Unlimited searches (30 days)\n• 🚀 Standard Tier: 30 searches (15 days)\n\nContact @darkboxesAdmin for immediate assistance."
-        }
-    
-    async def perform_leak_search(self, query: str, user_id: int) -> Dict:
-        """Perform advanced leak search (Search Anything)"""
-        try:
-            logger.info(f"🚀 ADVANCED LEAK SEARCH: {query} (User: {user_id})")
-            
-            # Get the advanced group
-            advanced_group = GROUP_PRIORITIES["advanced"]
-            if not advanced_group.get("entity"):
-                logger.error("❌ Advanced group not resolved")
-                return {
-                    "success": False,
-                    "error": "❌ Advanced search engine is currently unavailable. Please try again later."
-                }
-            
-            # Send leak command
-            leak_command = advanced_group.get("leak_command", "/leak")
-            sent_msg = await user_client.send_message(advanced_group["entity"], f"{leak_command} {query}")
-            
-            # Create search tracking
-            search_id = f"{user_id}_{int(time.time())}_leak"
-            future = asyncio.get_running_loop().create_future()
-            
-            self.active_searches[search_id] = {
-                "user_id": user_id,
-                "future": future,
-                "start_time": time.time(),
-                "group": advanced_group,
-                "message_id": sent_msg.id,
-                "search_type": "leak",
-                "query": query,
-                "chat_id": advanced_group["entity"].id if hasattr(advanced_group["entity"], 'id') else str(advanced_group["entity"]),
-                "expecting_file": True,
-                "file_wait_start": None,
-                "priority": advanced_group["weight"],
-                "expect_multiple_files": True,
-                "files_received": [],
-                "file_types": ["json", "txt"],
-                "processed_files": []
-            }
-            
-            # Wait for response (5 seconds timeout for leak search)
-            try:
-                result = await asyncio.wait_for(future, timeout=10)
-                
-                if result["success"]:
-                    logger.info(f"✅ Advanced leak search successful")
-                    return result
-                else:
-                    logger.info(f"⚠️ No result from advanced search")
-                    return {
-                        "success": False,
-                        "error": "❌ No information found in our advanced databases.\n\n⚠️ **Note:** For phone searches, include country code (e.g., 917204764637)\n💎 **Try our premium sources for better results.**"
-                    }
-                    
-            except asyncio.TimeoutError:
-                logger.info(f"⏱️ Timeout from advanced search")
-                return {
-                    "success": False,
-                    "error": "⏱️ **ADVANCED SEARCH TIMEOUT**\n\nOur advanced engine is processing your query.\nResults will be delivered shortly if available.\n\n⚠️ **For immediate results:**\n• Use specific search types (Phone, Email, etc.)\n• Ensure phone numbers include country code\n• Contact @darkboxesAdmin for premium support"
-                }
-                
-        except Exception as e:
-            logger.error(f"❌ Error in leak search: {e}")
-            return {
-                "success": False,
-                "error": "❌ Advanced search engine error. Please try again or use specific search types."
-            }
-    
-    def _get_priority_groups(self, preferred_priority: str) -> List:
-        """Get groups sorted by priority and performance"""
-        priority_order = ["primary", "secondary", "tertiary"]
-        
-        # Start with preferred priority group
-        sorted_groups = []
-        
-        # Add preferred group first
-        for group in DESTINATION_GROUPS:
-            if group.get("name") == GROUP_PRIORITIES[preferred_priority]["name"]:
-                sorted_groups.append(group)
-                break
-        
-        # Add remaining groups by weight
-        remaining_groups = [g for g in DESTINATION_GROUPS if g not in sorted_groups]
-        remaining_groups.sort(key=lambda x: x["weight"], reverse=True)
-        
-        sorted_groups.extend(remaining_groups)
-        return sorted_groups
-    
-    def _update_group_performance(self, group_name: str, success: bool):
-        """Update group performance tracking"""
-        if group_name not in self.group_performance:
-            self.group_performance[group_name] = {"success": 0, "total": 0}
-        
-        self.group_performance[group_name]["total"] += 1
-        if success:
-            self.group_performance[group_name]["success"] += 1
-    
-    async def handle_incoming_message(self, event):
-        """Handle incoming messages for search responses"""
-        try:
-            message = event.message
-            
-            # Check if this is a reply to our search
-            if message.reply_to:
-                reply_to_id = message.reply_to.reply_to_msg_id
-                
-                for search_id, search_info in list(self.active_searches.items()):
-                    if reply_to_id == search_info["message_id"]:
-                        await self._process_search_response(search_id, search_info, message)
-                        return
-            
-            # Check for file messages in same chat
-            for search_id, search_info in list(self.active_searches.items()):
-                try:
-                    chat_match = False
-                    if hasattr(search_info["group"]["entity"], 'id'):
-                        chat_match = event.chat_id == search_info["group"]["entity"].id
-                    elif search_info.get("chat_id"):
-                        chat_match = str(event.chat_id) == str(search_info["chat_id"])
-                    
-                    if chat_match:
-                        file_check = await self._check_and_process_file(message, search_info)
-                        if file_check is not None:
-                            logger.info(f"📁 Found file in {search_info['group']['name']}")
-                            await self._process_search_response(search_id, search_info, message)
-                        return
-                except:
-                    continue
-                    
-        except Exception as e:
-            logger.error(f"❌ Error handling incoming message: {e}")
-
-    async def _check_and_process_file(self, message, search_info: Dict) -> Optional[Dict]:
-        """Check if message has file and process it"""
-        try:
-            # First check for actual file/document
-            if message.media and hasattr(message.media, 'document'):
-                logger.info(f"📁 Found document media in message")
-                return await self._process_file(message, search_info)
-        
-            if hasattr(message, 'file') and message.file:
-                logger.info(f"📁 Found file attribute in message")
-                return await self._process_file(message, search_info)
-        
-            if message.document:
-                logger.info(f"📁 Found document in message")
-                return await self._process_file(message, search_info)
-        
-            # Check for text that might be a TXT file
-            text = message.text or message.raw_text or ""
-            if text and len(text) > 1000:
-                # Check for TXT file indicators in the text
-                txt_indicators = [
-                    'Full results available as JSON file',
-                    'Total length:',
-                    'TRUNCATED - DATA TOO LONG',
-                    '───────────────────────',
-                    '━━━━━━━━━━━━━━━━━━━━━━━━',
-                    'Service: leak',
-                    'Requested by:',
-                    '👤 ʀᴇǫᴜᴇꜱᴛᴇᴅ ʙʏ:',
-                    '🔍 ǫᴜᴇʀʏ:',
-                    '⏰ ᴛɪᴍᴇ:'
-                ]
-            
-                indicator_count = 0
-                for indicator in txt_indicators:
-                    if indicator in text:
-                        indicator_count += 1
-            
-                # If multiple indicators found, treat as TXT file
-                if indicator_count >= 3:
-                    logger.info(f"📄 Detected TXT file content in message text ({indicator_count} indicators)")
-                
-                    # Clean the text content
-                    cleaned_content = TextProcessor.clean_content(text, search_info["search_type"])
-                
-                    result = {
-                        "success": True,
-                        "result": None,
-                        "has_file": True,
-                        "content": cleaned_content,
-                        "raw_bytes": cleaned_content.encode('utf-8'),
-                        "filename": f"leak_{search_info['query']}_{int(time.time())}.txt",
-                        "is_text_based": True
-                    }
-                
-                    # For non-leak searches, format the result
-                    if search_info["search_type"] != "leak":
-                        formatted_result = PremiumFormatter.format_result(
-                            cleaned_content,
-                            search_info["search_type"],
-                            search_info["query"],
-                            search_info["group"]["name"]
-                        )
-                        result["result"] = formatted_result
-                
-                    logger.info(f"✅ Processed TXT content with {len(cleaned_content)} characters")
-                    return result
-        
-            return None
-        
-        except Exception as e:
-            logger.error(f"❌ Error checking for file: {e}")
-            return None
-    
-    async def _process_search_response(self, search_id: str, search_info: Dict, message):
-        """Process a search response message"""
-        try:
-            text = message.text or message.raw_text or ""
-            logger.info(f"📨 Processing message in {search_info['group']['name']}: {text[:100]}...")
-            
-            # Special handling for leak search
-            if search_info["search_type"] == "leak":
-                return await self._process_leak_response(search_id, search_info, message)
-            
-            file_result = await self._check_and_process_file(message, search_info)
-            if file_result is not None:
-                logger.info(f"✅ Processing file from message")
-                if search_id in self.active_searches:
-                    future = self.active_searches[search_id]["future"]
-                    if not future.done():
-                        future.set_result(file_result)
-                    del self.active_searches[search_id]
-                return
-            
-            if TextProcessor.is_file_generated_message(text):
-                logger.info(f"📄 File generation message detected in {search_info['group']['name']}")
-                
-                if message.reply_to:
-                    logger.info(f"🔗 File message is a reply, checking replied message...")
-                    try:
-                        replied_msg = await message.get_reply_message()
-                        if replied_msg:
-                            replied_file_result = await self._check_and_process_file(replied_msg, search_info)
-                            if replied_file_result:
-                                logger.info(f"✅ Found file in replied message")
-                                if search_id in self.active_searches:
-                                    future = self.active_searches[search_id]["future"]
-                                    if not future.done():
-                                        future.set_result(replied_file_result)
-                                    del self.active_searches[search_id]
-                                return
-                    except Exception as e:
-                        logger.error(f"❌ Error checking replied message: {e}")
-                
-                search_info["expecting_file"] = True
-                search_info["file_wait_start"] = time.time()
-                logger.info(f"⏳ Waiting for file to arrive...")
-                return
-            
-            if TextProcessor.is_processing_message(text):
-                logger.info(f"⏳ Processing message, waiting...")
-                return
-            
-            if TextProcessor.is_no_info_message(text):
-                logger.info(f"🚫 No-info message")
-                result = {"success": False}
-            elif text and len(text.strip()) > 10:
-                logger.info(f"📝 Processing text response")
-                result = await self._process_text(text, search_info)
-            else:
-                logger.info(f"⚠️ Empty or short message, ignoring")
-                return
-            
-            if search_id in self.active_searches:
-                future = self.active_searches[search_id]["future"]
-                if not future.done():
-                    future.set_result(result)
-                del self.active_searches[search_id]
-                
-        except Exception as e:
-            logger.error(f"❌ Error processing search response: {e}")
-    
-    async def _process_leak_response(self, search_id: str, search_info: Dict, message):
-        """Process leak search response"""
-        try:
-            # First, check if this is a file
-            file_result = await self._check_and_process_file(message, search_info)
-            
-            if file_result is not None:
-                logger.info(f"📁 Processing leak search file")
-                
-                # Check if we've already processed this file (prevent duplicate processing)
-                message_id = message.id
-                if "processed_files" not in search_info:
-                    search_info["processed_files"] = []
-                
-                if message_id in search_info["processed_files"]:
-                    logger.info(f"⚠️ Already processed file with ID {message_id}, skipping")
-                    return
-                
-                search_info["processed_files"].append(message_id)
-                
-                # Add file to received files
-                if "files_received" not in search_info:
-                    search_info["files_received"] = []
-                
-                # Determine file type
-                filename = ""
-                if hasattr(message.file, 'name') and message.file.name:
-                    filename = message.file.name.lower()
-                elif hasattr(message, 'file') and message.file and hasattr(message.file, 'name'):
-                    filename = message.file.name.lower()
-                
-                file_type = "unknown"
-                if '.json' in filename:
-                    file_type = "json"
-                elif '.txt' in filename:
-                    file_type = "txt"
-                elif '.text' in filename:
-                    file_type = "txt"
-                elif 'json' in filename:
-                    file_type = "json"
-                
-                file_result["file_type"] = file_type
-                file_result["message_id"] = message_id
-                search_info["files_received"].append(file_result)
-                
-                logger.info(f"✅ Added {file_type} file to leak search results. Total files: {len(search_info['files_received'])}")
-                
-                # Check if we should complete the search
-                received_types = [f["file_type"] for f in search_info["files_received"]]
-                has_json = "json" in received_types
-                has_txt = "txt" in received_types
-                has_enough_files = len(search_info["files_received"]) >= 2
-                time_elapsed = time.time() - search_info["start_time"]
-                
-                # Complete if we have both file types OR enough files OR timeout
-                if (has_json and has_txt) or has_enough_files or time_elapsed > 10:
-                    await self._complete_leak_search(search_id, search_info)
-                return
-            
-            # Check for text message that might be a TXT file content
-            text = message.text or message.raw_text or ""
-            
-            # Check if this looks like a TXT file result
-            is_txt_result = False
-            
-            # Patterns that indicate this is a TXT file result
-            txt_patterns = [
-                r'Full results available as JSON file',
-                r'📁 Full JSON results for',
-                r'Service: leak',
-                r'Requested by:',
-                r'───────────────────────',
-                r'━━━━━━━━━━━━━━━━━━━━━━━━',
-                r'Total length: \d+ characters',
-                r'\.\.\. \[TRUNCATED - DATA TOO LONG\] \.\.\.',
-                r'👤 ʀᴇǫᴜᴇꜱᴛᴇᴅ ʙʏ:',
-                r'🔍 ǫᴜᴇʀʏ:',
-                r'⏰ ᴛɪᴍᴇ:'
-            ]
-            
-            # Check if text contains TXT result patterns
-            pattern_count = 0
-            for pattern in txt_patterns:
-                if re.search(pattern, text, re.IGNORECASE):
-                    pattern_count += 1
-            
-            # If at least 3 patterns match, consider it a TXT file
-            if pattern_count >= 3 and len(text) > 500:
-                is_txt_result = True
-                logger.info(f"📄 Detected TXT file content in message (matched {pattern_count} patterns)")
-            
-            if text and (is_txt_result or len(text.strip()) > 1000):
-                logger.info(f"📝 Processing text message as potential TXT file ({len(text)} chars)")
-                
-                # Check if we've already processed this message
-                message_id = message.id
-                if "processed_files" not in search_info:
-                    search_info["processed_files"] = []
-                
-                if message_id in search_info["processed_files"]:
-                    logger.info(f"⚠️ Already processed message with ID {message_id}, skipping")
-                    return
-                
-                search_info["processed_files"].append(message_id)
-                
-                # Create a file result from the text
-                txt_result = {
-                    "success": True,
-                    "has_file": True,
-                    "content": text,
-                    "raw_bytes": text.encode('utf-8'),
-                    "file_type": "txt",
-                    "filename": f"leak_{search_info['query']}_{int(time.time())}.txt",
-                    "message_id": message_id,
-                    "is_text_message": True
-                }
-                
-                # Add to received files
-                if "files_received" not in search_info:
-                    search_info["files_received"] = []
-                
-                search_info["files_received"].append(txt_result)
-                logger.info(f"✅ Added TXT content from message to leak search results. Total files: {len(search_info['files_received'])}")
-                
-                # Check if we should complete the search
-                received_types = [f["file_type"] for f in search_info["files_received"]]
-                has_json = "json" in received_types
-                has_txt = "txt" in received_types
-                has_enough_files = len(search_info["files_received"]) >= 2
-                time_elapsed = time.time() - search_info["start_time"]
-                
-                # Complete if we have both file types OR enough files OR timeout
-                if (has_json and has_txt) or has_enough_files or time_elapsed > 10:
-                    await self._complete_leak_search(search_id, search_info)
-                return
-            
-            # Check for processing or no-info messages
-            if TextProcessor.is_processing_message(text):
-                logger.info(f"⏳ Processing message for leak search")
-                return
-            
-            if TextProcessor.is_no_info_message(text):
-                logger.info(f"🚫 No info for leak search")
-                if search_id in self.active_searches:
-                    future = self.active_searches[search_id]["future"]
-                    if not future.done():
-                        future.set_result({"success": False})
-                    del self.active_searches[search_id]
-            
-        except Exception as e:
-            logger.error(f"❌ Error processing leak response: {e}")
-    
-    async def _complete_leak_search(self, search_id: str, search_info: Dict):
-        """Complete leak search and send results"""
-        try:
-            logger.info(f"✅ Completing leak search with {len(search_info.get('files_received', []))} files")
-            
-            if "files_received" not in search_info or not search_info["files_received"]:
-                logger.warning("⚠️ No files received for leak search")
-                if search_id in self.active_searches:
-                    future = self.active_searches[search_id]["future"]
-                    if not future.done():
-                        future.set_result({
-                            "success": False,
-                            "error": "❌ No results found in our advanced databases."
-                        })
-                    del self.active_searches[search_id]
-                return
-            
-            # Combine results
-            combined_result = {
-                "success": True,
-                "result": "🚀 **ADVANCED OSINT SEARCH COMPLETE**\n\n",
-                "files": search_info["files_received"],
-                "has_multiple_files": len(search_info["files_received"]) > 1
-            }
-            
-            # Create summary
-            json_data = None
-            txt_data = None
-            
-            for file in search_info["files_received"]:
-                if file["file_type"] == "json" and json_data is None:
-                    json_data = file.get("content", "")
-                elif file["file_type"] == "txt" and txt_data is None:
-                    txt_data = file.get("content", "")
-            
-            # Format result summary
-            summary = f"🔮 **ADVANCED UNIVERSAL SEARCH RESULT**\n"
-            summary += f"═══════════════════════════════════\n\n"
-            summary += f"🔍 **Query:** `{search_info['query']}`\n"
-            summary += f"🚀 **Source:** Advanced OSINT Engine\n"
-            summary += f"⚡ **Files Found:** {len(search_info['files_received'])}\n"
-            
-            if json_data and txt_data:
-                summary += f"📊 **Includes:** JSON + TXT files\n\n"
-            elif json_data:
-                summary += f"📊 **Includes:** JSON file\n\n"
-            elif txt_data:
-                summary += f"📊 **Includes:** TXT file\n\n"
-            
-            if txt_data:
-                # Extract preview from TXT data
-                txt_preview = txt_data[:300].replace('\n', '\n')
-                summary += f"📄 **PREVIEW:**\n"
-                summary += f"─────────────────────────────\n"
-                summary += f"{txt_preview}\n"
-                if len(txt_data) > 300:
-                    summary += f"... (see full TXT file below)\n\n"
-            
-            summary += f"📁 **Files available for download below**\n"
-            summary += f"⚡ **Powered by DarkBoxes Advanced Intelligence**\n"
-            
-            combined_result["result"] = summary
-            
-            if search_id in self.active_searches:
-                future = self.active_searches[search_id]["future"]
-                if not future.done():
-                    future.set_result(combined_result)
-                del self.active_searches[search_id]
-                logger.info(f"✅ Leak search completed successfully")
-            
-        except Exception as e:
-            logger.error(f"❌ Error completing leak search: {e}")
-            if search_id in self.active_searches:
-                future = self.active_searches[search_id]["future"]
-                if not future.done():
-                    future.set_result({"success": False})
-                del self.active_searches[search_id]
-    
-    async def _process_file(self, message, search_info: Dict) -> Dict:
-        """Process file message"""
-        try:
-            if hasattr(message.file, 'size') and message.file.size > config.MAX_FILE_SIZE_MB * 1024 * 1024:
-                logger.warning(f"📁 File too large: {message.file.size} bytes")
-                return {"success": False}
-            
-            logger.info(f"⬇️ Downloading file from {search_info['group']['name']}")
-            file_bytes = await message.download_media(bytes)
-            
-            if not file_bytes:
-                logger.error("❌ Failed to download file")
-                return {"success": False}
-            
-            content = None
-            encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1']
-            
-            for encoding in encodings:
-                try:
-                    content = file_bytes.decode(encoding)
-                    logger.info(f"✅ Decoded with {encoding}")
-                    break
-                except UnicodeDecodeError:
-                    continue
-            
-            if not content:
-                logger.error("❌ Could not decode file with any encoding")
-                return {"success": False}
-            
-            # Clean content - remove usernames and links
-            cleaned_content = TextProcessor.clean_content(content, search_info["search_type"])
-            
-            if len(cleaned_content.strip()) < 30:
-                logger.warning(f"⚠️ Cleaned content too short: {len(cleaned_content)} chars")
-                lines = content.split('\n')
-                meaningful_lines = []
-                for line in lines:
-                    line = line.strip()
-                    if len(line) > 10:
-                        if not any(word in line.lower() for word in ['powered', 'developed', 'created', 'join', 'subscribe', 'channel', 'admin', '@', 't.me', 'http']):
-                            meaningful_lines.append(line)
-                
-                if meaningful_lines:
-                    cleaned_content = '\n'.join(meaningful_lines)
-                    cleaned_content = TextProcessor.clean_content(cleaned_content, search_info["search_type"])
-                else:
-                    return {"success": False}
-            
-            result = {
-                "success": True,
-                "result": None,
-                "has_file": True,
-                "content": cleaned_content,
-                "raw_bytes": file_bytes,
-                "filename": message.file.name if hasattr(message.file, 'name') else f"result_{int(time.time())}.txt"
-            }
-            
-            # For non-leak searches, format the result
-            if search_info["search_type"] != "leak":
-                formatted_result = PremiumFormatter.format_result(
-                    cleaned_content,
-                    search_info["search_type"],
-                    search_info["query"],
-                    search_info["group"]["name"]
-                )
-                result["result"] = formatted_result
-            
-            logger.info(f"✅ Processed file with {len(cleaned_content)} characters")
-            return result
-            
-        except Exception as e:
-            logger.error(f"❌ Error processing file: {e}")
-            return {"success": False}
-    
-    async def _process_text(self, text: str, search_info: Dict) -> Dict:
-        """Process text message"""
-        cleaned = TextProcessor.clean_content(text, search_info["search_type"])
-        
-        if len(cleaned) < 20:
-            return {"success": False}
-        
-        formatted = PremiumFormatter.format_result(
-            cleaned,
-            search_info["search_type"],
-            search_info["query"],
-            search_info["group"]["name"]
-        )
-        
-        return {
-            "success": True,
-            "result": formatted,
-            "has_file": False
-        }
-    
-    async def _notify_admin(self, user_id: int, search_type: str, query: str):
-        """Notify admin about failed search"""
-        try:
-            user_info = await self.user_manager.get_user(user_id)
-            username = user_info.get('username', 'N/A') if user_info else 'N/A'
-            first_name = user_info.get('first_name', 'N/A') if user_info else 'N/A'
-            
-            admin_msg = (
-                f"🚨 **FAILED SEARCH ALERT**\n\n"
-                f"👤 User: {first_name} (@{username})\n"
-                f"🆔 ID: `{user_id}`\n"
-                f"🔍 Type: {search_type}\n"
-                f"📝 Query: `{query}`\n"
-                f"⏰ Time: {datetime.now().strftime('%H:%M:%S')}\n\n"
-                f"💡 Use `/reply {user_id} [message]` to send result"
-            )
-            
-            await bot_client.send_message(config.ADMIN_USER_ID, admin_msg, parse_mode="md")
-            logger.info(f"📋 Notified admin about {search_type}={query}")
-            
-        except Exception as e:
-            logger.error(f"❌ Error notifying admin: {e}")
-
 # ================== ADMIN API COMMANDS ==================
 
 @bot_client.on(events.NewMessage(pattern=r'/create_api (\d+) (\w+) (\d+)'))
@@ -8219,8 +6967,8 @@ async def create_api_command(event):
         days = int(event.pattern_match.group(3))
         
         result = await db_manager.api_db.create_api_key(target_user, plan, days, f"Admin created")
-        
-        if result.get('success'):
+
+        if result and result.get('api_key'):
             key = result['api_key']
             await event.respond(
                 f"✅ **API KEY CREATED**\n\n"
