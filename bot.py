@@ -291,35 +291,86 @@ DESTINATION_GROUPS = sorted(
 # ================== SUBSCRIPTION PLANS ==================
 
 SUBSCRIPTION_PLANS = {
-    "basic": {
-        "name": "💰 BASIC TIER",
-        "price": 99,
-        "searches": 10,
-        "validity": "7 days",
-        "features": ["10 Premium Searches", "Standard Databases", "7-day Access", "Email Support"],
-        "icon": "💰",
+    # ── Credit packs (one-time top-up, credits never expire) ──────────────
+    "credits_5": {
+        "name": "⚡ STARTER PACK",
+        "price": 100,
+        "searches": 5,
+        "validity": "No expiry",
+        "validity_days": 0,
+        "daily_limit": 0,
+        "plan_type": "credit",
+        "features": ["5 Premium Searches", "All Databases", "Credits Never Expire", "Email Support"],
+        "icon": "⚡",
         "color": "#27AE60",
-        "for": "New users trying the service"
+        "for": "Quick one-off lookups"
     },
-    "standard": {
-        "name": "🚀 STANDARD TIER",
-        "price": 249,
-        "searches": 30,
-        "validity": "15 days",
-        "features": ["30 Premium Searches", "All Databases", "15-day Access", "Priority Support", "Search History Saved"],
+    "credits_15": {
+        "name": "🔍 EXPLORER PACK",
+        "price": 250,
+        "searches": 15,
+        "validity": "No expiry",
+        "validity_days": 0,
+        "daily_limit": 0,
+        "plan_type": "credit",
+        "features": ["15 Premium Searches", "All Databases", "Credits Never Expire", "Priority Support"],
+        "icon": "🔍",
+        "color": "#3498DB",
+        "for": "Regular occasional users"
+    },
+    # ── Daily-limit subscriptions (30 days) ───────────────────────────────
+    "daily10_30": {
+        "name": "🚀 DAILY 10 — 30 Days",
+        "price": 800,
+        "searches": 10,
+        "validity": "30 days",
+        "validity_days": 30,
+        "daily_limit": 10,
+        "plan_type": "subscription",
+        "features": ["10 Searches/Day", "30-Day Access", "All Databases", "Priority Support", "Auto daily reset"],
         "icon": "🚀",
         "color": "#F39C12",
-        "for": "Regular users needing more searches"
+        "for": "Regular daily researchers"
     },
-    "premium": {
-        "name": "👑 PREMIUM TIER",
-        "price": 499,
-        "searches": "Unlimited",
+    "daily20_30": {
+        "name": "💎 DAILY 20 — 30 Days",
+        "price": 1000,
+        "searches": 20,
         "validity": "30 days",
-        "features": ["Unlimited Searches (30 days)", "All Premium Databases", "Priority Processing", "24/7 WhatsApp Support", "Extended Search History"],
-        "icon": "👑",
+        "validity_days": 30,
+        "daily_limit": 20,
+        "plan_type": "subscription",
+        "features": ["20 Searches/Day", "30-Day Access", "All Databases", "24/7 Priority Support", "Auto daily reset"],
+        "icon": "💎",
         "color": "#9B59B6",
-        "for": "Power users & professionals"
+        "for": "Power users needing high volume"
+    },
+    # ── Daily-limit subscriptions (60 days) ───────────────────────────────
+    "daily10_60": {
+        "name": "🌟 DAILY 10 — 2 Months",
+        "price": 1500,
+        "searches": 10,
+        "validity": "60 days",
+        "validity_days": 60,
+        "daily_limit": 10,
+        "plan_type": "subscription",
+        "features": ["10 Searches/Day", "60-Day Access", "All Databases", "Priority Support", "Best value monthly"],
+        "icon": "🌟",
+        "color": "#E74C3C",
+        "for": "Long-term regular researchers"
+    },
+    "daily20_60": {
+        "name": "👑 DAILY 20 — 2 Months",
+        "price": 1800,
+        "searches": 20,
+        "validity": "60 days",
+        "validity_days": 60,
+        "daily_limit": 20,
+        "plan_type": "subscription",
+        "features": ["20 Searches/Day", "60-Day Access", "All Databases", "24/7 VIP Support", "Best value high-volume"],
+        "icon": "👑",
+        "color": "#F39C12",
+        "for": "Professional investigators & teams"
     }
 }
 
@@ -370,28 +421,6 @@ SEARCH_COMMANDS = {
         "icon": "🚗",
         "category": "assets"
     },
-    "upi": {
-        "name": "💳 UPI Financial Intelligence",
-        "description": "💰 **UPI Account & Transaction Analysis**\n\n🔸 **Input:** UPI ID (username@paytm/bank)\n🔸 **Returns:** Account holder • Linked bank • Transaction patterns • KYC status • Last active\n🔸 **Sources:** NPCI databases • Bank records • Financial institutions\n🔸 **Security:** Bank-grade encryption",
-        "commands": ["/upiinfo", "/upiinfo"],
-        "example": "username@paytm",
-        "validation": r"^[\w\.-]+@[\w\.-]+$",
-        "cost": 1,
-        "priority": "secondary",
-        "icon": "💳",
-        "category": "finance"
-    },
-    "email": {
-        "name": "📧 Email Intelligence",
-        "description": "🖥️ **Complete Email Profile Analysis**\n\n🔸 **Input:** Email address\n🔸 **Returns:** Personal information • Social media links • Data breach history • Associated accounts • Location data\n🔸 **Sources:** Breach databases • Social media • Public records\n🔸 **Monitoring:** Real-time alerts",
-        "commands": ["/email", "/mail"],
-        "example": "user@example.com",
-        "validation": r"^[\w\.-]+@[\w\.-]+\.\w+$",
-        "cost": 1,
-        "priority": "secondary",
-        "icon": "📧",
-        "category": "digital"
-    },
     "telegram": {
         "name": "📲 Telegram Intelligence",
         "description": "⚡ **Telegram Profile Deep Analysis**\n\n🔸 **Input:** Telegram username or phone\n🔸 **Returns:** Mobile number • Profile details • Linked accounts • Activity patterns • Group memberships\n🔸 **Daily Limit:** 1 search for security\n🔸 **Privacy:** Encrypted processing",
@@ -437,17 +466,6 @@ SEARCH_COMMANDS = {
         "icon": "📸",
         "category": "social"
     },
-    "pak": {
-        "name": "🌐 Pakistan Intelligence",
-        "description": "🕌 **Pakistan Number Comprehensive Analysis**\n\n🔸 **Input:** Pakistan mobile number (+92 format)\n🔸 **Returns:** Complete subscriber information • Location • Network details • Registration data\n🔸 **Sources:** International telecom databases • Government records\n🔸 **Coverage:** All major Pakistani networks",
-        "commands": ["/pak", "/pk"],
-        "example": "+923001234567",
-        "validation": r"^\+92\d{10}$",
-        "cost": 3,
-        "priority": "tertiary",
-        "icon": "🌐",
-        "category": "international"
-    },
     "ip": {
         "name": "🌍 IP Location",
         "description": "📍 **IP Address Geolocation Analysis**\n\n🔸 **Input:** IP address (IPv4/IPv6)\n🔸 **Returns:** Country • City • ISP • Coordinates • Timezone • Threat level\n🔸 **Sources:** GeoIP databases • Threat intelligence • ASN records\n🔸 **Accuracy:** Street-level precision",
@@ -470,18 +488,6 @@ SEARCH_COMMANDS = {
         "icon": "🏦",
         "category": "finance"
     },
-    "leak": {
-        "name": "🚀 ADVANCED OSINT TOOL",
-        "description": "🔮 **SEARCH ANYTHING - MOST POWERFUL TOOL**\n\n🔸 **Universal Search:** Email • Phone (with country code) • Name • Document • Username • Any query\n🔸 **Format:** Phone must include country code (e.g., 917204764637)\n🔸 **Returns:** Comprehensive results in JSON + TXT format\n🔸 **Speed:** Ultra-fast 5-second response\n🔸 **Sources:** Deep web • Breach databases • Global intelligence\n🔸 **Cost:** 3 credits per search",
-        "commands": ["/leak"],
-        "example": "917204764637 or email@domain.com or John Doe",
-        "validation": r"^.+$",  # Accepts any input
-        "cost": 3,
-        "priority": "advanced",
-        "icon": "🚀",
-        "category": "advanced",
-        "group": "advanced"
-    }
 }
 
 # ================== PREMIUM TEXT FORMATTER ==================
@@ -1080,19 +1086,24 @@ class DatabaseManager:
             subscription_expiry = user.get("subscription_expiry")
             
             if subscription and subscription_expiry:
-                expiry_date = datetime.fromisoformat(subscription_expiry)
-                if expiry_date > datetime.now(timezone.utc):
-                    # User has active subscription
+                try:
+                    expiry_date = datetime.fromisoformat(subscription_expiry)
+                except Exception:
+                    expiry_date = None
+                if expiry_date and expiry_date > datetime.now(timezone.utc):
+                    # Daily-limit subscription: increment today's usage
+                    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
                     await asyncio.get_running_loop().run_in_executor(
                         None, lambda: self.db.users.update_one(
                             {"user_id": user_id},
                             {
-                                "$inc": {"total_searches": 1},
-                                "$set": {"last_seen": datetime.now(timezone.utc).isoformat()}
+                                "$inc": {"total_searches": 1, "subscription_used_today": 1},
+                                "$set": {"last_seen": datetime.now(timezone.utc).isoformat(),
+                                         "subscription_reset_date": today_str}
                             }
                         )
                     )
-                    
+
                     # Log search
                     search_log = {
                         "user_id": user_id,
@@ -1103,7 +1114,7 @@ class DatabaseManager:
                         "credits_used": 0,
                         "subscription_used": subscription
                     }
-                    
+
                     await asyncio.get_running_loop().run_in_executor(
                         None, lambda: self.db.search_logs.insert_one(search_log)
                     )
@@ -1538,11 +1549,10 @@ class OneLineKeyboard:
         buttons = []
         
         # Add each command in its own line
+        # upi, email, pak, leak temporarily disabled
         commands_in_order = [
-            "phone", "family", "aadhar", "vehicle", 
-            "upi", "email", "telegram", "imei",
-            "gst", "insta", "pak", "ip", "ifsc",
-            "leak"  # Advanced OSINT tool - placed at the end for emphasis
+            "phone", "family", "aadhar", "vehicle",
+            "telegram", "imei", "gst", "insta", "ip", "ifsc"
         ]
         
         for cmd_key in commands_in_order:
@@ -1561,6 +1571,7 @@ class OneLineKeyboard:
         buttons.append([Button.inline("📊 Refer & Earn", "referrals")])
         buttons.append([Button.inline("🆘 Support", "support")])
         buttons.append([Button.inline("🔑 API Access", "api_menu")])
+        buttons.append([Button.inline("🔐 Login / Link Account", "login_account")])
         
         # Add admin button if admin
         if is_admin:
@@ -1570,11 +1581,17 @@ class OneLineKeyboard:
     
     @staticmethod
     def subscription_plans() -> List[List[Button]]:
-        """Premium plan selection"""
+        """Premium plan selection — credit packs + subscriptions"""
         buttons = [
-            [Button.inline("💰 Basic Tier - ₹99", "plan_basic")],
-            [Button.inline("🚀 Standard Tier - ₹249", "plan_standard")],
-            [Button.inline("👑 Premium Tier - ₹499", "plan_premium")],
+            # Credit packs
+            [Button.inline("⚡ Starter Pack  · 5 searches · ₹100", "plan_credits_5")],
+            [Button.inline("🔍 Explorer Pack · 15 searches · ₹250", "plan_credits_15")],
+            # 30-day subscriptions
+            [Button.inline("🚀 Daily 10 · 30 Days · ₹800", "plan_daily10_30")],
+            [Button.inline("💎 Daily 20 · 30 Days · ₹1000", "plan_daily20_30")],
+            # 60-day subscriptions
+            [Button.inline("🌟 Daily 10 · 2 Months · ₹1500", "plan_daily10_60")],
+            [Button.inline("👑 Daily 20 · 2 Months · ₹1800", "plan_daily20_60")],
             [Button.inline("« Main Menu", "main_menu")]
         ]
         return buttons
@@ -2894,9 +2911,12 @@ class AdminPanelHandler:
             )
             
             buttons = [
-                [Button.inline("💰 Basic (7 days, 10 searches)", f"grant_sub_{user_id}_basic")],
-                [Button.inline("🚀 Standard (15 days, 30 searches)", f"grant_sub_{user_id}_standard")],
-                [Button.inline("👑 Premium (30 days, Unlimited)", f"grant_sub_{user_id}_premium")],
+                [Button.inline("⚡ Starter Pack (5 credits, ₹100)", f"grant_sub_{user_id}_credits_5")],
+                [Button.inline("🔍 Explorer Pack (15 credits, ₹250)", f"grant_sub_{user_id}_credits_15")],
+                [Button.inline("🚀 Daily 10 × 30d (₹800)", f"grant_sub_{user_id}_daily10_30")],
+                [Button.inline("💎 Daily 20 × 30d (₹1000)", f"grant_sub_{user_id}_daily20_30")],
+                [Button.inline("🌟 Daily 10 × 60d (₹1500)", f"grant_sub_{user_id}_daily10_60")],
+                [Button.inline("👑 Daily 20 × 60d (₹1800)", f"grant_sub_{user_id}_daily20_60")],
                 [Button.inline("« Back", f"user_detail_{user_id}")]
             ]
             
@@ -3061,9 +3081,12 @@ class AdminPanelHandler:
             "💎 **GIVE SUBSCRIPTION TO USER**\n\n"
             "Type: `user_id plan`\n\n"
             "Available plans:\n"
-            "• `basic` — 10 searches, 7 days\n"
-            "• `standard` — 30 searches, 15 days\n"
-            "• `premium` — Unlimited, 30 days\n\n"
+            "• `credits_5` — 5 searches (credit pack)\n"
+            "• `credits_15` — 15 searches (credit pack)\n"
+            "• `daily10_30` — 10/day, 30 days\n"
+            "• `daily20_30` — 20/day, 30 days\n"
+            "• `daily10_60` — 10/day, 60 days\n"
+            "• `daily20_60` — 20/day, 60 days\n\n"
             "**Example:** `123456789 premium`\n\n"
             "💡 Tip: Use 'Search Users' to find a user first, then give sub from their detail page.",
             buttons=OneLineKeyboard.back_to_admin(),
@@ -4882,42 +4905,60 @@ async def grant_sub_callback(event):
             await event.answer("❌ Invalid plan", alert=True)
             return
         
-        validity_days = {"basic": 7, "standard": 15, "premium": 30}.get(plan_id, 30)
-        expiry = datetime.now(timezone.utc) + timedelta(days=validity_days)
+        plan_type = plan.get("plan_type", "credit")
+        validity_days = plan.get("validity_days", 0)
+        daily_limit = plan.get("daily_limit", 0)
         searches = plan.get('searches', 0)
-        
-        update_data = {
-            "$set": {
-                "subscription": plan_id,
-                "subscription_expiry": expiry.isoformat(),
-                "last_seen": datetime.now(timezone.utc).isoformat()
-            }
-        }
-        if isinstance(searches, int):
-            update_data["$inc"] = {"searches_remaining": searches}
-        
-        await asyncio.get_running_loop().run_in_executor(
-            None, lambda: db_manager.db.users.update_one({"user_id": user_id}, update_data)
-        )
-        
+
+        if plan_type == "credit":
+            # Credit pack: add credits, no expiry
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: db_manager.db.users.update_one(
+                    {"user_id": user_id},
+                    {"$inc": {"searches_remaining": searches},
+                     "$set": {"last_seen": datetime.now(timezone.utc).isoformat()}}
+                )
+            )
+            expiry_str = "Never"
+            search_str = f"{searches} credits added"
+        else:
+            # Subscription plan with daily limit
+            expiry = datetime.now(timezone.utc) + timedelta(days=validity_days)
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: db_manager.db.users.update_one(
+                    {"user_id": user_id},
+                    {"$set": {
+                        "subscription": plan_id,
+                        "subscription_expiry": expiry.isoformat(),
+                        "subscription_daily_limit": daily_limit,
+                        "subscription_used_today": 0,
+                        "subscription_reset_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                        "last_seen": datetime.now(timezone.utc).isoformat()
+                    }}
+                )
+            )
+            expiry_str = expiry.strftime("%d %b %Y")
+            search_str = f"{daily_limit}/day for {validity_days} days"
+
         # Notify user
         try:
             await bot_client.send_message(
                 user_id,
-                f"🎁 **SUBSCRIPTION GRANTED BY ADMIN!**\n\n"
+                f"🎁 **PLAN GRANTED BY ADMIN!**\n\n"
                 f"✅ **{plan['name']}** has been activated!\n"
-                f"📅 Valid until: {expiry.strftime('%d %b %Y')}\n"
-                f"🔍 Searches: {'Unlimited' if plan_id == 'premium' else searches}\n\n"
-                f"Enjoy your DarkBoxes subscription! 🚀\nUse /start to begin.",
+                f"🔍 {search_str}\n"
+                f"📅 Valid: {expiry_str}\n\n"
+                f"Enjoy DarkBoxes! 🚀  Use /start to begin.",
                 parse_mode="md"
             )
         except Exception:
             pass
-        
+
         await event.edit(
-            f"✅ **SUBSCRIPTION GRANTED**\n\n"
+            f"✅ **PLAN GRANTED**\n\n"
             f"User `{user_id}` → **{plan['name']}**\n"
-            f"Valid until: {expiry.strftime('%d %b %Y')}\n\n"
+            f"Searches: {search_str}\n"
+            f"Valid: {expiry_str}\n\n"
             f"User has been notified.",
             buttons=OneLineKeyboard.back_to_admin(),
             parse_mode="md"
@@ -4947,40 +4988,60 @@ async def search_callback(event):
             await event.answer("❌ User not found", alert=True)
             return
         
-        # Check access
+        # Check access — credit-based or daily-subscription
         can_search = False
         searches_remaining = user_doc.get('searches_remaining', 0)
         subscription = user_doc.get('subscription')
         subscription_expiry = user_doc.get('subscription_expiry')
-        
+        daily_limit = user_doc.get('subscription_daily_limit', 0)
+
         if subscription and subscription_expiry:
-            expiry_date = datetime.fromisoformat(subscription_expiry)
-            if expiry_date > datetime.now(timezone.utc):
-                can_search = True
-        
+            try:
+                expiry_date = datetime.fromisoformat(subscription_expiry)
+                if expiry_date > datetime.now(timezone.utc):
+                    # Active subscription — check daily limit
+                    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                    reset_date = user_doc.get("subscription_reset_date", "")
+                    used_today = user_doc.get("subscription_used_today", 0)
+
+                    if reset_date != today_str:
+                        # New day — reset counter
+                        await asyncio.get_running_loop().run_in_executor(
+                            None, lambda: db_manager.db.users.update_one(
+                                {"user_id": user_id},
+                                {"$set": {"subscription_used_today": 0, "subscription_reset_date": today_str}}
+                            )
+                        )
+                        used_today = 0
+
+                    if daily_limit == 0 or used_today < daily_limit:
+                        can_search = True
+                    else:
+                        await event.edit(
+                            f"⏰ **DAILY LIMIT REACHED**\n\n"
+                            f"You've used all {daily_limit} searches for today.\n"
+                            f"Your limit resets at midnight UTC.\n\n"
+                            f"📅 Subscription valid until: {expiry_date.strftime('%d %b %Y')}\n"
+                            f"📊 Used today: {used_today}/{daily_limit}\n\n"
+                            f"Need more? Get a higher plan or credit pack:",
+                            buttons=OneLineKeyboard.subscription_plans(),
+                            parse_mode="md"
+                        )
+                        return
+            except Exception:
+                pass
+
         if not can_search and searches_remaining <= 0:
             await event.edit(
-                "🔒 **ACCESS DENIED**\n\n"
-                "You have no search credits remaining.\n\n"
-                "💎 **UPGRADE TO PREMIUM**\n\n"
-                "💰 **BASIC TIER** - ₹99\n"
-                "├─ 10 Premium Searches\n"
-                "├─ Standard Databases\n"
-                "├─ 7-day Access\n"
-                "└─ Email Support\n\n"
-                "🚀 **STANDARD TIER** - ₹249\n"
-                "├─ 30 Premium Searches\n"
-                "├─ All Databases\n"
-                "├─ 15-day Access\n"
-                "├─ Priority Support\n"
-                "└─ Search History Saved\n\n"
-                "👑 **PREMIUM TIER** - ₹499\n"
-                "├─ Unlimited Searches (30 days)\n"
-                "├─ All Premium Databases\n"
-                "├─ Priority Processing\n"
-                "├─ 24/7 WhatsApp Support\n"
-                "└─ Extended Search History\n\n"
-                "Select a plan to continue:",
+                "🔒 **NO CREDITS REMAINING**\n\n"
+                "You have 0 search credits. Choose a plan to continue:\n\n"
+                "⚡ **Starter Pack** — ₹100 → 5 searches\n"
+                "🔍 **Explorer Pack** — ₹250 → 15 searches\n"
+                "🚀 **Daily 10/30d** — ₹800/month\n"
+                "💎 **Daily 20/30d** — ₹1,000/month\n"
+                "🌟 **Daily 10/60d** — ₹1,500/2 months\n"
+                "👑 **Daily 20/60d** — ₹1,800/2 months\n\n"
+                "📞 Issues? Message **@darkboxesAdmin**",
                 buttons=OneLineKeyboard.subscription_plans(),
                 parse_mode="md"
             )
@@ -5093,34 +5154,27 @@ async def premium_callback(event):
     """Handle premium plans callback"""
     try:
         premium_text = (
-            "💎 **DARKBOXES PREMIUM PLANS**\n"
+            "💎 **DARKBOXES PLANS & PRICING**\n"
             "═══════════════════════\n\n"
-            "💰 **BASIC TIER** - ₹99\n"
-            "├─ 10 Premium Searches\n"
-            "├─ Standard Databases\n"
-            "├─ 7-day Access\n"
-            "├─ Email Support\n"
-            "└─ 🎯 For: New users trying the service\n\n"
-            "🚀 **STANDARD TIER** - ₹249\n"
-            "├─ 30 Premium Searches\n"
-            "├─ All Databases\n"
-            "├─ 15-day Access\n"
-            "├─ Priority Support\n"
-            "├─ Search History Saved\n"
-            "└─ 🎯 For: Regular users needing more searches\n\n"
-            "👑 **PREMIUM TIER** - ₹499\n"
-            "├─ Unlimited Searches (30 days)\n"
-            "├─ All Premium Databases\n"
-            "├─ Priority Processing\n"
-            "├─ 24/7 WhatsApp Support\n"
-            "├─ Extended Search History\n"
-            "└─ 🎯 For: Power users & professionals\n\n"
-            "📞 **Contact @darkboxesAdmin to purchase**\n"
-            "💳 **UPI ID:** `{config.UPI_ID}`\n\n"
-            "🔒 **Payment Instructions:**\n"
-            "1. Send payment via UPI\n"
-            "2. Send screenshot to @darkboxesAdmin\n"
-            "3. Your account will be upgraded within 5 minutes"
+            "━━ 🎟️ CREDIT PACKS (Never Expire) ━━\n\n"
+            "⚡ **STARTER PACK** — ₹100\n"
+            "└─ 5 searches (any time, no expiry)\n\n"
+            "🔍 **EXPLORER PACK** — ₹250\n"
+            "└─ 15 searches (any time, no expiry)\n\n"
+            "━━ 📅 30-DAY SUBSCRIPTIONS ━━\n\n"
+            "🚀 **DAILY 10** — ₹800/month\n"
+            "└─ 10 searches/day × 30 days\n\n"
+            "💎 **DAILY 20** — ₹1,000/month\n"
+            "└─ 20 searches/day × 30 days\n\n"
+            "━━ 📅 2-MONTH SUBSCRIPTIONS ━━\n\n"
+            "🌟 **DAILY 10** — ₹1,500/2 months\n"
+            "└─ 10 searches/day × 60 days\n\n"
+            "👑 **DAILY 20** — ₹1,800/2 months\n"
+            "└─ 20 searches/day × 60 days\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "💳 **UPI ID:** `durgeshraihero@oksbi`\n"
+            "📞 **Support:** @darkboxesAdmin\n\n"
+            "👇 Select a plan to pay via screenshot:"
         )
         
         await event.edit(
@@ -5146,11 +5200,19 @@ async def plan_selection_callback(event):
         plan = SUBSCRIPTION_PLANS[plan_id]
         user_id = event.sender_id
 
+        # Build search description based on plan type
+        plan_type = plan.get("plan_type", "credit")
+        daily_limit = plan.get("daily_limit", 0)
+        if plan_type == "subscription" and daily_limit > 0:
+            search_desc = f"{plan['searches']} searches/day"
+        else:
+            search_desc = f"{plan['searches']} searches (never expire)"
+
         plan_details = (
             f"{plan['icon']} **{plan['name']}**\n"
             f"═══════════════════════\n\n"
             f"💰 **Price:** ₹{plan['price']}\n"
-            f"🔍 **Searches:** {plan['searches']}\n"
+            f"🔍 **Searches:** {search_desc}\n"
             f"📅 **Validity:** {plan['validity']}\n\n"
             f"🌟 **Features:**\n"
         )
@@ -5161,12 +5223,13 @@ async def plan_selection_callback(event):
             f"\n🎯 **Perfect For:** {plan['for']}\n\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"💳 **HOW TO PURCHASE:**\n\n"
-            f"**Step 1:** Pay ₹{plan['price']} via UPI\n"
-            f"🔗 UPI ID: `{config.UPI_ID}`\n\n"
-            f"**Step 2:** Take a screenshot of your payment\n\n"
-            f"**Step 3:** Tap the button below to submit your screenshot\n"
-            f"Include your User ID automatically: `{user_id}`\n\n"
-            f"⏱️ Admin will approve within **5-10 minutes**\n"
+            f"1️⃣ Pay ₹{plan['price']} via UPI:\n"
+            f"   🔗 `{config.UPI_ID}`\n\n"
+            f"2️⃣ Take a screenshot of payment confirmation\n\n"
+            f"3️⃣ Tap **Submit Screenshot** below — admin will verify\n"
+            f"   Your ID (auto-included): `{user_id}`\n\n"
+            f"⏱️ Activation within **5–10 minutes**\n"
+            f"❓ Issues? Message **@darkboxesAdmin**\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━"
         )
 
@@ -5511,6 +5574,9 @@ async def private_message_handler(event):
         elif state.get("action") == "admin_give_subscription":
             await handle_admin_give_subscription(event)
 
+        elif state.get("action") == "enter_account_credentials":
+            await handle_account_login(event)
+
     except Exception as e:
         logger.error(f"❌ Error in private_message_handler: {e}")
 
@@ -5620,24 +5686,41 @@ async def approve_payment_callback(event):
             await event.answer("❌ Invalid plan", alert=True)
             return
 
-        # Grant subscription
-        validity_days = {"basic": 7, "standard": 15, "premium": 30}.get(plan_id, 30)
-        expiry = datetime.now(timezone.utc) + timedelta(days=validity_days)
-        searches = plan.get('searches', 0)
+        # Grant plan (credit pack or subscription)
+        plan_type = plan.get("plan_type", "credit")
+        daily_limit = plan.get("daily_limit", 0)
+        validity_days = plan.get("validity_days", 0)
+        searches = plan.get("searches", 0)
 
-        update_data = {
-            "$set": {
-                "subscription": plan_id,
-                "subscription_expiry": expiry.isoformat(),
-                "last_seen": datetime.now(timezone.utc).isoformat()
-            }
-        }
-        if isinstance(searches, int):
-            update_data["$inc"] = {"searches_remaining": searches}
-
-        await asyncio.get_running_loop().run_in_executor(
-            None, lambda: db_manager.db.users.update_one({"user_id": user_id}, update_data)
-        )
+        if plan_type == "credit":
+            # Credit pack: just top-up credits, no expiry
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: db_manager.db.users.update_one(
+                    {"user_id": user_id},
+                    {"$inc": {"searches_remaining": searches},
+                     "$set": {"last_seen": datetime.now(timezone.utc).isoformat()}}
+                )
+            )
+            expiry_str = "Never"
+            search_info = f"{searches} credits added to balance"
+        else:
+            # Daily-limit subscription
+            expiry = datetime.now(timezone.utc) + timedelta(days=validity_days)
+            expiry_str = expiry.strftime("%d %b %Y")
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: db_manager.db.users.update_one(
+                    {"user_id": user_id},
+                    {"$set": {
+                        "subscription": plan_id,
+                        "subscription_expiry": expiry.isoformat(),
+                        "subscription_daily_limit": daily_limit,
+                        "subscription_used_today": 0,
+                        "subscription_reset_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                        "last_seen": datetime.now(timezone.utc).isoformat()
+                    }}
+                )
+            )
+            search_info = f"{daily_limit} searches/day until {expiry_str}"
 
         # Update payment status
         await asyncio.get_running_loop().run_in_executor(
@@ -5653,7 +5736,7 @@ async def approve_payment_callback(event):
             None, lambda: db_manager.db.payments.insert_one({
                 "user_id": user_id,
                 "plan_id": plan_id,
-                "amount": plan.get('price', 0),
+                "amount": plan.get("price", 0),
                 "status": "completed",
                 "payment_id": payment_id,
                 "timestamp": datetime.now(timezone.utc).isoformat()
@@ -5666,10 +5749,10 @@ async def approve_payment_callback(event):
                 user_id,
                 f"🎉 **PAYMENT APPROVED!**\n\n"
                 f"✅ Your **{plan['name']}** is now active!\n"
-                f"📅 Valid until: {expiry.strftime('%d %b %Y')}\n"
-                f"🔍 Searches: {'Unlimited' if plan_id == 'premium' else searches}\n\n"
+                f"🔍 {search_info}\n\n"
                 f"Thank you for subscribing to DarkBoxes! 🚀\n"
-                f"Use /start to begin searching.",
+                f"Use /start to begin searching.\n"
+                f"Issues? @darkboxesAdmin",
                 parse_mode="md"
             )
         except Exception as e:
@@ -5678,9 +5761,10 @@ async def approve_payment_callback(event):
         await event.edit(
             f"✅ **PAYMENT APPROVED**\n\n"
             f"Payment ID: `{payment_id}`\n"
-            f"User ID: `{user_id}`\n"
+            f"User: `{user_id}`\n"
             f"Plan: {plan['name']}\n"
-            f"User has been notified.",
+            f"{search_info}\n\n"
+            f"User notified.",
             parse_mode="md"
         )
 
@@ -7118,6 +7202,293 @@ async def cleanup_expired_searches():
         except Exception as e:
             logger.error(f"❌ Error in cleanup: {e}")
 
+
+# ================== ACCOUNT SYSTEM — LOGIN & LINKING ==================
+
+def generate_password(length: int = 10) -> str:
+    """Generate a random alphanumeric password"""
+    import string
+    alphabet = string.ascii_letters + string.digits
+    return ''.join(secrets.choice(alphabet) for _ in range(length))
+
+
+async def get_or_create_db_account(user_id: int, username: str, first_name: str) -> dict:
+    """Return existing DB account or create a fresh one with credentials"""
+    account = await asyncio.get_running_loop().run_in_executor(
+        None, lambda: db_manager.db.accounts.find_one({"linked_tg_ids": user_id})
+    )
+    if account:
+        return account
+
+    # Create new account
+    account_id = f"DB{secrets.token_hex(4).upper()}"
+    password = generate_password(10)
+    pwd_hash = hashlib.sha256(password.encode()).hexdigest()
+
+    new_account = {
+        "account_id": account_id,
+        "password_hash": pwd_hash,
+        "plain_password_shown_once": password,   # cleared after first show
+        "linked_tg_ids": [user_id],
+        "linked_usernames": [username or ""],
+        "first_name": first_name,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "searches_remaining": 0,
+        "subscription": None,
+        "subscription_expiry": None,
+        "subscription_daily_limit": 0,
+        "subscription_used_today": 0,
+        "subscription_reset_date": "",
+        "is_banned": False,
+        "total_searches": 0
+    }
+
+    await asyncio.get_running_loop().run_in_executor(
+        None, lambda: db_manager.db.accounts.insert_one(new_account)
+    )
+
+    # Also link user doc
+    await asyncio.get_running_loop().run_in_executor(
+        None, lambda: db_manager.db.users.update_one(
+            {"user_id": user_id},
+            {"$set": {"account_id": account_id}},
+            upsert=False
+        )
+    )
+    return new_account
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^login_account$'))
+async def login_account_callback(event):
+    """Show login options"""
+    try:
+        user_id = event.sender_id
+        # Check if already linked
+        account = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: db_manager.db.accounts.find_one({"linked_tg_ids": user_id})
+        )
+
+        if account:
+            acc_id = account.get("account_id", "N/A")
+            sub = account.get("subscription") or "None"
+            credits = account.get("searches_remaining", 0)
+            await event.edit(
+                f"🔐 **ACCOUNT LINKED**\n\n"
+                f"Your Telegram account is already connected to:\n"
+                f"🆔 Account ID: `{acc_id}`\n"
+                f"💰 Credits: {credits}\n"
+                f"📦 Plan: {sub}\n\n"
+                f"Use this **Account ID** and your **password** in the terminal client.\n"
+                f"If you forgot your password, contact @darkboxesAdmin.",
+                buttons=[
+                    [Button.inline("🔑 Show My Account ID", "show_account_id")],
+                    [Button.inline("« Main Menu", "main_menu")]
+                ],
+                parse_mode="md"
+            )
+        else:
+            await event.edit(
+                "🔐 **ACCOUNT SYSTEM**\n\n"
+                "Link your Telegram account with a DarkBoxes account to:\n"
+                "• Use the terminal client with the same credits\n"
+                "• Access the API with shared balance\n"
+                "• Log in from multiple devices\n\n"
+                "Choose an option:",
+                buttons=[
+                    [Button.inline("🆕 Create New Account", "create_account")],
+                    [Button.inline("🔑 Login with Existing Account", "login_existing")],
+                    [Button.inline("« Main Menu", "main_menu")]
+                ],
+                parse_mode="md"
+            )
+    except Exception as e:
+        logger.error(f"❌ login_account_callback: {e}")
+        await event.answer("❌ Error", alert=True)
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^show_account_id$'))
+async def show_account_id_callback(event):
+    """Show user's account ID"""
+    try:
+        user_id = event.sender_id
+        account = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: db_manager.db.accounts.find_one({"linked_tg_ids": user_id})
+        )
+        if account:
+            acc_id = account.get("account_id", "N/A")
+            await event.answer(f"Your Account ID: {acc_id}", alert=True)
+        else:
+            await event.answer("No account linked yet.", alert=True)
+    except Exception as e:
+        logger.error(f"❌ show_account_id: {e}")
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^create_account$'))
+async def create_account_callback(event):
+    """Create a new DarkBoxes account and link Telegram"""
+    try:
+        user_id = event.sender_id
+        user = await event.get_sender()
+
+        # Check if already exists
+        existing = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: db_manager.db.accounts.find_one({"linked_tg_ids": user_id})
+        )
+        if existing:
+            await event.answer("✅ Account already exists!", alert=True)
+            await login_account_callback(event)
+            return
+
+        account = await get_or_create_db_account(user_id, user.username or "", user.first_name or "User")
+        acc_id = account.get("account_id")
+        raw_pw = account.get("plain_password_shown_once", "")
+
+        # Clear the plain password from DB now that we're showing it
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: db_manager.db.accounts.update_one(
+                {"account_id": acc_id},
+                {"$unset": {"plain_password_shown_once": ""}}
+            )
+        )
+
+        await event.edit(
+            f"✅ **ACCOUNT CREATED!**\n\n"
+            f"Save these credentials — they will **not** be shown again:\n\n"
+            f"🆔 **Account ID:** `{acc_id}`\n"
+            f"🔑 **Password:** `{raw_pw}`\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📱 **Use in Bot:** Tap Login → Login with Existing Account\n"
+            f"💻 **Use in Client:** Enter Account ID + Password at login\n"
+            f"🔗 Your Telegram is already linked to this account.\n\n"
+            f"Credits & subscriptions are shared across all linked accounts.\n"
+            f"❓ Help: @darkboxesAdmin",
+            buttons=[[Button.inline("« Main Menu", "main_menu")]],
+            parse_mode="md"
+        )
+
+    except Exception as e:
+        logger.error(f"❌ create_account_callback: {e}")
+        await event.answer("❌ Error creating account", alert=True)
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^login_existing$'))
+async def login_existing_callback(event):
+    """Ask user to enter account credentials to link"""
+    try:
+        user_id = event.sender_id
+        user_states[user_id] = {"action": "enter_account_credentials"}
+        await event.edit(
+            "🔑 **LOGIN TO EXISTING ACCOUNT**\n\n"
+            "Enter your Account ID and password:\n"
+            "Format: `ACCOUNT_ID PASSWORD`\n\n"
+            "Example: `DB1A2B3C4D myPassword123`\n\n"
+            "Don't have an account yet? Go back and create one.\n"
+            "Forgot credentials? Contact @darkboxesAdmin",
+            buttons=[[Button.inline("❌ Cancel", "main_menu")]],
+            parse_mode="md"
+        )
+    except Exception as e:
+        logger.error(f"❌ login_existing_callback: {e}")
+        await event.answer("❌ Error", alert=True)
+
+
+async def handle_account_login(event):
+    """Handle account ID + password login from user text"""
+    try:
+        user_id = event.sender_id
+        text = (event.text or "").strip()
+        parts = text.split(maxsplit=1)
+
+        if len(parts) != 2:
+            await event.respond(
+                "❌ Invalid format. Use: `ACCOUNT_ID PASSWORD`\n"
+                "Example: `DB1A2B3C4D myPassword123`",
+                parse_mode="md"
+            )
+            return
+
+        acc_id, password = parts[0].strip(), parts[1].strip()
+        pwd_hash = hashlib.sha256(password.encode()).hexdigest()
+
+        account = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: db_manager.db.accounts.find_one({"account_id": acc_id})
+        )
+
+        if not account:
+            await event.respond("❌ Account ID not found. Check and try again.")
+            return
+
+        if account.get("password_hash") != pwd_hash:
+            await event.respond("❌ Incorrect password. Contact @darkboxesAdmin if you forgot it.")
+            return
+
+        # Link this Telegram ID to the account
+        linked_ids = account.get("linked_tg_ids", [])
+        if user_id not in linked_ids:
+            linked_ids.append(user_id)
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: db_manager.db.accounts.update_one(
+                    {"account_id": acc_id},
+                    {"$addToSet": {"linked_tg_ids": user_id}}
+                )
+            )
+            # Also link account_id on user doc
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: db_manager.db.users.update_one(
+                    {"user_id": user_id},
+                    {"$set": {"account_id": acc_id}}
+                )
+            )
+
+        user_states.pop(user_id, None)
+
+        sub = account.get("subscription") or "None"
+        credits = account.get("searches_remaining", 0)
+
+        await event.respond(
+            f"✅ **LOGGED IN SUCCESSFULLY!**\n\n"
+            f"🔗 Your Telegram is now linked to account `{acc_id}`\n"
+            f"💰 Credits: {credits}\n"
+            f"📦 Plan: {sub}\n\n"
+            f"Credits and subscriptions are now shared with this account.\n"
+            f"Use /start to begin searching.",
+            parse_mode="md"
+        )
+
+    except Exception as e:
+        logger.error(f"❌ handle_account_login: {e}")
+        await event.respond("❌ Error during login. Contact @darkboxesAdmin.")
+
+
+# ================== DAILY SUBSCRIPTION RESET TASK ==================
+
+async def daily_subscription_reset():
+    """Background task: reset daily usage counter at midnight UTC"""
+    while True:
+        try:
+            now = datetime.now(timezone.utc)
+            # Sleep until next midnight UTC
+            next_midnight = (now + timedelta(days=1)).replace(
+                hour=0, minute=0, second=5, microsecond=0
+            )
+            sleep_secs = (next_midnight - now).total_seconds()
+            logger.info(f"⏰ Next subscription reset in {sleep_secs/3600:.1f}h")
+            await asyncio.sleep(sleep_secs)
+
+            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            result = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: db_manager.db.users.update_many(
+                    {"subscription_reset_date": {"$ne": today_str}, "subscription": {"$ne": None}},
+                    {"$set": {"subscription_used_today": 0, "subscription_reset_date": today_str}}
+                )
+            )
+            logger.info(f"✅ Daily reset: {result.modified_count} subscriptions reset")
+        except Exception as e:
+            logger.error(f"❌ Error in daily_subscription_reset: {e}")
+            await asyncio.sleep(3600)
+
+
+
 # ================== WEB SERVER ==================
 
 
@@ -7171,6 +7542,7 @@ async def main():
         # Start background tasks
         asyncio.create_task(cleanup_expired_searches())
         asyncio.create_task(start_web_server())
+        asyncio.create_task(daily_subscription_reset())
         
         logger.info("=" * 60)
         logger.info("🎭 DARK BOXES INTELLIGENCE SYSTEM - OPERATIONAL")
