@@ -71,7 +71,7 @@ class BotConfig:
     MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "20"))
     
     # Credits and rewards
-    NEW_USER_CREDITS: int = int(os.getenv("NEW_USER_CREDITS", "1"))
+    NEW_USER_CREDITS: int = int(os.getenv("NEW_USER_CREDITS", "0"))
     REFERRAL_REWARD: int = int(os.getenv("REFERRAL_REWARD", "1"))
     
     # Payment
@@ -248,7 +248,7 @@ class APIResponseFormatter:
 GROUP_PRIORITIES = {
     "primary": {
         "name": "⚡ Premium Database",
-        "identifier": -1003596998816,
+        "identifier": "RAJIV_THE_LOOKUP_HUB",
         "timeout": 30,
         "weight": 10,
         "enabled": True,
@@ -256,7 +256,7 @@ GROUP_PRIORITIES = {
     },
     "secondary": {
         "name": "🌐 IntelX Network",
-        "identifier": "IntelXGroup",
+        "identifier": "UrnoiseOp",
         "timeout": 35,
         "weight": 7,
         "enabled": True,
@@ -264,7 +264,7 @@ GROUP_PRIORITIES = {
     },
     "tertiary": {
         "name": "🔍 Basic Database",
-        "identifier": "nex_chats",
+        "identifier": "OsintInformationGroup",
         "timeout": 40,
         "weight": 5,
         "enabled": True,
@@ -272,7 +272,7 @@ GROUP_PRIORITIES = {
     },
     "advanced": {
         "name": "🚀 Advanced OSINT Engine",
-        "identifier": "IntelXGroup",  # Replace with your advanced group ID
+        "identifier": "RAJIV_THE_LOOKUP_HUB",  # Replace with your advanced group ID
         "timeout": 25,
         "weight": 15,
         "enabled": True,
@@ -373,106 +373,6 @@ SUBSCRIPTION_PLANS = {
         "for": "Professional investigators & teams"
     }
 }
-
-# ================== PROTECTED QUERIES ==================
-# MongoDB collection:  protected_queries
-# Document schema:
-#   { query_key: str (normalised lower),  query_raw: str,  search_type: str|"any",
-#     protected_by: "admin" | user_id,  reason: str,  created_at: str,
-#     paid_protect: bool,  payment_utr: str,  payment_verified: bool }
-
-class ProtectedQueryManager:
-    """Check, add, and remove protected queries."""
-
-    def __init__(self, db_manager):
-        self.db = db_manager
-
-    @staticmethod
-    def _key(query: str) -> str:
-        return query.strip().lower()
-
-    async def is_protected(self, query: str, search_type: str = "any") -> bool:
-        """Return True if this query is protected (admin or verified paid user)."""
-        key = self._key(query)
-        loop = asyncio.get_running_loop()
-        doc = await loop.run_in_executor(
-            None, lambda: self.db.db.protected_queries.find_one({
-                "query_key": key,
-                "payment_verified": True,
-                "$or": [{"search_type": "any"}, {"search_type": search_type}]
-            })
-        )
-        return doc is not None
-
-    async def add_protected(self, query: str, search_type: str = "any",
-                             protected_by = "admin", reason: str = "",
-                             payment_utr: str = "", paid_protect: bool = False) -> bool:
-        """Add a query to the protected list."""
-        key = self._key(query)
-        loop = asyncio.get_running_loop()
-        existing = await loop.run_in_executor(
-            None, lambda: self.db.db.protected_queries.find_one({"query_key": key})
-        )
-        if existing:
-            # Update verification status if this is a payment confirmation
-            if paid_protect:
-                await loop.run_in_executor(
-                    None, lambda: self.db.db.protected_queries.update_one(
-                        {"query_key": key},
-                        {"$set": {"payment_verified": True, "payment_utr": payment_utr}}
-                    )
-                )
-            return True
-        doc = {
-            "query_key": key,
-            "query_raw": query.strip(),
-            "search_type": search_type,
-            "protected_by": protected_by,
-            "reason": reason,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "paid_protect": paid_protect,
-            "payment_utr": payment_utr,
-            "payment_verified": not paid_protect,   # admin adds are immediately verified
-        }
-        await loop.run_in_executor(None, lambda: self.db.db.protected_queries.insert_one(doc))
-        return True
-
-    async def remove_protected(self, query: str) -> bool:
-        """Remove a query from the protected list."""
-        key = self._key(query)
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None, lambda: self.db.db.protected_queries.delete_many({"query_key": key})
-        )
-        return result.deleted_count > 0
-
-    async def list_protected(self, limit: int = 50) -> list:
-        """Return list of protected query docs."""
-        loop = asyncio.get_running_loop()
-        docs = await loop.run_in_executor(
-            None, lambda: list(self.db.db.protected_queries.find(
-                {}, {"_id": 0}
-            ).sort("created_at", -1).limit(limit))
-        )
-        return docs
-
-    async def list_pending_paid(self) -> list:
-        """Return paid-protect requests awaiting admin verification."""
-        loop = asyncio.get_running_loop()
-        docs = await loop.run_in_executor(
-            None, lambda: list(self.db.db.protected_queries.find(
-                {"paid_protect": True, "payment_verified": False}, {"_id": 0}
-            ).sort("created_at", -1))
-        )
-        return docs
-
-
-# Instantiated after db_manager is created (see bottom of file)
-protected_query_manager: "ProtectedQueryManager" = None   # forward-declared
-
-PROTECT_PRICE_RS  = 50          # ₹50 per query protection
-PROTECT_UTR_LEN   = 12          # UTR must be exactly 12 digits
-
 
 # ================== SEARCH COMMANDS WITH PRIORITY ==================
 
@@ -692,51 +592,6 @@ class PremiumFormatter:
 # ================== TEXT PROCESSOR ==================
 
 class TextProcessor:
-
-    # ── Brand names to strip from all results ────────────────────────────────
-    _BRAND_PATTERNS = [
-        r'ENCOREX\s+TUNNEL',
-        r'ENCOREX',
-        r'IntelX(?:\s+Network)?',
-        r'intelx(?:\s+network)?',
-        r'INTELX',
-    ]
-    _BRAND_RE = re.compile('|'.join(_BRAND_PATTERNS), re.IGNORECASE)
-
-    # ── Scanning / loading box patterns sent by destination groups ───────────
-    # Example:
-    #   ENCOREX TUNNEL
-    #   ╔═══...═══╗
-    #   ║ 🔍 scanning...
-    #   ║ 📡 service: NUM
-    #   ║ 🖥️ node: ip-172-31-24-227
-    #   ╚═══...═══╝
-    _SCANNING_RE = re.compile(
-        r'(?:ENCOREX\s+TUNNEL|INTELX|IntelX)?'
-        r'[\s\S]*?'
-        r'(?:╔|┌|▄)[\s\S]*?'
-        r'(?:scanning\.\.\.|scanning\s|🔍\s*scan)',
-        re.IGNORECASE
-    )
-
-    @staticmethod
-    def is_scanning_message(text: str) -> bool:
-        """
-        Return True if this message is just a 'scanning…' status box from
-        the destination group — NOT the actual result.  We must wait for the
-        real reply / edit before forwarding to the user.
-        """
-        if not text:
-            return False
-        text_lower = text.lower()
-        # Must contain a scanning keyword
-        scan_kw = ['scanning...', 'scanning...', '🔍 scanning', 'scanning\n', '🔍 scan']
-        if not any(kw in text_lower for kw in scan_kw):
-            return False
-        # AND must look like a box / status frame (common Unicode box chars)
-        box_chars = ['╔', '╚', '║', '┌', '└', '│', '▄', '▀']
-        return any(c in text for c in box_chars)
-
     @staticmethod
     def is_processing_message(text: str) -> bool:
         """Check if message indicates processing"""
@@ -794,10 +649,24 @@ class TextProcessor:
         """Clean and format content"""
         if not content:
             return ""
-
-        # ── Strip brand names first ───────────────────────────────────────
-        content = TextProcessor._BRAND_RE.sub('', content)
-
+        
+        # Remove ENCOREX and IntelX branding
+        branding_patterns = [
+            r'ENCOREX\s*TUNNEL',
+            r'ENCOREX',
+            r'IntelX',
+            r'INTELX',
+            r'intelx',
+            r'╔════════════════════════════╗',
+            r'║.*scanning.*║',
+            r'║.*service:.*║',
+            r'║.*node:.*ip-.*║',
+            r'╚════════════════════════════╝',
+        ]
+        
+        for pattern in branding_patterns:
+            content = re.sub(pattern, '', content, flags=re.IGNORECASE | re.MULTILINE)
+        
         # Remove promotional content and personal information
         patterns = [
             r'https?://\S+',
@@ -1115,6 +984,113 @@ class AdminDatabaseManager:
             logger.error(f"Error searching users: {e}")
             return []
 
+# ================== PROTECTED QUERIES MANAGER ==================
+
+class ProtectedQueriesManager:
+    """Manage protected queries and payment verification"""
+    
+    def __init__(self, db_manager):
+        self.db = db_manager.db
+        self.protected_queries = self.db.protected_queries
+        self.protection_payments = self.db.protection_payments
+        
+    async def is_query_protected(self, query: str) -> bool:
+        """Check if a query is protected"""
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: self.protected_queries.find_one({
+                "query": query.lower().strip(),
+                "status": "active"
+            })
+        )
+        return result is not None
+    
+    async def add_protected_query(self, query: str, added_by: int, reason: str = "admin"):
+        """Add a query to protected list"""
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: self.protected_queries.insert_one({
+                "query": query.lower().strip(),
+                "added_by": added_by,
+                "reason": reason,
+                "status": "active",
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+        )
+        logger.info(f"🔒 Protected query added: {query}")
+    
+    async def remove_protected_query(self, query: str):
+        """Remove a query from protected list"""
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: self.protected_queries.update_one(
+                {"query": query.lower().strip()},
+                {"$set": {"status": "removed"}}
+            )
+        )
+        logger.info(f"🔓 Protected query removed: {query}")
+    
+    async def create_protection_request(self, user_id: int, query: str, utr: str):
+        """Create a new protection request"""
+        loop = asyncio.get_running_loop()
+        request_id = str(uuid.uuid4())[:8]
+        await loop.run_in_executor(
+            None,
+            lambda: self.protection_payments.insert_one({
+                "request_id": request_id,
+                "user_id": user_id,
+                "query": query,
+                "utr": utr,
+                "amount": 50,
+                "status": "pending",
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+        )
+        return request_id
+    
+    async def approve_protection_request(self, request_id: str):
+        """Approve a protection request"""
+        loop = asyncio.get_running_loop()
+        request = await loop.run_in_executor(
+            None,
+            lambda: self.protection_payments.find_one({"request_id": request_id})
+        )
+        
+        if request:
+            # Add query to protected list
+            await self.add_protected_query(
+                request["query"],
+                request["user_id"],
+                reason="user_paid"
+            )
+            
+            # Update request status
+            await loop.run_in_executor(
+                None,
+                lambda: self.protection_payments.update_one(
+                    {"request_id": request_id},
+                    {"$set": {
+                        "status": "approved",
+                        "approved_at": datetime.now(timezone.utc).isoformat()
+                    }}
+                )
+            )
+            return True
+        return False
+    
+    async def get_pending_protection_requests(self):
+        """Get all pending protection requests"""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: list(self.protection_payments.find(
+                {"status": "pending"}
+            ).sort("timestamp", -1).limit(20))
+        )
+
 # ================== DATABASE MANAGER ==================
 
 class DatabaseManager:
@@ -1133,6 +1109,7 @@ class DatabaseManager:
             self.db = self.client[config.MONGODB_DBNAME]
             self.admin_db = AdminDatabaseManager(self)
             self.api_db = APIDatabaseManager(self)
+            self.protected_manager = ProtectedQueriesManager(self)
             
             # Create indexes
             await asyncio.get_running_loop().run_in_executor(
@@ -1157,6 +1134,14 @@ class DatabaseManager:
             )
             await asyncio.get_running_loop().run_in_executor(
                 None, lambda: self.db.api_logs.create_index([("timestamp", -1)])
+            )
+            
+            # Create protected queries indexes
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.protected_queries.create_index([("query", 1)])
+            )
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.protection_payments.create_index([("request_id", 1)], unique=True)
             )
             
             logger.info("✅ MongoDB connected")
@@ -1722,7 +1707,6 @@ class OneLineKeyboard:
         buttons.append([Button.inline("🔐 Login / Link Account", "login_account")])
         buttons.append([Button.inline("💻 Download Client Script", "download_client")])
         buttons.append([Button.inline("🗝️ Get My Login Credentials", "get_credentials")])
-        buttons.append([Button.inline("🛡️ Protect My Query  ·  ₹50", "protect_query_menu")])
         
         # Add admin button if admin
         if is_admin:
@@ -1772,8 +1756,6 @@ class OneLineKeyboard:
             [Button.inline("💎 Give Subscription", "admin_give_subscription")],
             [Button.inline("📊 Export Data", "admin_export")],
             [Button.inline("🔑 API Panel", "admin_api")],
-            [Button.inline("🛡️ Protected Queries", "admin_protected_queries")],
-            [Button.inline("⏳ Pending Protect Requests", "admin_pending_protect")],
             [Button.inline("« Main Menu", "main_menu")]
         ]
         return buttons
@@ -2018,21 +2000,6 @@ class AdminPanelHandler:
                 await self.export_data(event)
             elif data == "admin_api":
                 await self.show_api_panel(event)
-            elif data == "admin_protected_queries":
-                await admin_show_protected_queries(event)
-            elif data == "admin_pending_protect":
-                await admin_show_pending_protect(event)
-            elif data.startswith("admin_protect_approve_"):
-                qkey = data[len("admin_protect_approve_"):]
-                await admin_approve_protect(event, qkey)
-            elif data.startswith("admin_protect_reject_"):
-                qkey = data[len("admin_protect_reject_"):]
-                await admin_reject_protect(event, qkey)
-            elif data.startswith("admin_protect_remove_"):
-                qkey = data[len("admin_protect_remove_"):]
-                await admin_remove_protect(event, qkey)
-            elif data == "admin_protect_add":
-                await admin_ask_add_protect(event)
             elif data == "admin_api_stats":
                 await self.show_api_stats(event)
             elif data == "admin_api_user":
@@ -4393,17 +4360,34 @@ class SearchEngine:
         try:
             text = message.text or message.raw_text or ""
             logger.info(f"📨 Processing message in {search_info['group']['name']}: {text[:100]}...")
-
-            # ── Skip scanning/status boxes — wait for real result ─────────
-            if TextProcessor.is_scanning_message(text):
-                logger.info(
-                    f"⏳ Scanning/status box detected — skipping, awaiting real result "
-                    f"(msg_id={message.id})"
-                )
-                # Remember this message id so we can pick up its edit
-                search_info.setdefault("scanning_msg_ids", set()).add(message.id)
+            
+            # ===== ENCOREX TUNNEL FILTER =====
+            # Check if this is an ENCOREX TUNNEL scanning message
+            if self._is_encorex_scanning_message(text):
+                logger.info(f"🚫 Detected ENCOREX TUNNEL scanning message, waiting for final result...")
+                
+                # Store the search info for later matching
+                if "pending_encorex" not in search_info:
+                    search_info["pending_encorex"] = True
+                    search_info["encorex_wait_start"] = time.time()
+                    
+                # Don't complete the search, wait for actual results
                 return
-
+            
+            # If we were waiting for ENCOREX results, check if this is the final result
+            if search_info.get("pending_encorex"):
+                # Check if enough time has passed or if this looks like a final result
+                time_since_scanning = time.time() - search_info.get("encorex_wait_start", 0)
+                
+                # If this is a proper result (not another scanning message), process it
+                if time_since_scanning > 2 and not self._is_encorex_scanning_message(text):
+                    logger.info(f"✅ Received final result after ENCOREX scanning")
+                    search_info["pending_encorex"] = False
+                else:
+                    logger.info(f"⏳ Still waiting for final ENCOREX result...")
+                    return
+            # ===== END ENCOREX FILTER =====
+            
             # Special handling for leak search
             if search_info["search_type"] == "leak":
                 return await self._process_leak_response(search_id, search_info, message)
@@ -4465,6 +4449,25 @@ class SearchEngine:
                 
         except Exception as e:
             logger.error(f"❌ Error processing search response: {e}")
+    
+    def _is_encorex_scanning_message(self, text: str) -> bool:
+        """Check if message is an ENCOREX TUNNEL scanning message"""
+        encorex_patterns = [
+            "ENCOREX TUNNEL",
+            "🔍 scanning...",
+            "📡 service: NUM",
+            "🖥️ node: ip-",
+            "╔════════════════════════════╗",
+            "║ 🔍 scanning...",
+            "║ 📡 service:",
+            "║ 🖥️ node:"
+        ]
+        
+        # Check if message contains scanning indicators
+        pattern_count = sum(1 for pattern in encorex_patterns if pattern.lower() in text.lower())
+        
+        # If 3 or more patterns match, it's likely an ENCOREX scanning message
+        return pattern_count >= 3
     
     async def _process_leak_response(self, search_id: str, search_info: Dict, message):
         """Process leak search response"""
@@ -5230,7 +5233,6 @@ user_client = (
 )
 
 db_manager = DatabaseManager()
-protected_query_manager = ProtectedQueryManager(db_manager)
 search_engine = None
 admin_panel = None
 user_states = {}
@@ -5995,12 +5997,6 @@ async def private_message_handler(event):
         elif state.get("action") == "admin_view_user_search_logs":
             await handle_admin_view_user_search_logs(event)
 
-        elif state.get("action") == "admin_add_protect":
-            await handle_admin_add_protect_input(event)
-
-        elif state.get("action") == "user_protect_query":
-            await handle_user_protect_query_input(event)
-
     except Exception as e:
         logger.error(f"❌ Error in private_message_handler: {e}")
 
@@ -6630,25 +6626,27 @@ async def handle_search_query(event, state):
             await event.respond("❌ Please enter a valid query.")
             return
         
+        # Check if query is protected
+        is_protected = await db_manager.protected_manager.is_query_protected(query)
+        if is_protected:
+            await event.respond(
+                "🔒 **QUERY PROTECTED**\n\n"
+                f"This query has been restricted by administration.\n\n"
+                f"📝 **Query:** `{query}`\n"
+                f"⚠️ **Status:** Protected\n\n"
+                "If you believe this is an error, please contact @darkboxesAdmin for assistance.",
+                parse_mode="md"
+            )
+            user_states.pop(user_id, None)
+            return
+        
         # Validate query
         cmd = SEARCH_COMMANDS[search_type]
         validation = cmd.get("validation")
         if validation and not re.match(validation, query):
             await event.respond(f"❌ Invalid format. Example: `{cmd['example']}`")
             return
-
-        # ── Protected query check ─────────────────────────────────────────
-        if await protected_query_manager.is_protected(query, search_type):
-            await event.respond(
-                "🔒 **QUERY PROTECTED**\n\n"
-                f"The search query `{query}` has been marked as **protected**.\n"
-                "Results for this query are restricted and cannot be displayed.\n\n"
-                "If you believe this is an error, contact @darkboxesAdmin.",
-                parse_mode="md"
-            )
-            user_states.pop(user_id, None)
-            return
-
+        
         # Special handling for leak search
         if search_type == "leak":
             leak_warning = (
@@ -7536,42 +7534,6 @@ async def handle_all_messages(event):
         pass
 
 
-@user_client.on(events.MessageEdited())
-async def handle_edited_messages(event):
-    """
-    Handle edited messages in destination groups.
-    When a group first sends a 'scanning...' box and then *edits* that same
-    message with the real result, we pick it up here.
-    """
-    try:
-        message = event.message
-        text    = message.text or message.raw_text or ""
-
-        # Only interesting if it's no longer a scanning message (i.e. the real result arrived)
-        if TextProcessor.is_scanning_message(text):
-            return  # Still scanning — ignore
-
-        # Check if this edited message id matches a known scanning_msg_id in any active search
-        for search_id, search_info in list(search_engine.active_searches.items()):
-            scanning_ids = search_info.get("scanning_msg_ids", set())
-            if message.id in scanning_ids:
-                logger.info(
-                    f"✅ Scanning message (id={message.id}) was edited with real result — processing"
-                )
-                await search_engine._process_search_response(search_id, search_info, message)
-                return
-
-            # Also handle the normal reply-match in case the edit is a fresh reply
-            if message.reply_to:
-                reply_to_id = message.reply_to.reply_to_msg_id
-                if reply_to_id == search_info.get("message_id"):
-                    await search_engine._process_search_response(search_id, search_info, message)
-                    return
-
-    except Exception as e:
-        logger.error(f"❌ Error in handle_edited_messages: {e}")
-
-
 
 @bot_client.on(events.CallbackQuery(pattern=r'^api_menu$'))
 async def api_menu_callback(event):
@@ -7836,6 +7798,316 @@ async def api_plan_callback(event):
             f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"**How to purchase:**\n\n"
             f"1️⃣ Pay ₹{prices[plan]} to UPI:\n"
+
+
+# ================== QUERY PROTECTION COMMANDS ==================
+
+@bot_client.on(events.NewMessage(pattern=r'/protect_query (.+)'))
+async def protect_query_admin_command(event):
+    """Admin command to protect a query"""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.respond("❌ Admin only")
+            return
+        
+        query = event.pattern_match.group(1).strip()
+        
+        # Add query to protected list
+        await db_manager.protected_manager.add_protected_query(
+            query, 
+            event.sender_id,
+            reason="admin"
+        )
+        
+        await event.respond(
+            f"✅ **QUERY PROTECTED**\n\n"
+            f"Query: `{query}`\n"
+            f"Status: Protected by admin\n\n"
+            f"This query is now restricted and cannot be searched by users.",
+            parse_mode="md"
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ protect_query error: {e}")
+        await event.respond(f"❌ Error: {e}")
+
+@bot_client.on(events.NewMessage(pattern=r'/unprotect_query (.+)'))
+async def unprotect_query_command(event):
+    """Admin command to unprotect a query"""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.respond("❌ Admin only")
+            return
+        
+        query = event.pattern_match.group(1).strip()
+        
+        # Remove query from protected list
+        await db_manager.protected_manager.remove_protected_query(query)
+        
+        await event.respond(
+            f"✅ **QUERY UNPROTECTED**\n\n"
+            f"Query: `{query}`\n"
+            f"Status: Removed from protected list\n\n"
+            f"This query can now be searched by users.",
+            parse_mode="md"
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ unprotect_query error: {e}")
+        await event.respond(f"❌ Error: {e}")
+
+@bot_client.on(events.NewMessage(pattern=r'/list_protected'))
+async def list_protected_queries_command(event):
+    """Admin command to list all protected queries"""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.respond("❌ Admin only")
+            return
+        
+        loop = asyncio.get_running_loop()
+        protected = await loop.run_in_executor(
+            None,
+            lambda: list(db_manager.db.protected_queries.find(
+                {"status": "active"}
+            ).sort("timestamp", -1).limit(50))
+        )
+        
+        if not protected:
+            await event.respond("✅ No protected queries found.")
+            return
+        
+        msg = f"🔒 **PROTECTED QUERIES** ({len(protected)} total)\n\n"
+        
+        for i, pq in enumerate(protected[:20], 1):
+            query = pq.get('query', 'N/A')
+            reason = pq.get('reason', 'N/A')
+            ts = pq.get('timestamp', '')[:10]
+            
+            msg += f"{i}. `{query}`\n   Reason: {reason} | {ts}\n\n"
+        
+        if len(protected) > 20:
+            msg += f"\n... and {len(protected) - 20} more\n"
+        
+        await event.respond(msg, parse_mode="md")
+        
+    except Exception as e:
+        logger.error(f"❌ list_protected error: {e}")
+        await event.respond(f"❌ Error: {e}")
+
+@bot_client.on(events.NewMessage(pattern=r'/request_protection'))
+async def request_protection_command(event):
+    """User command to request query protection"""
+    try:
+        user_id = event.sender_id
+        
+        user_states[user_id] = {
+            "state": "request_protection_query",
+            "timestamp": time.time()
+        }
+        
+        await event.respond(
+            "🔒 **REQUEST QUERY PROTECTION**\n\n"
+            "💰 **Cost:** ₹50 per query\n\n"
+            "📝 **How it works:**\n"
+            "1. You provide the query to protect\n"
+            "2. You pay ₹50 via UPI\n"
+            "3. Admin verifies payment\n"
+            "4. Your query gets protected\n\n"
+            "🔐 **Protected queries cannot be searched by anyone.**\n\n"
+            "Please send the query you want to protect:",
+            parse_mode="md"
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ request_protection error: {e}")
+        await event.respond(f"❌ Error: {e}")
+
+@bot_client.on(events.NewMessage())
+async def handle_protection_request_flow(event):
+    """Handle query protection request flow"""
+    try:
+        user_id = event.sender_id
+        
+        if user_id not in user_states:
+            return
+        
+        state = user_states[user_id]
+        
+        if state.get("state") == "request_protection_query":
+            query = event.text.strip()
+            
+            if not query or len(query) < 3:
+                await event.respond("❌ Please enter a valid query (min 3 characters)")
+                return
+            
+            # Store query and move to UTR step
+            user_states[user_id] = {
+                "state": "request_protection_utr",
+                "query": query,
+                "timestamp": time.time()
+            }
+            
+            await event.respond(
+                f"📝 **QUERY TO PROTECT:**\n`{query}`\n\n"
+                f"💰 **Amount:** ₹50\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"**Payment Instructions:**\n\n"
+                f"1️⃣ Pay ₹50 to UPI:\n"
+                f"`{config.UPI_ID}`\n\n"
+                f"2️⃣ Send your 12-digit UTR number here\n\n"
+                f"⚠️ **Important:**\n"
+                f"• Use the exact amount: ₹50\n"
+                f"• Save your UTR number\n"
+                f"• Admin will verify within 24 hours\n\n"
+                f"💡 Send /cancel to cancel this request",
+                parse_mode="md"
+            )
+            
+        elif state.get("state") == "request_protection_utr":
+            utr = event.text.strip()
+            
+            if not utr.isdigit() or len(utr) != 12:
+                await event.respond("❌ Invalid UTR. Please enter a 12-digit number.")
+                return
+            
+            query = state.get("query")
+            
+            # Create protection request
+            request_id = await db_manager.protected_manager.create_protection_request(
+                user_id, query, utr
+            )
+            
+            # Clear state
+            user_states.pop(user_id, None)
+            
+            # Notify user
+            await event.respond(
+                f"✅ **PROTECTION REQUEST SUBMITTED**\n\n"
+                f"📝 Request ID: `{request_id}`\n"
+                f"🔍 Query: `{query}`\n"
+                f"💳 UTR: `{utr}`\n"
+                f"💰 Amount: ₹50\n\n"
+                f"⏳ **Status:** Pending verification\n\n"
+                f"Admin will verify your payment within 24 hours.\n"
+                f"You'll be notified once approved!",
+                parse_mode="md"
+            )
+            
+            # Notify admin
+            try:
+                await bot_client.send_message(
+                    config.ADMIN_USER_ID,
+                    f"🔒 **NEW PROTECTION REQUEST**\n\n"
+                    f"Request ID: `{request_id}`\n"
+                    f"User ID: `{user_id}`\n"
+                    f"Query: `{query}`\n"
+                    f"UTR: `{utr}`\n"
+                    f"Amount: ₹50\n\n"
+                    f"Use /approve_protection {request_id} to approve",
+                    parse_mode="md"
+                )
+            except Exception as e:
+                logger.error(f"Error notifying admin: {e}")
+            
+    except Exception as e:
+        logger.error(f"❌ handle_protection_request_flow error: {e}")
+
+@bot_client.on(events.NewMessage(pattern=r'/approve_protection (.+)'))
+async def approve_protection_command(event):
+    """Admin command to approve protection request"""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.respond("❌ Admin only")
+            return
+        
+        request_id = event.pattern_match.group(1).strip()
+        
+        # Approve the request
+        success = await db_manager.protected_manager.approve_protection_request(request_id)
+        
+        if success:
+            # Get request details to notify user
+            loop = asyncio.get_running_loop()
+            request = await loop.run_in_executor(
+                None,
+                lambda: db_manager.db.protection_payments.find_one({"request_id": request_id})
+            )
+            
+            if request:
+                user_id = request['user_id']
+                query = request['query']
+                
+                await event.respond(
+                    f"✅ **PROTECTION REQUEST APPROVED**\n\n"
+                    f"Request ID: `{request_id}`\n"
+                    f"Query: `{query}`\n"
+                    f"User: `{user_id}`\n\n"
+                    f"Query is now protected!",
+                    parse_mode="md"
+                )
+                
+                # Notify user
+                try:
+                    await bot_client.send_message(
+                        user_id,
+                        f"✅ **PROTECTION APPROVED**\n\n"
+                        f"Your query has been protected!\n\n"
+                        f"🔍 Query: `{query}`\n"
+                        f"🔒 Status: Protected\n\n"
+                        f"This query can no longer be searched by anyone.",
+                        parse_mode="md"
+                    )
+                except Exception as e:
+                    logger.error(f"Error notifying user: {e}")
+        else:
+            await event.respond(f"❌ Request ID not found: {request_id}")
+        
+    except Exception as e:
+        logger.error(f"❌ approve_protection error: {e}")
+        await event.respond(f"❌ Error: {e}")
+
+@bot_client.on(events.NewMessage(pattern=r'/pending_protections'))
+async def list_pending_protections_command(event):
+    """Admin command to list pending protection requests"""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.respond("❌ Admin only")
+            return
+        
+        pending = await db_manager.protected_manager.get_pending_protection_requests()
+        
+        if not pending:
+            await event.respond("✅ No pending protection requests.")
+            return
+        
+        msg = f"⏳ **PENDING PROTECTION REQUESTS** ({len(pending)} pending)\n\n"
+        
+        for i, req in enumerate(pending[:10], 1):
+            request_id = req.get('request_id', 'N/A')
+            user_id = req.get('user_id', 'N/A')
+            query = req.get('query', 'N/A')
+            utr = req.get('utr', 'N/A')
+            ts = req.get('timestamp', '')[:16].replace('T', ' ')
+            
+            msg += (
+                f"{i}. **Request {request_id}**\n"
+                f"   User: `{user_id}`\n"
+                f"   Query: `{query}`\n"
+                f"   UTR: `{utr}`\n"
+                f"   Time: {ts}\n"
+                f"   `/approve_protection {request_id}`\n\n"
+            )
+        
+        if len(pending) > 10:
+            msg += f"\n... and {len(pending) - 10} more\n"
+        
+        await event.respond(msg, parse_mode="md")
+        
+    except Exception as e:
+        logger.error(f"❌ pending_protections error: {e}")
+        await event.respond(f"❌ Error: {e}")
+
+# Continue with existing code
             f"   `{config.UPI_ID}`\n\n"
             f"2️⃣ Note your **UTR / Transaction Reference Number**\n\n"
             f"3️⃣ Tap button below to submit UTR\n"
@@ -8723,384 +8995,6 @@ async def daily_subscription_reset():
             logger.error(f"❌ Error in daily_subscription_reset: {e}")
             await asyncio.sleep(3600)
 
-
-
-# ================== PROTECTED QUERY HANDLERS ==================
-
-# ── User-facing: protect_query_menu callback ──────────────────────────────
-
-@bot_client.on(events.CallbackQuery(pattern=r'^protect_query_menu$'))
-async def protect_query_menu_callback(event):
-    """Show user the 'Protect My Query' menu."""
-    try:
-        user_id = event.sender_id
-        user_doc = await db_manager.get_user(user_id)
-        if not user_doc:
-            await event.answer("❌ Please /start the bot first.", alert=True)
-            return
-
-        await event.edit(
-            f"🛡️ **PROTECT MY QUERY**\n\n"
-            f"Prevent anyone from searching a specific query "
-            f"(phone number, Aadhar, name, etc.) through this bot.\n\n"
-            f"**How it works:**\n"
-            f"1️⃣  Pay ₹{PROTECT_PRICE_RS} to UPI ID: `{config.UPI_ID}`\n"
-            f"2️⃣  Note the **{PROTECT_UTR_LEN}-digit UTR** from your payment app\n"
-            f"3️⃣  Tap **Submit** below and enter: `UTR query`\n"
-            f"    Example: `123456789012 9876543210`\n"
-            f"4️⃣  Admin verifies payment within a few hours\n"
-            f"5️⃣  Query is locked — anyone searching it sees 🔒 PROTECTED\n\n"
-            f"💡 One payment = one query protected\n"
-            f"❓ Help: @darkboxesAdmin | yadiify@gmail.com",
-            buttons=[
-                [Button.inline("📤 Submit UTR + Query", "protect_query_submit")],
-                [Button.inline("« Main Menu", "main_menu")]
-            ],
-            parse_mode="md"
-        )
-    except Exception as e:
-        logger.error(f"❌ protect_query_menu_callback: {e}")
-        await event.answer("❌ Error", alert=True)
-
-
-@bot_client.on(events.CallbackQuery(pattern=r'^protect_query_submit$'))
-async def protect_query_submit_callback(event):
-    """Ask user to enter UTR + query."""
-    try:
-        user_id = event.sender_id
-        await event.edit(
-            f"📤 **ENTER YOUR UTR AND QUERY**\n\n"
-            f"Format: `UTR query`\n\n"
-            f"• UTR must be exactly **{PROTECT_UTR_LEN} digits**\n"
-            f"• Query is the exact text you want protected\n\n"
-            f"**Examples:**\n"
-            f"`123456789012 9876543210`\n"
-            f"`123456789012 ABCD1234567890`\n\n"
-            f"Type your submission below:",
-            buttons=[[Button.inline("❌ Cancel", "main_menu")]],
-            parse_mode="md"
-        )
-        user_states[user_id] = {"action": "user_protect_query"}
-    except Exception as e:
-        logger.error(f"❌ protect_query_submit_callback: {e}")
-
-
-async def handle_user_protect_query_input(event):
-    """Process user's UTR + query submission for paid protection."""
-    try:
-        user_id = event.sender_id
-        text    = (event.text or "").strip()
-        parts   = text.split(None, 1)
-
-        if len(parts) != 2:
-            await event.respond(
-                f"❌ **Invalid format.**\n\n"
-                f"Use: `UTR query`\n"
-                f"Example: `123456789012 9876543210`\n\n"
-                f"The UTR must be {PROTECT_UTR_LEN} digits and appear first.",
-                parse_mode="md"
-            )
-            return
-
-        utr, query = parts[0].strip(), parts[1].strip()
-
-        if not utr.isdigit() or len(utr) != PROTECT_UTR_LEN:
-            await event.respond(
-                f"❌ **Invalid UTR.** It must be exactly {PROTECT_UTR_LEN} digits.\n\n"
-                f"You entered: `{utr}` ({len(utr)} chars)\n\n"
-                f"Find your UTR in your UPI app's transaction details.",
-                parse_mode="md"
-            )
-            return
-
-        if not query:
-            await event.respond("❌ Query cannot be empty.")
-            return
-
-        # Store as pending (payment_verified=False)
-        await protected_query_manager.add_protected(
-            query       = query,
-            search_type = "any",
-            protected_by= user_id,
-            reason      = f"Paid protect request by user {user_id}",
-            payment_utr = utr,
-            paid_protect= True,
-        )
-
-        # Notify user
-        await event.respond(
-            f"✅ **PROTECTION REQUEST SUBMITTED**\n\n"
-            f"🔒 Query: `{query}`\n"
-            f"💳 UTR: `{utr}`\n"
-            f"📋 Status: **Pending admin verification**\n\n"
-            f"Admin will verify your payment and activate the protection.\n"
-            f"This usually takes a few hours.\n\n"
-            f"❓ Help: @darkboxesAdmin | yadiify@gmail.com",
-            parse_mode="md"
-        )
-
-        # Notify admin
-        try:
-            user_doc = await db_manager.get_user(user_id)
-            uname    = f"@{user_doc.get('username')}" if user_doc and user_doc.get('username') else str(user_id)
-            qkey     = ProtectedQueryManager._key(query)
-            await bot_client.send_message(
-                config.ADMIN_USER_ID,
-                f"🛡️ **NEW PROTECT REQUEST**\n\n"
-                f"👤 User: {uname} (`{user_id}`)\n"
-                f"🔒 Query: `{query}`\n"
-                f"💳 UTR: `{utr}`\n"
-                f"💰 Amount: ₹{PROTECT_PRICE_RS}\n\n"
-                f"Verify in your UPI app, then approve or reject below.",
-                buttons=[
-                    [Button.inline("✅ Approve Protection", f"admin_protect_approve_{qkey}")],
-                    [Button.inline("❌ Reject", f"admin_protect_reject_{qkey}")],
-                ],
-                parse_mode="md"
-            )
-        except Exception:
-            pass
-
-        user_states.pop(user_id, None)
-
-    except Exception as e:
-        logger.error(f"❌ handle_user_protect_query_input: {e}")
-        await event.respond("❌ Error submitting request.")
-
-
-# ── Admin: view / manage protected queries ────────────────────────────────
-
-async def admin_show_protected_queries(event):
-    """Admin: list all active protected queries."""
-    try:
-        docs  = await protected_query_manager.list_protected(50)
-        if not docs:
-            await event.edit(
-                "🛡️ **PROTECTED QUERIES**\n\nNo queries are currently protected.",
-                buttons=[
-                    [Button.inline("➕ Add Protection", "admin_protect_add")],
-                    [Button.inline("« Admin Panel", "admin_panel")]
-                ],
-                parse_mode="md"
-            )
-            return
-
-        text = "🛡️ **PROTECTED QUERIES** (latest 50)\n\n"
-        for i, doc in enumerate(docs[:50], 1):
-            verified = "✅" if doc.get("payment_verified") else "⏳"
-            paid     = " [paid]" if doc.get("paid_protect") else " [admin]"
-            text += f"{i}. {verified}{paid} `{doc['query_raw']}`\n"
-            if doc.get("reason"):
-                text += f"   ↳ {doc['reason'][:60]}\n"
-
-        text += f"\n**Total:** {len(docs)} protected queries"
-
-        buttons = [
-            [Button.inline("➕ Add Protection (Admin)", "admin_protect_add")],
-            [Button.inline("⏳ Pending Requests", "admin_pending_protect")],
-            [Button.inline("« Admin Panel", "admin_panel")]
-        ]
-
-        try:
-            await event.edit(text, buttons=buttons, parse_mode="md")
-        except Exception:
-            await event.respond(text, buttons=buttons, parse_mode="md")
-
-    except Exception as e:
-        logger.error(f"❌ admin_show_protected_queries: {e}")
-        await event.answer("❌ Error", alert=True)
-
-
-async def admin_show_pending_protect(event):
-    """Admin: list paid-protect requests awaiting verification."""
-    try:
-        docs = await protected_query_manager.list_pending_paid()
-        if not docs:
-            await event.edit(
-                "⏳ **PENDING PROTECT REQUESTS**\n\nNo pending requests.",
-                buttons=[[Button.inline("« Admin Panel", "admin_panel")]],
-                parse_mode="md"
-            )
-            return
-
-        text = f"⏳ **PENDING PROTECT REQUESTS** ({len(docs)})\n\n"
-        buttons = []
-        for doc in docs[:20]:
-            q   = doc['query_raw']
-            utr = doc.get('payment_utr', 'N/A')
-            uid = doc.get('protected_by', '?')
-            ts  = doc.get('created_at', '')[:10]
-            text += f"🔒 `{q}`\n💳 UTR: `{utr}` | User: `{uid}` | {ts}\n\n"
-            qkey = ProtectedQueryManager._key(q)
-            buttons.append([
-                Button.inline(f"✅ {q[:18]}", f"admin_protect_approve_{qkey}"),
-                Button.inline("❌ Reject", f"admin_protect_reject_{qkey}")
-            ])
-
-        buttons.append([Button.inline("« Admin Panel", "admin_panel")])
-
-        try:
-            await event.edit(text, buttons=buttons, parse_mode="md")
-        except Exception:
-            await event.respond(text, buttons=buttons, parse_mode="md")
-
-    except Exception as e:
-        logger.error(f"❌ admin_show_pending_protect: {e}")
-        await event.answer("❌ Error", alert=True)
-
-
-async def admin_approve_protect(event, query_key: str):
-    """Admin approves a paid protect request."""
-    try:
-        loop = asyncio.get_running_loop()
-        doc  = await loop.run_in_executor(
-            None, lambda: db_manager.db.protected_queries.find_one({"query_key": query_key})
-        )
-        if not doc:
-            await event.answer("❌ Request not found.", alert=True)
-            return
-
-        await loop.run_in_executor(
-            None, lambda: db_manager.db.protected_queries.update_one(
-                {"query_key": query_key},
-                {"$set": {"payment_verified": True}}
-            )
-        )
-
-        uid = doc.get("protected_by")
-        if uid and uid != "admin":
-            try:
-                await bot_client.send_message(
-                    int(uid),
-                    f"✅ **QUERY PROTECTION ACTIVATED!**\n\n"
-                    f"🔒 Your query `{doc['query_raw']}` is now **protected**.\n"
-                    f"Anyone searching it will see 🔒 PROTECTED.\n\n"
-                    f"Thank you for using DarkBoxes! 🚀",
-                    parse_mode="md"
-                )
-            except Exception:
-                pass
-
-        await event.edit(
-            f"✅ **PROTECTION APPROVED**\n\n"
-            f"Query `{doc['query_raw']}` is now protected.",
-            buttons=[[Button.inline("« Pending Requests", "admin_pending_protect")]],
-            parse_mode="md"
-        )
-
-    except Exception as e:
-        logger.error(f"❌ admin_approve_protect: {e}")
-        await event.answer("❌ Error", alert=True)
-
-
-async def admin_reject_protect(event, query_key: str):
-    """Admin rejects a paid protect request."""
-    try:
-        loop = asyncio.get_running_loop()
-        doc  = await loop.run_in_executor(
-            None, lambda: db_manager.db.protected_queries.find_one({"query_key": query_key})
-        )
-        if not doc:
-            await event.answer("❌ Request not found.", alert=True)
-            return
-
-        await loop.run_in_executor(
-            None, lambda: db_manager.db.protected_queries.delete_one({"query_key": query_key})
-        )
-
-        uid = doc.get("protected_by")
-        if uid and uid != "admin":
-            try:
-                await bot_client.send_message(
-                    int(uid),
-                    f"❌ **PROTECTION REQUEST REJECTED**\n\n"
-                    f"Your request to protect `{doc['query_raw']}` was rejected.\n"
-                    f"This may be because the UTR could not be verified.\n\n"
-                    f"Please try again or contact @darkboxesAdmin for help.\n"
-                    f"Email: yadiify@gmail.com",
-                    parse_mode="md"
-                )
-            except Exception:
-                pass
-
-        await event.edit(
-            f"❌ **REQUEST REJECTED**\n\n"
-            f"Query `{doc['query_raw']}` protection rejected and removed.",
-            buttons=[[Button.inline("« Pending Requests", "admin_pending_protect")]],
-            parse_mode="md"
-        )
-
-    except Exception as e:
-        logger.error(f"❌ admin_reject_protect: {e}")
-        await event.answer("❌ Error", alert=True)
-
-
-async def admin_remove_protect(event, query_key: str):
-    """Admin manually removes a protection."""
-    try:
-        removed = await protected_query_manager.remove_protected(query_key)
-        if removed:
-            await event.edit(
-                f"🗑️ **PROTECTION REMOVED**\n\n`{query_key}` is no longer protected.",
-                buttons=[[Button.inline("« Protected Queries", "admin_protected_queries")]],
-                parse_mode="md"
-            )
-        else:
-            await event.answer("❌ Query not found.", alert=True)
-    except Exception as e:
-        logger.error(f"❌ admin_remove_protect: {e}")
-        await event.answer("❌ Error", alert=True)
-
-
-async def admin_ask_add_protect(event):
-    """Admin: prompt to enter query to protect (free, instant)."""
-    try:
-        await event.edit(
-            "🛡️ **ADD PROTECTION (ADMIN)**\n\n"
-            "Enter the query + optional reason:\n\n"
-            "Format: `query [reason]`\n\n"
-            "Examples:\n"
-            "`9876543210`\n"
-            "`9876543210 Personal number`\n"
-            "`ABCD1234 Owner requested protection`",
-            buttons=[[Button.inline("❌ Cancel", "admin_protected_queries")]],
-            parse_mode="md"
-        )
-        user_states[event.sender_id] = {"action": "admin_add_protect"}
-    except Exception as e:
-        logger.error(f"❌ admin_ask_add_protect: {e}")
-
-
-async def handle_admin_add_protect_input(event):
-    """Admin submits query (+ optional reason) to protect instantly."""
-    try:
-        text   = (event.text or "").strip()
-        parts  = text.split(None, 1)
-        if not parts:
-            await event.respond("❌ Please enter a query.")
-            return
-        query  = parts[0]
-        reason = parts[1] if len(parts) > 1 else "Admin protected"
-
-        await protected_query_manager.add_protected(
-            query       = query,
-            search_type = "any",
-            protected_by= "admin",
-            reason      = reason,
-            paid_protect= False,
-        )
-
-        await event.respond(
-            f"✅ **QUERY PROTECTED**\n\n"
-            f"🔒 `{query}` is now protected.\n"
-            f"📝 Reason: {reason}",
-            parse_mode="md"
-        )
-        user_states.pop(event.sender_id, None)
-
-    except Exception as e:
-        logger.error(f"❌ handle_admin_add_protect_input: {e}")
-        await event.respond("❌ Error adding protection.")
 
 
 # ================== WEB SERVER ==================
