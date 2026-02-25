@@ -594,20 +594,33 @@ class PremiumFormatter:
 class TextProcessor:
     @staticmethod
     def is_processing_message(text: str) -> bool:
-        """Check if message indicates processing"""
+        """Check if message indicates processing/waiting (not a result)"""
         if not text:
             return True
         
         text_lower = text.lower()
-        keywords = [
-            'processing', 'please wait', 'fetching', 'loading', 'searching',
-            'retrieving', 'hold on', 'wait a moment', 'in progress',
-            'gathering data', 'working on it', 'searching for',
-            'please wait while', 'getting information', 'fetching data',
-            'generating', 'creating report', 'file generated'
+
+        # ── EARLY EXIT: ENCOREX OSINT result messages are NEVER processing ──
+        # These contain actual data — never treat them as "still processing"
+        result_signals = [
+            '"success":', '"status":', '"result":', '"results":',
+            '"country":', '"number":', '"mobile":', '"name":',
+            '"address":', '"aadhar":', '"msg":', '"_powered_by":',
+            '✅ success', '║  ✅', 'encorex osint', 'encorex intelx',
+            '╔═══《', '╘══《',
+        ]
+        if any(sig in text_lower for sig in result_signals):
+            return False
+
+        # Only match standalone processing keywords (not inside JSON strings)
+        # Use word-boundary-like checks to avoid matching JSON field names
+        standalone_keywords = [
+            'please wait', 'hold on', 'wait a moment', 'in progress',
+            'gathering data', 'working on it', 'please wait while',
+            'getting information', 'fetching data', 'creating report',
         ]
         
-        return any(keyword in text_lower for keyword in keywords)
+        return any(keyword in text_lower for keyword in standalone_keywords)
     
     @staticmethod
     def is_file_generated_message(text: str) -> bool:
@@ -4255,43 +4268,69 @@ class SearchEngine:
             message = event.message
             text = message.text or message.raw_text or ""
             
-            # Check if this is a reply to our search
+            # ── Priority 1: Direct reply to our sent command ──────────────────
             if message.reply_to:
                 reply_to_id = message.reply_to.reply_to_msg_id
-                
                 for search_id, search_info in list(self.active_searches.items()):
                     if reply_to_id == search_info["message_id"]:
                         logger.info(f"📩 Found direct reply to our search message")
                         await self._process_search_response(search_id, search_info, message)
                         return
             
-            # Check for messages in same chat (including edits and new messages with same query)
+            # ── Priority 2: Any message in the same chat ──────────────────────
             for search_id, search_info in list(self.active_searches.items()):
                 try:
                     chat_match = False
-                    if hasattr(search_info["group"]["entity"], 'id'):
-                        chat_match = event.chat_id == search_info["group"]["entity"].id
+                    entity = search_info["group"].get("entity")
+                    if entity and hasattr(entity, 'id'):
+                        chat_match = event.chat_id == entity.id
                     elif search_info.get("chat_id"):
                         chat_match = str(event.chat_id) == str(search_info["chat_id"])
                     
-                    if chat_match:
-                        # Check if query matches (for cases where result comes without being a reply)
-                        query = search_info.get("query", "").lower()
-                        query_in_message = query and query in text.lower()
-                        
-                        # Check if this is a file
-                        file_check = await self._check_and_process_file(message, search_info)
-                        if file_check is not None:
-                            logger.info(f"📁 Found file in {search_info['group']['name']}")
-                            await self._process_search_response(search_id, search_info, message)
-                            return
-                        
-                        # Process if query matches or if we're waiting for ENCOREX result
-                        if query_in_message or search_info.get("pending_encorex"):
-                            logger.info(f"📨 Found matching message in {search_info['group']['name']}")
-                            await self._process_search_response(search_id, search_info, message)
-                            return
-                except:
+                    if not chat_match:
+                        continue
+
+                    # Check if this is a file attachment
+                    file_check = await self._check_and_process_file(message, search_info)
+                    if file_check is not None:
+                        logger.info(f"📁 Found file in {search_info['group']['name']}")
+                        await self._process_search_response(search_id, search_info, message)
+                        return
+                    
+                    query = search_info.get("query", "").lower().strip()
+                    text_lower = text.lower()
+
+                    # Condition A: query string appears in the message (e.g. plain JSON result)
+                    query_in_message = bool(query and query in text_lower)
+
+                    # Condition B: waiting for ENCOREX result after scanning message
+                    pending_encorex = bool(search_info.get("pending_encorex"))
+
+                    # Condition C: message looks like an ENCOREX OSINT result frame
+                    # These messages may contain a DIFFERENT number than queried — we must accept them
+                    is_encorex_osint_result = (
+                        ('encorex osint' in text_lower or '╔═══《' in text or '╘══《' in text)
+                        and ('✅' in text or '"result"' in text_lower or '"success"' in text_lower or '"status"' in text_lower)
+                        and 'scanning' not in text_lower
+                    )
+
+                    # Condition D: message is a JSON/result in our chat even without ENCOREX branding
+                    # (e.g. plain JSON responses from other bots in same group)
+                    looks_like_result = (
+                        text_lower.count('": ') >= 3
+                        and not self._is_encorex_scanning_message(text)
+                    )
+
+                    if query_in_message or pending_encorex or is_encorex_osint_result or looks_like_result:
+                        logger.info(
+                            f"📨 Found candidate result in {search_info['group']['name']} "
+                            f"(query_match={query_in_message}, pending={pending_encorex}, "
+                            f"encorex_fmt={is_encorex_osint_result}, json_result={looks_like_result})"
+                        )
+                        await self._process_search_response(search_id, search_info, message)
+                        return
+
+                except Exception:
                     continue
                     
         except Exception as e:
@@ -4375,41 +4414,35 @@ class SearchEngine:
         """Process a search response message"""
         try:
             text = message.text or message.raw_text or ""
-            logger.info(f"📨 Processing message in {search_info['group']['name']}: {text[:100]}...")
+            logger.info(f"📨 Processing message in {search_info['group']['name']}: {text[:120]}...")
             
-            # ===== ENCOREX TUNNEL FILTER =====
-            # Check if this is an ENCOREX TUNNEL scanning message
+            # ===== ENCOREX TUNNEL SCANNING FILTER =====
+            # Only skip the intermediate scanning placeholder — NOT the actual result
             if self._is_encorex_scanning_message(text):
-                logger.info(f"🚫 Detected ENCOREX TUNNEL scanning message, waiting for final result...")
-                
-                # Store the search info for later matching
-                if "pending_encorex" not in search_info:
+                logger.info(f"🚫 ENCOREX TUNNEL scanning placeholder — waiting for final result...")
+                if not search_info.get("pending_encorex"):
                     search_info["pending_encorex"] = True
                     search_info["encorex_wait_start"] = time.time()
                     search_info["scanning_message_id"] = message.id
-                    
-                # Don't complete the search, wait for actual results
-                return
-            
-            # If we were waiting for ENCOREX results, check if this is the final result
+                return  # Wait for the real result to arrive
+
+            # If we were waiting after a scanning message, now check the incoming message
             if search_info.get("pending_encorex"):
-                time_since_scanning = time.time() - search_info.get("encorex_wait_start", 0)
-                
-                # Must meet ALL these conditions to be a valid final result:
-                # 1. Not another scanning message
-                # 2. Has substantial content (>100 chars)
-                # 3. Either enough time has passed OR different message
-                
-                is_scanning = self._is_encorex_scanning_message(text)
-                has_content = len(text.strip()) > 100
+                time_since_scan = time.time() - search_info.get("encorex_wait_start", 0)
                 is_different_msg = message.id != search_info.get("scanning_message_id")
-                enough_time = time_since_scanning > 3
-                
-                if not is_scanning and has_content and (is_different_msg or enough_time):
-                    logger.info(f"✅ Received valid final result after ENCOREX scanning (len: {len(text)}, time: {time_since_scanning:.1f}s)")
+
+                # Accept as final result if:
+                # - it's a different message (new reply), OR
+                # - it's an edit to the scanning message (same id) AND ≥1s has passed
+                # - AND it is not itself a scanning message (already checked above)
+                if is_different_msg or time_since_scan >= 1:
+                    logger.info(
+                        f"✅ Final result after scanning wait "
+                        f"(different_msg={is_different_msg}, wait={time_since_scan:.1f}s)"
+                    )
                     search_info["pending_encorex"] = False
                 else:
-                    logger.info(f"⏳ Still waiting for final ENCOREX result (scanning: {is_scanning}, content: {has_content}, different: {is_different_msg}, time: {time_since_scanning:.1f}s)...")
+                    logger.info(f"⏳ Still within scan grace period ({time_since_scan:.1f}s) — skipping")
                     return
             # ===== END ENCOREX FILTER =====
             
@@ -4452,6 +4485,7 @@ class SearchEngine:
                 logger.info(f"⏳ Waiting for file to arrive...")
                 return
             
+            # is_processing_message now correctly ignores ENCOREX result frames
             if TextProcessor.is_processing_message(text):
                 logger.info(f"⏳ Processing message, waiting...")
                 return
@@ -4476,112 +4510,64 @@ class SearchEngine:
             logger.error(f"❌ Error processing search response: {e}")
     
     def _is_encorex_scanning_message(self, text: str) -> bool:
-        """Check if message is an ENCOREX TUNNEL scanning/processing message.
+        """Return True ONLY for ENCOREX TUNNEL scanning/processing placeholders.
         
-        IMPORTANT: Messages that contain actual result data (success JSON, country info,
-        number info etc.) must NOT be treated as scanning messages even if they
-        contain ENCOREX branding in their header.
+        SCANNING (return True):
+            🛰️ ENCOREX TUNNEL
+            ╔════════════════════════════╗
+            ║ 🔍 scanning...
+            ║ 📡 service: NUM
+            ║ 🖥️ node: ip-172-31-24-227
+            ╚════════════════════════════╝
+
+        RESULT (return False — even if small):
+            🛡️ ENCOREX OSINT / ENCOREX INTELX
+            ╔═══《 ... 》═══╗
+            ║  ✅ SUCCESS
+            ║  { ... JSON ... }
+            ╚════════════════════════════╝
+            ╘══《 ⚡ ...ms  ⏳ ...s 》══╛
         """
-        if not text or len(text.strip()) < 10:
+        if not text or len(text.strip()) < 5:
             return False
-        
+
         text_lower = text.lower()
-        
-        # ── EARLY EXIT: This is a FINAL RESULT, not a scanning message ──────
-        # If the message contains success data indicators, it's a real result
-        result_indicators = [
-            '"success": true',
-            '"success":true',
-            '"success": false',
-            '"success":false',
-            '"country":',
-            '"country" :',
-            '"number":',
-            '"msg":',
-            '"_powered_by":',
-            'details fetched',
-            '✅ success',
-            '✅ found',
-            '✅ result',
-        ]
-        if any(ind in text_lower for ind in result_indicators):
-            logger.info(f"✅ Message contains result data — NOT a scanning message")
+
+        # ── RULE 1: ENCOREX OSINT / INTELX result frames are NEVER scanning ──
+        # These contain the result header with timing footer
+        if ('encorex osint' in text_lower or 'encorex intelx' in text_lower
+                or '╔═══《' in text or '╘══《' in text):
             return False
-        
-        # If the message has substantial content with actual data fields, it's a result
-        # Heuristic: real result messages typically have JSON-like key:value pairs
-        json_field_count = text_lower.count('": ')
-        if json_field_count >= 3:
-            logger.info(f"✅ Message contains {json_field_count} JSON fields — treating as result")
+
+        # ── RULE 2: Any message with real data fields is a result ─────────────
+        result_data_indicators = [
+            '"success":', '"status":', '"result":', '"results":',
+            '"country":', '"number":', '"mobile":', '"name":',
+            '"address":', '"aadhar":', '"fname":', '"circle":',
+            '"msg":', '"_powered_by":', '"email":', '"alt":',
+            '✅ success', '✅ found',
+        ]
+        if any(ind in text_lower for ind in result_data_indicators):
             return False
-        
-        # ── SCANNING DETECTION ───────────────────────────────────────────────
-        # Multiple pattern sets to catch different variations
-        scanning_keywords = [
-            "scanning...",
-            "🔍 scanning",
-            "║ 🔍 scanning",
-        ]
-        
-        service_keywords = [
-            "📡 service:",
-            "service: tg",
-            "service: num",
-            "service: email",
-            "║ 📡 service",
-        ]
-        
-        node_keywords = [
-            "🖥️ node:",
-            "node: ip-",
-            "║ 🖥️ node",
-        ]
-        
-        # Only flag "encorex tunnel" as scanning — NOT just "encorex" alone
-        # because final result messages also show "ENCOREX OSINT" branding
-        encorex_tunnel_keywords = [
-            "encorex tunnel",
-            "intelx tunnel",
-        ]
-        
-        divider_patterns = [
-            "────────────────",
-            "╔════════",
-            "╚════════",
-            "🛰️"
-        ]
-        
-        # Count matches in each category
-        scanning_match = any(kw in text_lower for kw in scanning_keywords)
-        service_match = any(kw in text_lower for kw in service_keywords)
-        node_match = any(kw in text_lower for kw in node_keywords)
-        encorex_tunnel_match = any(kw in text_lower for kw in encorex_tunnel_keywords)
-        divider_match = sum(1 for div in divider_patterns if div in text) >= 2
-        
-        # Check for short messages (scanning messages are usually short)
-        is_short = len(text.strip()) < 300
-        is_short_scanning = is_short and scanning_match
-        
-        # If it has scanning + service/node, it's definitely a scanning message
-        if scanning_match and (service_match or node_match):
-            logger.info(f"🚫 Detected scanning message: scanning + service/node")
+
+        # JSON with 3+ key-value pairs → definitely a result
+        if text_lower.count('": ') >= 3:
+            return False
+
+        # ── RULE 3: ENCOREX TUNNEL scanning pattern — ALL THREE must be present ──
+        has_tunnel   = 'encorex tunnel' in text_lower or 'intelx tunnel' in text_lower
+        has_scanning = 'scanning' in text_lower
+        has_service  = '📡 service:' in text or 'service:' in text_lower
+        has_node     = '🖥️' in text or 'node:' in text_lower
+
+        # Must have tunnel branding OR (scanning + service/node)
+        if has_tunnel:
+            logger.info("🚫 ENCOREX TUNNEL branding detected — scanning message")
             return True
-        
-        # If it has ENCOREX TUNNEL branding specifically (not just ENCOREX OSINT)
-        if encorex_tunnel_match:
-            logger.info(f"🚫 Detected ENCOREX TUNNEL branding")
+        if has_scanning and (has_service or has_node):
+            logger.info("🚫 scanning + service/node pattern — scanning message")
             return True
-        
-        # If it's short and has scanning with dividers
-        if is_short_scanning and divider_match:
-            logger.info(f"🚫 Detected short scanning message with dividers")
-            return True
-        
-        # If it has scanning + dividers (without being a result)
-        if scanning_match and divider_match and is_short:
-            logger.info(f"🚫 Detected short scanning message with dividers")
-            return True
-        
+
         return False
     
     async def _process_leak_response(self, search_id: str, search_info: Dict, message):
@@ -4889,7 +4875,56 @@ class SearchEngine:
             return {"success": False}
     
     async def _process_text(self, text: str, search_info: Dict) -> Dict:
-        """Process text message"""
+        """Process text message — handles both plain responses and ENCOREX OSINT frames"""
+
+        # ── Detect ENCOREX OSINT / INTELX result frame and extract JSON directly ──
+        # These look like:
+        #   🛡️ ENCOREX OSINT / 🛡️ ENCOREX INTELX
+        #   ╔═══《 ... 》═══╗
+        #   ║  ✅ SUCCESS
+        #   ║  { ... JSON ... }
+        #   ╚════════════════════════════╝
+        #   ╘══《 ⚡ ...ms  ⏳ ...s 》══╛
+        text_lower = text.lower()
+        is_encorex_frame = (
+            ('encorex osint' in text_lower or 'encorex intelx' in text_lower
+             or '╔═══《' in text or '╘══《' in text)
+            and ('✅' in text or '"' in text)
+        )
+
+        if is_encorex_frame:
+            # Extract JSON block: find the first { and the last }
+            json_start = text.find('{')
+            json_end   = text.rfind('}')
+            extracted_json = ""
+            parsed_data = None
+
+            if json_start != -1 and json_end > json_start:
+                raw_json = text[json_start:json_end + 1].strip()
+                try:
+                    parsed_data = json.loads(raw_json)
+                    # Pretty-format so user gets readable output
+                    extracted_json = json.dumps(parsed_data, indent=2, ensure_ascii=False)
+                    logger.info(f"✅ Extracted clean JSON from ENCOREX frame ({len(extracted_json)} chars)")
+                except json.JSONDecodeError:
+                    # JSON parse failed — use the raw extracted text as-is
+                    extracted_json = raw_json
+                    logger.info(f"⚠️ Could not parse JSON from ENCOREX frame, using raw ({len(extracted_json)} chars)")
+
+            if not extracted_json or len(extracted_json.strip()) < 5:
+                logger.info(f"⚠️ ENCOREX frame but no JSON found — trying full text")
+                extracted_json = text  # fall through to normal clean below
+
+            # Format with our premium template using the extracted JSON
+            formatted = PremiumFormatter.format_result(
+                extracted_json,
+                search_info["search_type"],
+                search_info["query"],
+                search_info["group"]["name"]
+            )
+            return {"success": True, "result": formatted, "has_file": False}
+
+        # ── Normal (non-ENCOREX-frame) response ──────────────────────────────
         cleaned = TextProcessor.clean_content(text, search_info["search_type"])
         
         if len(cleaned) < 20:
