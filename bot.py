@@ -4133,56 +4133,58 @@ class SearchEngine:
                 }
                 
                 # ── Scanning-aware wait loop ──────────────────────────────────
-                # Instead of a hard wait_for timeout, we poll the future every 0.5s
-                # and dynamically extend the deadline when a scanning placeholder is
-                # detected (pending_encorex=True).  That gives the group bot time to
-                # edit its scanning message OR send a follow-up result message.
-                SCAN_EXTRA_WAIT = 20   # seconds to wait AFTER a scanning msg
-                POLL_INTERVAL   = 0.5  # how often to check
-                
+                # Replaces asyncio.wait_for() to avoid hard-cancelling futures
+                # when a scanning placeholder has been detected.
+                # After a scanning message, we extend the deadline by 20s from
+                # the moment scanning was detected, so edits AND new follow-up
+                # messages both have time to arrive and be processed.
+                SCAN_EXTRA_WAIT = 20   # seconds to wait after a scanning msg
+                POLL_INTERVAL   = 0.3  # polling granularity (seconds)
+
                 deadline = time.time() + group["timeout"]
-                result = None
+                result   = None
                 timed_out = False
-                
+
                 while True:
-                    now = time.time()
-                    
-                    # Check if the future already resolved
+                    # Check if future resolved (set by _process_search_response)
                     if future.done():
                         try:
                             result = future.result()
                         except Exception:
                             result = {"success": False}
                         break
-                    
-                    # Extend deadline if scanning placeholder was received
-                    search_info_ref = self.active_searches.get(search_id, {})
-                    if search_info_ref.get("pending_encorex"):
-                        scan_start = search_info_ref.get("encorex_wait_start", now)
-                        extended_deadline = scan_start + SCAN_EXTRA_WAIT
-                        if extended_deadline > deadline:
+
+                    now = time.time()
+
+                    # Dynamically extend deadline when scanning placeholder seen
+                    search_ref = self.active_searches.get(search_id, {})
+                    if search_ref.get("pending_encorex"):
+                        scan_start = search_ref.get("encorex_wait_start", now)
+                        extended   = scan_start + SCAN_EXTRA_WAIT
+                        if extended > deadline:
                             logger.info(
-                                f"⏳ Scanning detected — extending deadline by "
-                                f"{SCAN_EXTRA_WAIT}s (from scan start)"
+                                f"⏳ Scanning detected in {group['name']} — "
+                                f"extending deadline {SCAN_EXTRA_WAIT}s from scan start"
                             )
-                            deadline = extended_deadline
-                    
+                            deadline = extended
+
                     if now >= deadline:
                         timed_out = True
                         break
-                    
+
                     await asyncio.sleep(POLL_INTERVAL)
-                
-                # Clean up active_searches entry if still present
-                if search_id in self.active_searches and not future.done():
-                    future.cancel()
-                self.active_searches.pop(search_id, None)
-                
+
+                # Clean up if still registered
+                if search_id in self.active_searches:
+                    if not future.done():
+                        future.cancel()
+                    self.active_searches.pop(search_id, None)
+
                 if timed_out or result is None:
                     self._update_group_performance(group["name"], False)
                     logger.info(f"⏱️ Timeout from {group['name']}")
                     continue
-                
+
                 if result["success"]:
                     self._update_group_performance(group["name"], True)
                     logger.info(f"✅ Success from {group['name']}")
@@ -4246,47 +4248,48 @@ class SearchEngine:
                 "processed_files": []  # NEW: Track which files we've already processed
             }
             
-            # ── Scanning-aware wait (same logic as perform_search) ────────────
+            # ── Scanning-aware wait (same pattern as perform_search) ──────────
             SCAN_EXTRA_WAIT = 20
-            POLL_INTERVAL   = 0.5
-            deadline = time.time() + 10   # base 10s for leak search
-            result = None
+            POLL_INTERVAL   = 0.3
+            deadline  = time.time() + 15   # base 15s for leak
+            result    = None
             timed_out = False
-            
+
             while True:
-                now = time.time()
                 if future.done():
                     try:
                         result = future.result()
                     except Exception:
                         result = {"success": False}
                     break
-                
-                search_info_ref = self.active_searches.get(search_id, {})
-                if search_info_ref.get("pending_encorex"):
-                    scan_start = search_info_ref.get("encorex_wait_start", now)
-                    extended_deadline = scan_start + SCAN_EXTRA_WAIT
-                    if extended_deadline > deadline:
-                        logger.info(f"⏳ Leak search: scanning detected — extending deadline {SCAN_EXTRA_WAIT}s")
-                        deadline = extended_deadline
-                
+
+                now = time.time()
+                search_ref = self.active_searches.get(search_id, {})
+                if search_ref.get("pending_encorex"):
+                    scan_start = search_ref.get("encorex_wait_start", now)
+                    extended   = scan_start + SCAN_EXTRA_WAIT
+                    if extended > deadline:
+                        logger.info(f"⏳ Leak: scanning detected — extending deadline {SCAN_EXTRA_WAIT}s")
+                        deadline = extended
+
                 if now >= deadline:
                     timed_out = True
                     break
-                
+
                 await asyncio.sleep(POLL_INTERVAL)
-            
-            if search_id in self.active_searches and not future.done():
-                future.cancel()
-            self.active_searches.pop(search_id, None)
-            
+
+            if search_id in self.active_searches:
+                if not future.done():
+                    future.cancel()
+                self.active_searches.pop(search_id, None)
+
             if timed_out or result is None:
                 logger.info(f"⏱️ Timeout from advanced search")
                 return {
                     "success": False,
                     "error": "⏱️ **ADVANCED SEARCH TIMEOUT**\n\nOur advanced engine is processing your query.\nResults will be delivered shortly if available.\n\n⚠️ **For immediate results:**\n• Use specific search types (Phone, Email, etc.)\n• Ensure phone numbers include country code\n• Contact @darkboxesAdmin for premium support"
                 }
-            
+
             if result["success"]:
                 logger.info(f"✅ Advanced leak search successful")
                 return result
@@ -4379,14 +4382,16 @@ class SearchEngine:
                     query = search_info.get("query", "").lower().strip()
                     text_lower = text.lower()
 
-                    # Condition A: query string appears in the message
+                    # ── Condition A: query string appears in the message ──────
                     query_in_message = bool(query and query in text_lower)
 
-                    # Condition B: waiting for ENCOREX result after a scanning placeholder
+                    # ── Condition B: waiting for result after a scanning placeholder ──
+                    # When pending_encorex=True the group has ALREADY responded with a
+                    # scanning message for OUR command — so ANY non-scanning, non-empty
+                    # message from this chat is the result (edit OR new message).
                     pending_encorex = bool(search_info.get("pending_encorex"))
 
-                    # Condition C: ENCOREX OSINT / INTELX result frame
-                    # Results may contain a DIFFERENT number than queried — accept regardless
+                    # ── Condition C: ENCOREX OSINT / INTELX result frame ──────
                     is_encorex_osint_result = (
                         ('encorex osint' in text_lower or 'encorex intelx' in text_lower
                          or '╔═══《' in text or '╘══《' in text)
@@ -4396,8 +4401,7 @@ class SearchEngine:
                         and '📡 service:' not in text
                     )
 
-                    # Condition D: plain JSON result (no ENCOREX frame)
-                    # Require real data-field keywords to avoid false positives
+                    # ── Condition D: plain JSON result (no ENCOREX frame) ─────
                     has_data_fields = any(f in text_lower for f in [
                         '"name":', '"mobile":', '"number":', '"address":',
                         '"result":', '"results":', '"aadhar":', '"fname":',
@@ -4409,11 +4413,47 @@ class SearchEngine:
                         and not self._is_encorex_scanning_message(text)
                     )
 
-                    if query_in_message or pending_encorex or is_encorex_osint_result or looks_like_result:
+                    # ── Condition E: Telegram/Family style results ────────────
+                    # These results do NOT contain the original query.
+                    # Telegram: "Number fetched: +91XXXXXXXXXX", username info
+                    # Family: ration card, family members, names etc.
+                    # Accept any message with these result-style patterns.
+                    search_type = search_info.get("search_type", "")
+                    tg_family_result = False
+                    if search_type in ("telegram", "family", "tg"):
+                        tg_patterns = [
+                            'number fetched', 'fetched :-', 'fetched:', 'mobile:', 'phone:',
+                            'ration', 'family member', 'relation:', 'father name', 'mother name',
+                            'husband', 'wife', 'son', 'daughter', 'dob:', 'date of birth',
+                            'gender:', 'village:', 'district:', 'state:', 'pincode:',
+                            'aadhar:', 'uid:', 'enrolled', 'member', 'head of family',
+                            '✅', '📱', '📲', '🆔', '👨', '👩', '🏠',
+                        ]
+                        if (text and len(text.strip()) > 10
+                                and not self._is_encorex_scanning_message(text)
+                                and any(p in text_lower for p in tg_patterns)):
+                            tg_family_result = True
+                            logger.info(f"📲 Telegram/Family result pattern matched")
+
+                    # ── Condition F: Any substantive message when pending ─────
+                    # If we're already waiting after a scanning message, accept
+                    # ANY non-scanning message with real content (≥20 chars).
+                    # This covers all search types where the result format is
+                    # unpredictable (telegram, family, custom formats, etc.)
+                    pending_any_result = (
+                        pending_encorex
+                        and text
+                        and len(text.strip()) >= 20
+                        and not self._is_encorex_scanning_message(text)
+                    )
+
+                    if (query_in_message or pending_any_result or is_encorex_osint_result
+                            or looks_like_result or tg_family_result):
                         logger.info(
                             f"📨 Candidate result in {search_info['group']['name']} "
-                            f"(query={query_in_message}, pending={pending_encorex}, "
-                            f"encorex={is_encorex_osint_result}, json={looks_like_result})"
+                            f"(query={query_in_message}, pending_any={pending_any_result}, "
+                            f"encorex={is_encorex_osint_result}, json={looks_like_result}, "
+                            f"tg_family={tg_family_result})"
                         )
                         await self._process_search_response(search_id, search_info, message)
                         return
@@ -4504,35 +4544,33 @@ class SearchEngine:
             text = message.text or message.raw_text or ""
             logger.info(f"📨 Processing message in {search_info['group']['name']}: {text[:120]}...")
             
-            # ===== ENCOREX TUNNEL SCANNING FILTER =====
-            # Only skip the intermediate scanning placeholder — NOT the actual result
+            # ===== SCANNING PLACEHOLDER FILTER =====
+            # If this message IS a scanning placeholder → mark pending, return.
+            # The polling loop in perform_search extends the deadline automatically.
             if self._is_encorex_scanning_message(text):
-                logger.info(f"🚫 ENCOREX TUNNEL scanning placeholder — waiting for final result...")
+                logger.info(
+                    f"🛰️ Scanning placeholder from {search_info['group']['name']} "
+                    f"— marking pending_encorex, waiting for real result..."
+                )
                 if not search_info.get("pending_encorex"):
-                    search_info["pending_encorex"] = True
-                    search_info["encorex_wait_start"] = time.time()
-                    search_info["scanning_message_id"] = message.id
-                return  # Wait for the real result to arrive
+                    search_info["pending_encorex"]      = True
+                    search_info["encorex_wait_start"]   = time.time()
+                    search_info["scanning_message_id"]  = message.id
+                return  # Do NOT resolve future — wait for edit or next message
 
-            # If we were waiting after a scanning message, now check the incoming message
+            # If we already received a scanning placeholder, accept the VERY NEXT
+            # non-scanning message unconditionally — whether it's an edit of the
+            # scanning message OR a brand-new follow-up message from the group.
+            # No time-based grace period needed: if the group sent a scanning msg
+            # for our query, whatever it sends/edits next is the result.
             if search_info.get("pending_encorex"):
-                time_since_scan = time.time() - search_info.get("encorex_wait_start", 0)
-                is_different_msg = message.id != search_info.get("scanning_message_id")
-
-                # Accept as final result if:
-                # - it's a different message (new reply), OR
-                # - it's an edit to the scanning message (same id) AND ≥1s has passed
-                # - AND it is not itself a scanning message (already checked above)
-                if is_different_msg or time_since_scan >= 1:
-                    logger.info(
-                        f"✅ Final result after scanning wait "
-                        f"(different_msg={is_different_msg}, wait={time_since_scan:.1f}s)"
-                    )
-                    search_info["pending_encorex"] = False
-                else:
-                    logger.info(f"⏳ Still within scan grace period ({time_since_scan:.1f}s) — skipping")
-                    return
-            # ===== END ENCOREX FILTER =====
+                logger.info(
+                    f"✅ Result received after scanning wait from {search_info['group']['name']} "
+                    f"(msg_id={message.id}, scanning_msg_id={search_info.get('scanning_message_id')})"
+                )
+                search_info["pending_encorex"]  = False
+                search_info["_came_after_scan"] = True  # bypass no-info check below
+            # ===== END SCANNING FILTER =====
             
             # Special handling for leak search
             if search_info["search_type"] == "leak":
@@ -4578,11 +4616,18 @@ class SearchEngine:
                 logger.info(f"⏳ Processing message, waiting...")
                 return
             
-            if TextProcessor.is_no_info_message(text):
-                logger.info(f"🚫 No-info message")
+            # ── No-info / result decision ─────────────────────────────────
+            # If the message arrived after a scanning placeholder (the group
+            # already confirmed it processed our query), trust the group and
+            # treat it as a real result even if it contains "not found" words.
+            # This prevents false failures on telegram/family searches.
+            came_after_scan = search_info.pop("_came_after_scan", False)
+
+            if TextProcessor.is_no_info_message(text) and not came_after_scan:
+                logger.info(f"🚫 No-info message (came_after_scan={came_after_scan})")
                 result = {"success": False}
             elif text and len(text.strip()) > 10:
-                logger.info(f"📝 Processing text response")
+                logger.info(f"📝 Processing text response (came_after_scan={came_after_scan})")
                 result = await self._process_text(text, search_info)
             else:
                 logger.info(f"⚠️ Empty or short message, ignoring")
