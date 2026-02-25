@@ -248,7 +248,7 @@ class APIResponseFormatter:
 GROUP_PRIORITIES = {
     "primary": {
         "name": "⚡ Premium Database",
-        "identifier": "IntelXGroup",
+        "identifier": "RAJIV_THE_LOOKUP_HUB",
         "timeout": 30,
         "weight": 10,
         "enabled": True,
@@ -256,7 +256,7 @@ GROUP_PRIORITIES = {
     },
     "secondary": {
         "name": "🌐 IntelX Network",
-        "identifier": "RAJIV_THE_LOOKUP_HUB",
+        "identifier": "IntelXGroup",
         "timeout": 35,
         "weight": 7,
         "enabled": True,
@@ -643,20 +643,48 @@ class TextProcessor:
     
     @staticmethod
     def is_no_info_message(text: str) -> bool:
-        """Check if message indicates no information found"""
+        """Check if message indicates no information found.
+
+        Only treat SHORT messages as no-info. Real results often contain
+        phrases like "not available" inside data rows — those must NOT be
+        rejected. Any message with JSON fields or > 200 chars is a result.
+        """
         if not text:
             return False
-        
-        text_lower = text.lower()
-        keywords = [
-            'no info', 'no information', 'not found', 'no data', 'no result',
-            'no record', 'invalid', 'doesn\'t exist', 'does not exist',
-            'not available', 'no details', 'unable to find', 'could not find',
-            'couldn\'t find', 'no match', 'not exist', 'no information found'
+
+        text_lower = text.lower().strip()
+
+        # If message contains data indicators → it is a result, never no-info
+        result_signals = [
+            '"success":', '"status":', '"result":', '"results":',
+            '"country":', '"number":', '"mobile":', '"name":',
+            '"address":', '"aadhar":', '"fname":', '"circle":',
+            '"msg":', '"email":', '"alt":', '"_powered_by":',
+            '✅ success', '✅ found', '╔═══《', 'encorex osint', 'encorex intelx',
         ]
-        
-        return any(keyword in text_lower for keyword in keywords)
-    
+        if any(sig in text_lower for sig in result_signals):
+            return False
+
+        # Multiple JSON key-value pairs → definitely a result
+        if text_lower.count('": ') >= 2:
+            return False
+
+        # Long messages are almost certainly results, not "no info" notices
+        if len(text_lower) > 200:
+            return False
+
+        # Only match clearly negative short phrases
+        strict_phrases = [
+            'no info found', 'no information found', 'no result found',
+            'no data found', 'no record found', 'no match found',
+            'not found in', 'no results found', 'data not found',
+            'record not found', 'details not found', 'does not exist',
+            "doesn't exist", 'unable to find', 'could not find',
+            "couldn't find", 'no entry found',
+            'no info', 'not available', 'invalid number',
+        ]
+        return any(phrase in text_lower for phrase in strict_phrases)
+
     @staticmethod
     def clean_content(content: str, search_type: str = None) -> str:
         """Clean and format content"""
@@ -4308,23 +4336,36 @@ class SearchEngine:
             }
     
     def _get_priority_groups(self, preferred_priority: str) -> List:
-        """Get groups sorted by priority and performance"""
-        priority_order = ["primary", "secondary", "tertiary"]
-        
-        # Start with preferred priority group
+        """Get groups sorted in configured priority order: primary → secondary → tertiary.
+        The preferred_priority group always goes first, then the remaining keys in order.
+        The 'advanced' group is excluded (used only for leak searches).
+        Groups sharing the same identifier (same chat) are de-duplicated.
+        """
+        priority_keys = ["primary", "secondary", "tertiary"]
+        # Put preferred priority first
+        if preferred_priority in priority_keys:
+            priority_keys.remove(preferred_priority)
+            priority_keys.insert(0, preferred_priority)
+
+        seen_identifiers = set()
         sorted_groups = []
-        
-        # Add preferred group first
-        for group in DESTINATION_GROUPS:
-            if group.get("name") == GROUP_PRIORITIES[preferred_priority]["name"]:
-                sorted_groups.append(group)
-                break
-        
-        # Add remaining groups by weight
-        remaining_groups = [g for g in DESTINATION_GROUPS if g not in sorted_groups]
-        remaining_groups.sort(key=lambda x: x["weight"], reverse=True)
-        
-        sorted_groups.extend(remaining_groups)
+        for key in priority_keys:
+            group_data = GROUP_PRIORITIES.get(key)
+            if not group_data:
+                continue
+            if not group_data.get("enabled", True):
+                continue
+            if not group_data.get("entity"):
+                logger.warning(f"⚠️ Group {group_data['name']} ({key}) has no entity — skipping")
+                continue
+            ident = group_data.get("identifier", group_data["name"])
+            if ident in seen_identifiers:
+                logger.info(f"⏩ Skipping duplicate group identifier: {ident}")
+                continue
+            seen_identifiers.add(ident)
+            sorted_groups.append(group_data)
+
+        logger.info(f"📋 Search cascade order: {[g['name'] for g in sorted_groups]}")
         return sorted_groups
     
     def _update_group_performance(self, group_name: str, success: bool):
@@ -4382,78 +4423,110 @@ class SearchEngine:
                     query = search_info.get("query", "").lower().strip()
                     text_lower = text.lower()
 
-                    # ── Condition A: query string appears in the message ──────
-                    query_in_message = bool(query and query in text_lower)
+                    # ── Skip if this is a scanning placeholder ─────────────
+                    if self._is_encorex_scanning_message(text):
+                        # Mark pending so the polling loop extends its deadline
+                        await self._process_search_response(search_id, search_info, message)
+                        return
 
-                    # ── Condition B: waiting for result after a scanning placeholder ──
-                    # When pending_encorex=True the group has ALREADY responded with a
-                    # scanning message for OUR command — so ANY non-scanning, non-empty
-                    # message from this chat is the result (edit OR new message).
+                    # ── Skip obviously empty / too-short messages ──────────────
+                    if not text or len(text.strip()) < 5:
+                        continue
+
+                    search_type = search_info.get("search_type", "")
                     pending_encorex = bool(search_info.get("pending_encorex"))
 
-                    # ── Condition C: ENCOREX OSINT / INTELX result frame ──────
-                    is_encorex_osint_result = (
-                        ('encorex osint' in text_lower or 'encorex intelx' in text_lower
-                         or '╔═══《' in text or '╘══《' in text)
-                        and ('✅' in text or '"result"' in text_lower
-                             or '"success"' in text_lower or '"status"' in text_lower)
-                        and 'scanning' not in text_lower
-                        and '📡 service:' not in text
+                    # ─────────────────────────────────────────────────────────────
+                    # RESULT DETECTION — ordered from most-specific to broadest
+                    # ─────────────────────────────────────────────────────────────
+
+                    # A) Query string appears anywhere in the message
+                    query_in_message = bool(query and len(query) >= 4 and query in text_lower)
+
+                    # B) After a scanning placeholder, accept ANY substantive non-scanning msg
+                    pending_any_result = (
+                        pending_encorex
+                        and len(text.strip()) >= 15
                     )
 
-                    # ── Condition D: plain JSON result (no ENCOREX frame) ─────
-                    has_data_fields = any(f in text_lower for f in [
+                    # C) ENCOREX OSINT / INTELX result frame
+                    is_encorex_osint_result = (
+                        (
+                            'encorex osint' in text_lower
+                            or 'encorex intelx' in text_lower
+                            or '╔═══《' in text
+                            or '╘══《' in text
+                        )
+                        and (
+                            '✅' in text
+                            or '"result"' in text_lower
+                            or '"success"' in text_lower
+                            or '"status"' in text_lower
+                        )
+                    )
+
+                    # D) Plain JSON / key-value result (any search type)
+                    #    Require at least 1 known data field + 2 key-value pairs
+                    data_field_indicators = [
                         '"name":', '"mobile":', '"number":', '"address":',
                         '"result":', '"results":', '"aadhar":', '"fname":',
                         '"circle":', '"country":', '"email":', '"alt":',
-                    ])
+                        '"dob":', '"gender":', '"operator":', '"telecom":',
+                        '"state":', '"district":', '"uid":', '"pan":',
+                        'name:', 'mobile:', 'number:', 'address:',
+                        'operator:', 'circle:', 'state:', 'dob:',
+                    ]
+                    has_data_fields = any(f in text_lower for f in data_field_indicators)
                     looks_like_result = (
                         has_data_fields
-                        and text_lower.count('": ') >= 3
-                        and not self._is_encorex_scanning_message(text)
-                    )
-
-                    # ── Condition E: Telegram/Family style results ────────────
-                    # These results do NOT contain the original query.
-                    # Telegram: "Number fetched: +91XXXXXXXXXX", username info
-                    # Family: ration card, family members, names etc.
-                    # Accept any message with these result-style patterns.
-                    search_type = search_info.get("search_type", "")
-                    tg_family_result = False
-                    if search_type in ("telegram", "family", "tg"):
-                        tg_patterns = [
-                            'number fetched', 'fetched :-', 'fetched:', 'mobile:', 'phone:',
-                            'ration', 'family member', 'relation:', 'father name', 'mother name',
-                            'husband', 'wife', 'son', 'daughter', 'dob:', 'date of birth',
-                            'gender:', 'village:', 'district:', 'state:', 'pincode:',
-                            'aadhar:', 'uid:', 'enrolled', 'member', 'head of family',
-                            '✅', '📱', '📲', '🆔', '👨', '👩', '🏠',
-                        ]
-                        if (text and len(text.strip()) > 10
-                                and not self._is_encorex_scanning_message(text)
-                                and any(p in text_lower for p in tg_patterns)):
-                            tg_family_result = True
-                            logger.info(f"📲 Telegram/Family result pattern matched")
-
-                    # ── Condition F: Any substantive message when pending ─────
-                    # If we're already waiting after a scanning message, accept
-                    # ANY non-scanning message with real content (≥20 chars).
-                    # This covers all search types where the result format is
-                    # unpredictable (telegram, family, custom formats, etc.)
-                    pending_any_result = (
-                        pending_encorex
-                        and text
+                        and text_lower.count(':') >= 2
                         and len(text.strip()) >= 20
-                        and not self._is_encorex_scanning_message(text)
                     )
 
-                    if (query_in_message or pending_any_result or is_encorex_osint_result
-                            or looks_like_result or tg_family_result):
+                    # E) Common result-style patterns for ALL search types
+                    #    (covers non-JSON formatted results from any group bot)
+                    universal_result_patterns = [
+                        'number fetched', 'fetched :-', 'fetched:',
+                        'mobile:', 'phone:', 'telecom:', 'operator:',
+                        'ration', 'family member', 'relation:',
+                        'father name', 'mother name', 'father:', 'mother:',
+                        'husband:', 'wife:', 'dob:', 'date of birth',
+                        'gender:', 'village:', 'district:', 'state:', 'pincode:',
+                        'aadhar:', 'uid:', 'head of family',
+                        'pan:', 'gstin:', 'ifsc:', 'bank:',
+                        '✅ result', '✅ found', '✅ success',
+                        'name :', 'mobile :', 'address :',
+                        'result :', 'info :', 'details :',
+                        '━━━━', '────', '═══',   # formatted result dividers
+                        '║', '╔', '╚',           # box-drawing result frames
+                    ]
+                    universal_match = (
+                        len(text.strip()) >= 20
+                        and any(p in text_lower for p in universal_result_patterns)
+                    )
+
+                    # F) Large substantive message from this group — likely a result
+                    #    Only accept if the message is long enough to be real data
+                    large_message_result = (
+                        len(text.strip()) >= 100
+                        and not TextProcessor.is_processing_message(text)
+                    )
+
+                    matched = (
+                        query_in_message
+                        or pending_any_result
+                        or is_encorex_osint_result
+                        or looks_like_result
+                        or universal_match
+                        or large_message_result
+                    )
+
+                    if matched:
                         logger.info(
                             f"📨 Candidate result in {search_info['group']['name']} "
-                            f"(query={query_in_message}, pending_any={pending_any_result}, "
+                            f"(query={query_in_message}, pending={pending_any_result}, "
                             f"encorex={is_encorex_osint_result}, json={looks_like_result}, "
-                            f"tg_family={tg_family_result})"
+                            f"universal={universal_match}, large={large_message_result})"
                         )
                         await self._process_search_response(search_id, search_info, message)
                         return
