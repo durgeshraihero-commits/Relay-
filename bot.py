@@ -4132,23 +4132,64 @@ class SearchEngine:
                     "priority": group["weight"]
                 }
                 
-                # Wait for response
-                try:
-                    result = await asyncio.wait_for(future, timeout=group["timeout"])
+                # ── Scanning-aware wait loop ──────────────────────────────────
+                # Instead of a hard wait_for timeout, we poll the future every 0.5s
+                # and dynamically extend the deadline when a scanning placeholder is
+                # detected (pending_encorex=True).  That gives the group bot time to
+                # edit its scanning message OR send a follow-up result message.
+                SCAN_EXTRA_WAIT = 20   # seconds to wait AFTER a scanning msg
+                POLL_INTERVAL   = 0.5  # how often to check
+                
+                deadline = time.time() + group["timeout"]
+                result = None
+                timed_out = False
+                
+                while True:
+                    now = time.time()
                     
-                    if result["success"]:
-                        # Update group performance
-                        self._update_group_performance(group["name"], True)
-                        logger.info(f"✅ Success from {group['name']}")
-                        return result
-                    else:
-                        self._update_group_performance(group["name"], False)
-                        logger.info(f"⚠️ No result from {group['name']}, trying next...")
-                        continue
-                        
-                except asyncio.TimeoutError:
+                    # Check if the future already resolved
+                    if future.done():
+                        try:
+                            result = future.result()
+                        except Exception:
+                            result = {"success": False}
+                        break
+                    
+                    # Extend deadline if scanning placeholder was received
+                    search_info_ref = self.active_searches.get(search_id, {})
+                    if search_info_ref.get("pending_encorex"):
+                        scan_start = search_info_ref.get("encorex_wait_start", now)
+                        extended_deadline = scan_start + SCAN_EXTRA_WAIT
+                        if extended_deadline > deadline:
+                            logger.info(
+                                f"⏳ Scanning detected — extending deadline by "
+                                f"{SCAN_EXTRA_WAIT}s (from scan start)"
+                            )
+                            deadline = extended_deadline
+                    
+                    if now >= deadline:
+                        timed_out = True
+                        break
+                    
+                    await asyncio.sleep(POLL_INTERVAL)
+                
+                # Clean up active_searches entry if still present
+                if search_id in self.active_searches and not future.done():
+                    future.cancel()
+                self.active_searches.pop(search_id, None)
+                
+                if timed_out or result is None:
                     self._update_group_performance(group["name"], False)
                     logger.info(f"⏱️ Timeout from {group['name']}")
+                    continue
+                
+                if result["success"]:
+                    self._update_group_performance(group["name"], True)
+                    logger.info(f"✅ Success from {group['name']}")
+                    return result
+                else:
+                    self._update_group_performance(group["name"], False)
+                    logger.info(f"⚠️ No result from {group['name']}, trying next...")
                     continue
                     
             except Exception as e:
@@ -4205,25 +4246,55 @@ class SearchEngine:
                 "processed_files": []  # NEW: Track which files we've already processed
             }
             
-            # Wait for response (5 seconds timeout for leak search)
-            try:
-                result = await asyncio.wait_for(future, timeout=10)  # Increased timeout to 10 seconds
+            # ── Scanning-aware wait (same logic as perform_search) ────────────
+            SCAN_EXTRA_WAIT = 20
+            POLL_INTERVAL   = 0.5
+            deadline = time.time() + 10   # base 10s for leak search
+            result = None
+            timed_out = False
+            
+            while True:
+                now = time.time()
+                if future.done():
+                    try:
+                        result = future.result()
+                    except Exception:
+                        result = {"success": False}
+                    break
                 
-                if result["success"]:
-                    logger.info(f"✅ Advanced leak search successful")
-                    return result
-                else:
-                    logger.info(f"⚠️ No result from advanced search")
-                    return {
-                        "success": False,
-                        "error": "❌ No information found in our advanced databases.\n\n⚠️ **Note:** For phone searches, include country code (e.g., 917204764637)\n💎 **Try our premium sources for better results.**"
-                    }
-                    
-            except asyncio.TimeoutError:
+                search_info_ref = self.active_searches.get(search_id, {})
+                if search_info_ref.get("pending_encorex"):
+                    scan_start = search_info_ref.get("encorex_wait_start", now)
+                    extended_deadline = scan_start + SCAN_EXTRA_WAIT
+                    if extended_deadline > deadline:
+                        logger.info(f"⏳ Leak search: scanning detected — extending deadline {SCAN_EXTRA_WAIT}s")
+                        deadline = extended_deadline
+                
+                if now >= deadline:
+                    timed_out = True
+                    break
+                
+                await asyncio.sleep(POLL_INTERVAL)
+            
+            if search_id in self.active_searches and not future.done():
+                future.cancel()
+            self.active_searches.pop(search_id, None)
+            
+            if timed_out or result is None:
                 logger.info(f"⏱️ Timeout from advanced search")
                 return {
                     "success": False,
                     "error": "⏱️ **ADVANCED SEARCH TIMEOUT**\n\nOur advanced engine is processing your query.\nResults will be delivered shortly if available.\n\n⚠️ **For immediate results:**\n• Use specific search types (Phone, Email, etc.)\n• Ensure phone numbers include country code\n• Contact @darkboxesAdmin for premium support"
+                }
+            
+            if result["success"]:
+                logger.info(f"✅ Advanced leak search successful")
+                return result
+            else:
+                logger.info(f"⚠️ No result from advanced search")
+                return {
+                    "success": False,
+                    "error": "❌ No information found in our advanced databases.\n\n⚠️ **Note:** For phone searches, include country code (e.g., 917204764637)\n💎 **Try our premium sources for better results.**"
                 }
                 
         except Exception as e:
