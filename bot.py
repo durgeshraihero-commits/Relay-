@@ -7798,6 +7798,23 @@ async def api_plan_callback(event):
             f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"**How to purchase:**\n\n"
             f"1️⃣ Pay ₹{prices[plan]} to UPI:\n"
+            f"   `{config.UPI_ID}`\n\n"
+            f"2️⃣ Note your **UTR / Transaction Reference Number**\n\n"
+            f"3️⃣ Tap button below to submit UTR\n"
+            f"   Your ID: `{user_id}`\n\n"
+            f"⏱️ Activation within 5-15 minutes after manual verification\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━"
+        )
+        
+        buttons = [
+            [Button.inline(f"📤 Submit UTR Number", f"submit_api_payment_{plan}")],
+            [Button.inline("« Back", "api_plans")]
+        ]
+        
+        await event.edit(plan_text, buttons=buttons, parse_mode="md")
+    except Exception as e:
+        logger.error(f"plan callback error: {e}")
+        await event.answer("❌ Error", alert=True)
 
 
 # ================== QUERY PROTECTION COMMANDS ==================
@@ -8106,25 +8123,6 @@ async def list_pending_protections_command(event):
     except Exception as e:
         logger.error(f"❌ pending_protections error: {e}")
         await event.respond(f"❌ Error: {e}")
-
-# Continue with existing code
-            f"   `{config.UPI_ID}`\n\n"
-            f"2️⃣ Note your **UTR / Transaction Reference Number**\n\n"
-            f"3️⃣ Tap button below to submit UTR\n"
-            f"   Your ID: `{user_id}`\n\n"
-            f"⏱️ Activation within 5-15 minutes after manual verification\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━"
-        )
-        
-        buttons = [
-            [Button.inline(f"📤 Submit UTR Number", f"submit_api_payment_{plan}")],
-            [Button.inline("« Back", "api_plans")]
-        ]
-        
-        await event.edit(plan_text, buttons=buttons, parse_mode="md")
-    except Exception as e:
-        logger.error(f"plan callback error: {e}")
-        await event.answer("❌ Error", alert=True)
 
 
 @bot_client.on(events.CallbackQuery(pattern=r'^submit_api_payment_(basic|pro|enterprise)$'))
