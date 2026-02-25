@@ -4250,6 +4250,7 @@ class SearchEngine:
         """Handle incoming messages for search responses"""
         try:
             message = event.message
+            text = message.text or message.raw_text or ""
             
             # Check if this is a reply to our search
             if message.reply_to:
@@ -4257,10 +4258,11 @@ class SearchEngine:
                 
                 for search_id, search_info in list(self.active_searches.items()):
                     if reply_to_id == search_info["message_id"]:
+                        logger.info(f"📩 Found direct reply to our search message")
                         await self._process_search_response(search_id, search_info, message)
                         return
             
-            # Check for file messages in same chat
+            # Check for messages in same chat (including edits and new messages with same query)
             for search_id, search_info in list(self.active_searches.items()):
                 try:
                     chat_match = False
@@ -4270,11 +4272,22 @@ class SearchEngine:
                         chat_match = str(event.chat_id) == str(search_info["chat_id"])
                     
                     if chat_match:
+                        # Check if query matches (for cases where result comes without being a reply)
+                        query = search_info.get("query", "").lower()
+                        query_in_message = query and query in text.lower()
+                        
+                        # Check if this is a file
                         file_check = await self._check_and_process_file(message, search_info)
                         if file_check is not None:
                             logger.info(f"📁 Found file in {search_info['group']['name']}")
                             await self._process_search_response(search_id, search_info, message)
-                        return
+                            return
+                        
+                        # Process if query matches or if we're waiting for ENCOREX result
+                        if query_in_message or search_info.get("pending_encorex"):
+                            logger.info(f"📨 Found matching message in {search_info['group']['name']}")
+                            await self._process_search_response(search_id, search_info, message)
+                            return
                 except:
                     continue
                     
@@ -4370,21 +4383,30 @@ class SearchEngine:
                 if "pending_encorex" not in search_info:
                     search_info["pending_encorex"] = True
                     search_info["encorex_wait_start"] = time.time()
+                    search_info["scanning_message_id"] = message.id
                     
                 # Don't complete the search, wait for actual results
                 return
             
             # If we were waiting for ENCOREX results, check if this is the final result
             if search_info.get("pending_encorex"):
-                # Check if enough time has passed or if this looks like a final result
                 time_since_scanning = time.time() - search_info.get("encorex_wait_start", 0)
                 
-                # If this is a proper result (not another scanning message), process it
-                if time_since_scanning > 2 and not self._is_encorex_scanning_message(text):
-                    logger.info(f"✅ Received final result after ENCOREX scanning")
+                # Must meet ALL these conditions to be a valid final result:
+                # 1. Not another scanning message
+                # 2. Has substantial content (>100 chars)
+                # 3. Either enough time has passed OR different message
+                
+                is_scanning = self._is_encorex_scanning_message(text)
+                has_content = len(text.strip()) > 100
+                is_different_msg = message.id != search_info.get("scanning_message_id")
+                enough_time = time_since_scanning > 3
+                
+                if not is_scanning and has_content and (is_different_msg or enough_time):
+                    logger.info(f"✅ Received valid final result after ENCOREX scanning (len: {len(text)}, time: {time_since_scanning:.1f}s)")
                     search_info["pending_encorex"] = False
                 else:
-                    logger.info(f"⏳ Still waiting for final ENCOREX result...")
+                    logger.info(f"⏳ Still waiting for final ENCOREX result (scanning: {is_scanning}, content: {has_content}, different: {is_different_msg}, time: {time_since_scanning:.1f}s)...")
                     return
             # ===== END ENCOREX FILTER =====
             
@@ -4451,23 +4473,84 @@ class SearchEngine:
             logger.error(f"❌ Error processing search response: {e}")
     
     def _is_encorex_scanning_message(self, text: str) -> bool:
-        """Check if message is an ENCOREX TUNNEL scanning message"""
-        encorex_patterns = [
-            "ENCOREX TUNNEL",
-            "🔍 scanning...",
-            "📡 service: NUM",
-            "🖥️ node: ip-",
-            "╔════════════════════════════╗",
-            "║ 🔍 scanning...",
-            "║ 📡 service:",
-            "║ 🖥️ node:"
+        """Check if message is an ENCOREX TUNNEL scanning message or any scanning/processing message"""
+        if not text or len(text.strip()) < 10:
+            return False
+        
+        text_lower = text.lower()
+        
+        # Multiple pattern sets to catch different variations
+        scanning_keywords = [
+            "scanning...",
+            "🔍 scanning",
+            "║ 🔍 scanning",
+            "scanning",
+            "please wait",
+            "processing",
+            "fetching"
         ]
         
-        # Check if message contains scanning indicators
-        pattern_count = sum(1 for pattern in encorex_patterns if pattern.lower() in text.lower())
+        service_keywords = [
+            "📡 service:",
+            "service: tg",
+            "service: num",
+            "service: email",
+            "║ 📡 service",
+        ]
         
-        # If 3 or more patterns match, it's likely an ENCOREX scanning message
-        return pattern_count >= 3
+        node_keywords = [
+            "🖥️ node:",
+            "node: ip-",
+            "║ 🖥️ node",
+        ]
+        
+        encorex_keywords = [
+            "encorex",
+            "encorex tunnel",
+            "intelx"
+        ]
+        
+        divider_patterns = [
+            "────────────────",
+            "━━━━━━━━━━━━━━",
+            "╔════════",
+            "║",
+            "╚════════",
+            "🛰️"
+        ]
+        
+        # Count matches in each category
+        scanning_match = any(kw in text_lower for kw in scanning_keywords)
+        service_match = any(kw in text_lower for kw in service_keywords)
+        node_match = any(kw in text_lower for kw in node_keywords)
+        encorex_match = any(kw in text_lower for kw in encorex_keywords)
+        divider_match = sum(1 for div in divider_patterns if div in text) >= 2
+        
+        # Check for short messages with scanning indicators
+        is_short_scanning = len(text.strip()) < 200 and scanning_match
+        
+        # If it has scanning + service/node, it's definitely a scanning message
+        if scanning_match and (service_match or node_match):
+            logger.info(f"🚫 Detected scanning message: scanning + service/node")
+            return True
+        
+        # If it has ENCOREX/IntelX branding
+        if encorex_match:
+            logger.info(f"🚫 Detected ENCOREX/IntelX branding")
+            return True
+        
+        # If it's short and has scanning with dividers
+        if is_short_scanning and divider_match:
+            logger.info(f"🚫 Detected short scanning message with dividers")
+            return True
+        
+        # If it has multiple indicators (scanning + dividers + service/node)
+        total_matches = sum([scanning_match, service_match, node_match, divider_match])
+        if total_matches >= 2:
+            logger.info(f"🚫 Detected scanning message: {total_matches} indicators matched")
+            return True
+        
+        return False
     
     async def _process_leak_response(self, search_id: str, search_info: Dict, message):
         """Process leak search response"""
@@ -7533,6 +7616,13 @@ async def handle_all_messages(event):
     except Exception as e:
         pass
 
+@user_client.on(events.MessageEdited())
+async def handle_edited_messages(event):
+    """Handle edited messages - important for catching final results after scanning"""
+    try:
+        await search_engine.handle_incoming_message(event)
+    except Exception as e:
+        pass
 
 
 @bot_client.on(events.CallbackQuery(pattern=r'^api_menu$'))
