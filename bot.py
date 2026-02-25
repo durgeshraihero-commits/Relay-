@@ -1572,6 +1572,8 @@ class OneLineKeyboard:
         buttons.append([Button.inline("🆘 Support", "support")])
         buttons.append([Button.inline("🔑 API Access", "api_menu")])
         buttons.append([Button.inline("🔐 Login / Link Account", "login_account")])
+        buttons.append([Button.inline("💻 Download Client Script", "download_client")])
+        buttons.append([Button.inline("🗝️ Get My Login Credentials", "get_credentials")])
         
         # Add admin button if admin
         if is_admin:
@@ -1602,9 +1604,14 @@ class OneLineKeyboard:
         buttons = [
             [Button.inline("📊 Today's Stats", "admin_today")],
             [Button.inline("👥 User List & Management", "admin_users")],
+            [Button.inline("🕐 Last Active Users", "admin_last_active")],
             [Button.inline("📈 Search Analytics", "admin_analytics")],
+            [Button.inline("🔍 All Search Logs", "admin_search_logs")],
+            [Button.inline("🔍 User Search Logs", "admin_user_search_logs")],
+            [Button.inline("🕵️ Intent Monitor", "admin_intent_monitor")],
             [Button.inline("💰 Payment Stats", "admin_payments")],
-            [Button.inline("💳 Pending Payments", "admin_pending_payments")],
+            [Button.inline("⏳ Pending UTR Payments", "admin_pending_utr")],
+            [Button.inline("💳 Pending Payments (Legacy)", "admin_pending_payments")],
             [Button.inline("🔍 Search Users", "admin_search_user")],
             [Button.inline("📢 Broadcast (Text)", "admin_broadcast")],
             [Button.inline("🖼️ Broadcast (Media)", "admin_broadcast_media")],
@@ -1615,6 +1622,7 @@ class OneLineKeyboard:
             [Button.inline("🎯 Add Credits to User", "admin_add_credits")],
             [Button.inline("💎 Give Subscription", "admin_give_subscription")],
             [Button.inline("📊 Export Data", "admin_export")],
+            [Button.inline("🔑 API Panel", "admin_api")],
             [Button.inline("« Main Menu", "main_menu")]
         ]
         return buttons
@@ -1832,6 +1840,16 @@ class AdminPanelHandler:
                 await self.show_broadcast_history(event)
             elif data == "admin_pending_payments":
                 await self.show_pending_payments(event)
+            elif data == "admin_last_active":
+                await admin_last_active_callback(event)
+            elif data == "admin_search_logs":
+                await admin_search_logs_callback(event)
+            elif data == "admin_user_search_logs":
+                await admin_user_search_logs_ask(event)
+            elif data == "admin_intent_monitor":
+                await admin_intent_monitor_callback(event)
+            elif data == "admin_pending_utr":
+                await admin_pending_utr_callback(event)
             elif data.startswith("admin_broadcast_seen_"):
                 broadcast_id = data[len("admin_broadcast_seen_"):]
                 await self.show_broadcast_seen(event, broadcast_id)
@@ -3030,7 +3048,7 @@ class AdminPanelHandler:
             await event.answer("❌ Error loading seen report", alert=True)
 
     async def show_pending_payments(self, event):
-        """Show all pending payment screenshots awaiting approval"""
+        """Show all pending UTR/payment submissions awaiting admin approval"""
         try:
             pending = await asyncio.get_running_loop().run_in_executor(
                 None, lambda: list(db_manager.db.pending_payments.find(
@@ -4768,6 +4786,202 @@ async def start_web_server():
             }
             return web.json_response(docs)
         
+        # Account management endpoints (no Telegram needed)
+        async def register_endpoint(request):
+            """Register new account with username + password (no Telegram needed)"""
+            try:
+                data = await request.json()
+                username = (data.get("username") or "").strip()
+                password = (data.get("password") or "").strip()
+
+                if not username or not password:
+                    return web.json_response(
+                        {"status": "error", "message": "username and password required"},
+                        status=400
+                    )
+                if len(password) < 6:
+                    return web.json_response(
+                        {"status": "error", "message": "password must be at least 6 characters"},
+                        status=400
+                    )
+                if len(username) < 3:
+                    return web.json_response(
+                        {"status": "error", "message": "username must be at least 3 characters"},
+                        status=400
+                    )
+
+                # Check if username already taken
+                loop = asyncio.get_running_loop()
+                existing = await loop.run_in_executor(
+                    None, lambda: db_manager.db.accounts.find_one({"username": username.lower()})
+                )
+                if existing:
+                    return web.json_response(
+                        {"status": "error", "message": "Username already taken"},
+                        status=409
+                    )
+
+                # Create account
+                account_id = f"DB{secrets.token_hex(4).upper()}"
+                pwd_hash = hashlib.sha256(password.encode()).hexdigest()
+
+                new_account = {
+                    "account_id": account_id,
+                    "username": username.lower(),
+                    "display_name": username,
+                    "password_hash": pwd_hash,
+                    "linked_tg_ids": [],
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "searches_remaining": config.NEW_USER_CREDITS,
+                    "subscription": None,
+                    "subscription_expiry": None,
+                    "is_banned": False,
+                    "total_searches": 0,
+                    "source": "client_registration"
+                }
+
+                await loop.run_in_executor(
+                    None, lambda: db_manager.db.accounts.insert_one(new_account)
+                )
+
+                # Notify admin
+                try:
+                    await bot_client.send_message(
+                        config.ADMIN_USER_ID,
+                        f"🆕 **NEW CLIENT REGISTRATION**\n\n"
+                        f"👤 Username: `{username}`\n"
+                        f"🆔 Account ID: `{account_id}`\n"
+                        f"🕐 Time: {datetime.now().strftime('%d %b %Y %H:%M')}\n"
+                        f"📱 Source: Terminal Client (No Telegram)\n\n"
+                        f"Starting credits: {config.NEW_USER_CREDITS}",
+                        parse_mode="md"
+                    )
+                except Exception:
+                    pass
+
+                return web.json_response({
+                    "status": "success",
+                    "message": "Account created successfully",
+                    "account_id": account_id,
+                    "credits": config.NEW_USER_CREDITS,
+                    "info": "Save your Account ID and password securely. "
+                            "Contact @darkboxesAdmin or yadiify@gmail.com for support."
+                })
+
+            except Exception as e:
+                logger.error(f"Register endpoint error: {e}")
+                return web.json_response(
+                    {"status": "error", "message": "Server error"},
+                    status=500
+                )
+
+        async def auth_login_endpoint(request):
+            """Authenticate with account_id/username + password, return API key"""
+            try:
+                data = await request.json()
+                identifier = (data.get("account_id") or data.get("username") or "").strip()
+                password = (data.get("password") or "").strip()
+
+                if not identifier or not password:
+                    return web.json_response(
+                        {"status": "error", "message": "account_id/username and password required"},
+                        status=400
+                    )
+
+                loop = asyncio.get_running_loop()
+                pwd_hash = hashlib.sha256(password.encode()).hexdigest()
+
+                # Find by account_id or username
+                if identifier.upper().startswith("DB"):
+                    account = await loop.run_in_executor(
+                        None, lambda: db_manager.db.accounts.find_one(
+                            {"account_id": identifier.upper()}
+                        )
+                    )
+                else:
+                    account = await loop.run_in_executor(
+                        None, lambda: db_manager.db.accounts.find_one(
+                            {"username": identifier.lower()}
+                        )
+                    )
+
+                if not account:
+                    return web.json_response(
+                        {"status": "error", "message": "Account not found"},
+                        status=404
+                    )
+
+                if account.get("password_hash") != pwd_hash:
+                    return web.json_response(
+                        {"status": "error", "message": "Incorrect password"},
+                        status=401
+                    )
+
+                if account.get("is_banned"):
+                    return web.json_response(
+                        {"status": "error", "message": "Account banned. Contact @darkboxesAdmin"},
+                        status=403
+                    )
+
+                account_id = account.get("account_id")
+                credits = account.get("searches_remaining", 0)
+                sub = account.get("subscription") or "None"
+
+                # Generate or retrieve API key for this account
+                existing_key = await loop.run_in_executor(
+                    None, lambda: db_manager.db.api_keys.find_one(
+                        {"account_id": account_id, "is_active": True}
+                    )
+                )
+
+                if existing_key:
+                    api_key = existing_key.get("api_key")
+                else:
+                    # Create a session API key
+                    api_key = APIKeyManager.generate_api_key(0, f"client_{account_id}")
+                    expiry = datetime.now(timezone.utc) + timedelta(days=365)
+                    key_doc = {
+                        "api_key": api_key,
+                        "account_id": account_id,
+                        "user_id": 0,
+                        "plan_id": "client",
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                        "expires_at": expiry.isoformat(),
+                        "is_active": True,
+                        "total_requests": 0,
+                        "unlimited": False
+                    }
+                    await loop.run_in_executor(
+                        None, lambda: db_manager.db.api_keys.insert_one(key_doc)
+                    )
+
+                # Update last_seen
+                await loop.run_in_executor(
+                    None, lambda: db_manager.db.accounts.update_one(
+                        {"account_id": account_id},
+                        {"$set": {"last_seen": datetime.now(timezone.utc).isoformat()}}
+                    )
+                )
+
+                return web.json_response({
+                    "status": "success",
+                    "account_id": account_id,
+                    "api_key": api_key,
+                    "credits": credits,
+                    "plan": sub,
+                    "message": "Login successful"
+                })
+
+            except Exception as e:
+                logger.error(f"Auth login endpoint error: {e}")
+                return web.json_response(
+                    {"status": "error", "message": "Server error"},
+                    status=500
+                )
+
+        app.router.add_post('/api/v1/auth/register', register_endpoint)
+        app.router.add_post('/api/v1/auth/login', auth_login_endpoint)
+
         # Add API routes
         app.router.add_post('/api/v1/search/phone', phone_search)
         app.router.add_post('/api/v1/search/family', family_search)
@@ -5225,16 +5439,17 @@ async def plan_selection_callback(event):
             f"💳 **HOW TO PURCHASE:**\n\n"
             f"1️⃣ Pay ₹{plan['price']} via UPI:\n"
             f"   🔗 `{config.UPI_ID}`\n\n"
-            f"2️⃣ Take a screenshot of payment confirmation\n\n"
-            f"3️⃣ Tap **Submit Screenshot** below — admin will verify\n"
+            f"2️⃣ Note your **UTR / Transaction Reference Number**\n"
+            f"   (shown in your UPI app after payment)\n\n"
+            f"3️⃣ Tap **Submit UTR Number** below — admin will verify manually\n"
             f"   Your ID (auto-included): `{user_id}`\n\n"
-            f"⏱️ Activation within **5–10 minutes**\n"
-            f"❓ Issues? Message **@darkboxesAdmin**\n"
+            f"⏱️ Activation within **5–15 minutes** after admin verifies\n"
+            f"❓ Issues? Message **@darkboxesAdmin** or email **yadiify@gmail.com**\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━"
         )
 
         buttons = [
-            [Button.inline(f"📤 Submit Payment Screenshot", f"submit_payment_{plan_id}")],
+            [Button.inline(f"📤 Submit UTR / Transaction No", f"submit_payment_{plan_id}")],
             [Button.inline("« Back to Plans", "premium")],
             [Button.inline("« Main Menu", "main_menu")]
         ]
@@ -5248,7 +5463,7 @@ async def plan_selection_callback(event):
 
 @bot_client.on(events.CallbackQuery(pattern=r'^submit_payment_(.+)$'))
 async def submit_payment_callback(event):
-    """Guide user to send payment screenshot"""
+    """Guide user to enter UTR/Transaction number"""
     try:
         plan_id = event.data.decode().split('_', 2)[2]
         user_id = event.sender_id
@@ -5259,21 +5474,27 @@ async def submit_payment_callback(event):
 
         plan = SUBSCRIPTION_PLANS[plan_id]
 
-        # Set state to await screenshot
+        # Set state to await UTR
         user_states[user_id] = {
-            "action": "awaiting_payment_screenshot",
+            "action": "awaiting_payment_utr",
             "plan_id": plan_id,
             "plan_name": plan['name'],
             "plan_price": plan['price']
         }
 
         instructions = (
-            f"📸 **SEND PAYMENT SCREENSHOT**\n\n"
+            f"🏦 **ENTER UTR / TRANSACTION NUMBER**\n\n"
             f"Plan: **{plan['name']}** — ₹{plan['price']}\n\n"
-            f"✅ Please send your payment screenshot **as a photo** in this chat now.\n\n"
-            f"The screenshot will be forwarded to admin for approval.\n"
-            f"🕐 Approval time: 5–10 minutes\n\n"
-            f"Your User ID is attached automatically: `{user_id}`"
+            f"After completing your UPI payment, type the **UTR number** or "
+            f"**Transaction Reference Number** shown in your payment app.\n\n"
+            f"📋 Where to find it:\n"
+            f"• PhonePe: History → Tap transaction → UTR No\n"
+            f"• GPay: Activity → Tap transaction → Transaction ID\n"
+            f"• Paytm: History → Tap transaction → Reference No\n"
+            f"• Bank App: Check SMS / Account Statement\n\n"
+            f"**Just type the UTR/Txn number and send it here.**\n\n"
+            f"⏱️ Admin will verify and activate within 5–15 minutes\n"
+            f"Your User ID: `{user_id}`"
         )
 
         buttons = [[Button.inline("❌ Cancel", "main_menu")]]
@@ -5344,6 +5565,7 @@ async def support_callback(event):
             f"🆘 **DARKBOXES SUPPORT**\n"
             f"═══════════════════════\n\n"
             f"📞 **Contact Admin:** @darkboxesAdmin\n"
+            f"📧 **Email:** yadiify@gmail.com\n"
             f"⏰ **Response Time:** Within 1 hour\n"
             f"🌐 **Official Channel:** @darkboxesv1\n\n"
             f"❓ **Common Issues:**\n"
@@ -5359,7 +5581,7 @@ async def support_callback(event):
             f"4. Check @darkboxesv1 for announcements\n\n"
             f"💳 **Payment Support:**\n"
             f"UPI: `{config.UPI_ID}`\n"
-            f"Send screenshot after payment\n\n"
+            f"After payment, submit your UTR/Transaction No in the bot\n\n"
             f"🔒 **Security Notice:**\n"
             f"Never share passwords or OTPs\n"
             f"Official admin: @darkboxesAdmin only"
@@ -5503,7 +5725,7 @@ async def contact_admin_callback(event):
             f"👤 **Official Admin:** @darkboxesAdmin\n\n"
             f"📧 **Contact Methods:**\n"
             f"• Telegram: @darkboxesAdmin (Preferred)\n"
-            f"• Email: darkboxes.admin@gmail.com\n"
+            f"• Email: yadiify@gmail.com\n"
             f"• Channel: @darkboxesv1\n\n"
             f"⏰ **Response Time:**\n"
             f"• General: Within 1 hour\n"
@@ -5511,8 +5733,8 @@ async def contact_admin_callback(event):
             f"• Payment: 5-10 minutes\n\n"
             f"💳 **Payment Issues:**\n"
             f"1. Send payment to: `{config.UPI_ID}`\n"
-            f"2. Take screenshot\n"
-            f"3. Send to @darkboxesAdmin\n"
+            f"2. Note your UTR / Transaction Number\n"
+            f"3. Submit it via 💳 Buy Credits in the bot\n"
             f"4. Include your User ID: `{event.sender_id}`\n\n"
             f"⚠️ **Important:**\n"
             f"• Never share passwords/OTPs\n"
@@ -5547,8 +5769,8 @@ async def private_message_handler(event):
         if state.get("action") == "search":
             await handle_search_query(event, state)
 
-        elif state.get("action") == "awaiting_payment_screenshot":
-            await handle_payment_screenshot(event, state)
+        elif state.get("action") == "awaiting_payment_utr":
+            await handle_payment_utr(event, state)
 
         elif state.get("action") == "admin_search_user":
             await handle_admin_search_user(event)
@@ -5577,22 +5799,31 @@ async def private_message_handler(event):
         elif state.get("action") == "enter_account_credentials":
             await handle_account_login(event)
 
+        elif state.get("action") == "admin_view_user_search_logs":
+            await handle_admin_view_user_search_logs(event)
+
     except Exception as e:
         logger.error(f"❌ Error in private_message_handler: {e}")
 
-async def handle_payment_screenshot(event, state):
-    """Handle payment screenshot submission from user"""
+async def handle_payment_utr(event, state):
+    """Handle UTR/Transaction number submission from user (no screenshot required)"""
     try:
         user_id = event.sender_id
         plan_id = state.get("plan_id")
         plan_name = state.get("plan_name")
         plan_price = state.get("plan_price")
 
-        # Check if message has photo/document
-        if not (event.photo or event.document):
+        utr_text = (event.text or "").strip()
+
+        # Basic validation - UTR is typically 12 digits, but allow 8-25 alphanumeric
+        if not utr_text or len(utr_text) < 6 or len(utr_text) > 30:
             await event.respond(
-                "⚠️ Please send your **payment screenshot as a photo**.\n"
-                "No text or file — just the screenshot image."
+                "⚠️ **Invalid UTR / Transaction Number.**\n\n"
+                "Please enter the exact UTR or Transaction Reference Number "
+                "shown in your UPI payment app.\n\n"
+                "Example: `123456789012` or `T2504201234567890`\n\n"
+                "If you're having trouble, contact @darkboxesAdmin or email yadiify@gmail.com",
+                parse_mode="md"
             )
             return
 
@@ -5605,11 +5836,12 @@ async def handle_payment_screenshot(event, state):
         pending_payment = {
             "payment_id": payment_id,
             "user_id": user_id,
-            "username": user_doc.get('username', ''),
+            "username": user_doc.get('username', '') if user_doc else '',
             "first_name": first_name,
             "plan_id": plan_id,
             "plan_name": plan_name,
             "amount": plan_price,
+            "utr": utr_text,
             "status": "pending",
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
@@ -5617,16 +5849,18 @@ async def handle_payment_screenshot(event, state):
             None, lambda: db_manager.db.pending_payments.insert_one(pending_payment)
         )
 
-        # Forward screenshot to admin with action buttons
+        # Notify admin with approve/reject buttons
         admin_caption = (
-            f"💳 **NEW PAYMENT SCREENSHOT**\n\n"
+            f"💳 **NEW PAYMENT — UTR SUBMITTED**\n\n"
             f"🆔 Payment ID: `{payment_id}`\n"
             f"👤 User: {first_name} ({username})\n"
             f"🔢 User ID: `{user_id}`\n"
-            f"📦 Plan: {plan_name}\n"
+            f"📦 Plan: **{plan_name}**\n"
             f"💰 Amount: ₹{plan_price}\n"
+            f"🏦 UTR/Txn No: `{utr_text}`\n"
             f"🕐 Time: {datetime.now().strftime('%d %b %Y %H:%M')}\n\n"
-            f"✅ Approve or ❌ Reject below:"
+            f"✅ Approve after verifying UTR in your UPI app.\n"
+            f"❌ Reject if UTR is invalid or payment not received."
         )
 
         admin_buttons = [
@@ -5634,36 +5868,45 @@ async def handle_payment_screenshot(event, state):
             [Button.inline(f"❌ REJECT", f"reject_payment_{payment_id}_{user_id}")]
         ]
 
-        # Forward screenshot to admin
         try:
-            await bot_client.send_file(
+            await bot_client.send_message(
                 config.ADMIN_USER_ID,
-                file=event.media,
-                caption=admin_caption,
+                admin_caption,
                 buttons=admin_buttons,
                 parse_mode="md"
             )
         except Exception as e:
-            logger.error(f"Error forwarding screenshot to admin: {e}")
+            logger.error(f"Error notifying admin about UTR payment: {e}")
 
         # Confirm to user
         await event.respond(
-            f"✅ **SCREENSHOT RECEIVED!**\n\n"
+            f"✅ **UTR SUBMITTED SUCCESSFULLY!**\n\n"
             f"📋 Payment ID: `{payment_id}`\n"
-            f"📦 Plan: {plan_name}\n"
-            f"💰 Amount: ₹{plan_price}\n\n"
-            f"🕐 Admin will review and approve within **5–10 minutes**.\n"
-            f"You'll receive a notification once approved.\n\n"
-            f"📞 For urgent help: @darkboxesAdmin",
+            f"📦 Plan: **{plan_name}**\n"
+            f"💰 Amount: ₹{plan_price}\n"
+            f"🏦 UTR/Txn No: `{utr_text}`\n\n"
+            f"⏳ Admin will verify your payment manually and approve within **5–15 minutes**.\n"
+            f"You will receive a notification once activated.\n\n"
+            f"📞 For urgent help:\n"
+            f"• Telegram: @darkboxesAdmin\n"
+            f"• Email: yadiify@gmail.com",
             parse_mode="md"
         )
 
         user_states.pop(user_id, None)
 
     except Exception as e:
-        logger.error(f"❌ Error handling payment screenshot: {e}")
-        await event.respond("❌ Error processing your screenshot. Please try again or contact @darkboxesAdmin.")
+        logger.error(f"❌ Error handling payment UTR: {e}")
+        await event.respond(
+            "❌ Error processing your submission. Please try again or contact "
+            "@darkboxesAdmin / yadiify@gmail.com"
+        )
         user_states.pop(user_id, None)
+
+
+async def handle_payment_screenshot(event, state):
+    """Legacy: redirect to UTR flow"""
+    await handle_payment_utr(event, state)
 
 
 @bot_client.on(events.CallbackQuery(pattern=r'^approve_payment_([A-Z0-9]+)_(\d+)_(.+)$'))
@@ -5800,12 +6043,14 @@ async def reject_payment_callback(event):
                 user_id,
                 f"❌ **PAYMENT REJECTED**\n\n"
                 f"Payment ID: `{payment_id}`\n\n"
-                f"Your payment screenshot could not be verified.\n\n"
+                f"Your UTR/Transaction number could not be verified.\n\n"
                 f"Possible reasons:\n"
-                f"• Screenshot was unclear\n"
+                f"• UTR number was incorrect\n"
                 f"• Wrong amount paid\n"
-                f"• Wrong UPI ID used\n\n"
-                f"📞 Contact @darkboxesAdmin to resolve this issue.",
+                f"• Wrong UPI ID used\n"
+                f"• Payment was cancelled/failed\n\n"
+                f"📞 Contact @darkboxesAdmin or email yadiify@gmail.com to resolve.\n"
+                f"Please provide your correct UTR number.",
                 parse_mode="md"
             )
         except Exception as e:
@@ -7114,15 +7359,15 @@ async def api_plan_callback(event):
             f"**How to purchase:**\n\n"
             f"1️⃣ Pay ₹{prices[plan]} to UPI:\n"
             f"   `{config.UPI_ID}`\n\n"
-            f"2️⃣ Take screenshot of payment\n\n"
-            f"3️⃣ Tap button below to submit screenshot\n"
+            f"2️⃣ Note your **UTR / Transaction Reference Number**\n\n"
+            f"3️⃣ Tap button below to submit UTR\n"
             f"   Your ID: `{user_id}`\n\n"
-            f"⏱️ Activation within 5-10 minutes\n"
+            f"⏱️ Activation within 5-15 minutes after manual verification\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━"
         )
         
         buttons = [
-            [Button.inline(f"📤 Submit Payment Screenshot", f"submit_api_payment_{plan}")],
+            [Button.inline(f"📤 Submit UTR Number", f"submit_api_payment_{plan}")],
             [Button.inline("« Back", "api_plans")]
         ]
         
@@ -7134,24 +7379,25 @@ async def api_plan_callback(event):
 
 @bot_client.on(events.CallbackQuery(pattern=r'^submit_api_payment_(basic|pro|enterprise)$'))
 async def submit_api_payment_callback(event):
-    """Handle API plan payment screenshot submission"""
+    """Handle API plan UTR submission"""
     try:
         plan = event.data.decode().split('_')[-1]
         prices = {'basic': 499, 'pro': 999, 'enterprise': 2999}
         user_id = event.sender_id
         
         user_states[user_id] = {
-            "action": "awaiting_payment_screenshot",
+            "action": "awaiting_payment_utr",
             "plan_id": f"api_{plan}",
             "plan_name": f"API {plan.title()} Plan",
             "plan_price": prices[plan]
         }
         
         await event.edit(
-            f"📸 **SEND API PAYMENT SCREENSHOT**\n\n"
+            f"🏦 **ENTER UTR / TRANSACTION NUMBER**\n\n"
             f"Plan: **API {plan.title()}** — ₹{prices[plan]}/month\n\n"
-            f"Please send your payment screenshot as a **photo** now.\n"
-            f"Admin will verify and activate your API key shortly.\n\n"
+            f"After completing your UPI payment, type the UTR number\n"
+            f"or Transaction Reference Number from your payment app.\n\n"
+            f"Admin will verify manually and activate your API key.\n\n"
             f"Your ID: `{user_id}`",
             buttons=[[Button.inline("❌ Cancel", "api_menu")]],
             parse_mode="md"
@@ -7460,7 +7706,567 @@ async def handle_account_login(event):
         await event.respond("❌ Error during login. Contact @darkboxesAdmin.")
 
 
-# ================== DAILY SUBSCRIPTION RESET TASK ==================
+# ================== DOWNLOAD CLIENT & CREDENTIALS CALLBACKS ==================
+
+# Path to the client script — set this to wherever the bot file is stored
+CLIENT_SCRIPT_PATH = os.getenv("CLIENT_SCRIPT_PATH", "./darkboxes_client.py")
+INSTRUCTIONS_FILE_PATH = os.getenv("INSTRUCTIONS_FILE_PATH", "./INSTRUCTIONS.txt")
+
+INSTRUCTIONS_TEXT = """
+╔══════════════════════════════════════════════════════════════╗
+║         DARKBOXES INTELLIGENCE CLIENT — USER GUIDE          ║
+╚══════════════════════════════════════════════════════════════╝
+
+REQUIREMENTS
+━━━━━━━━━━━━
+  • Python 3.8 or above
+  • pip (Python package manager)
+  • Terminal (Termux on Android / bash on Linux/Mac / CMD on Windows)
+  • Internet connection
+  • A DarkBoxes account (Account ID + Password)
+
+INSTALLATION — TERMUX (Android)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Step 1: Update & install Python
+    pkg update && pkg upgrade
+    pkg install python
+
+  Step 2: Install required libraries
+    pip install requests
+
+  Step 3: Download the client
+    - Download darkboxes_client.py from the Telegram bot
+    - Save it to ~/storage/downloads/ or ~/ in Termux
+
+  Step 4: Run the client
+    python darkboxes_client.py
+
+INSTALLATION — LINUX / KALI / WSL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  pip install requests
+  python3 darkboxes_client.py
+
+FIRST LOGIN
+━━━━━━━━━━━
+  1. Get your Account ID & Password from Telegram Bot:
+     → Open the bot → Tap "Get My Login Credentials"
+     OR → Tap "Login / Link Account" → Create or view your account
+
+  2. Enter your Account ID when prompted (e.g. DB1A2B3C4D)
+  3. Enter your Password
+
+NOTES
+━━━━━
+  • Credits and subscriptions are SHARED between the Telegram bot
+    and the terminal client — same account, same balance.
+  • You do NOT need a Telegram account to use the terminal client.
+  • For any issues, contact:
+      Telegram: @darkboxesAdmin
+      Email:    yadiify@gmail.com
+
+FULL NAME: DARKBOXES INTELLIGENCE SYSTEM
+"""
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^download_client$'))
+async def download_client_callback(event):
+    """Send client script file and instructions to user"""
+    try:
+        user_id = event.sender_id
+
+        # Ensure user exists
+        user_doc = await db_manager.get_user(user_id)
+        if not user_doc:
+            await event.answer("❌ Please start the bot first with /start", alert=True)
+            return
+
+        await event.answer("📦 Preparing files for download...", alert=False)
+
+        # Write instructions file if it doesn't exist
+        if not os.path.exists(INSTRUCTIONS_FILE_PATH):
+            try:
+                with open(INSTRUCTIONS_FILE_PATH, "w", encoding="utf-8") as f:
+                    f.write(INSTRUCTIONS_TEXT)
+            except Exception:
+                pass
+
+        sent_files = []
+
+        # Send client script
+        if os.path.exists(CLIENT_SCRIPT_PATH):
+            try:
+                await bot_client.send_file(
+                    user_id,
+                    CLIENT_SCRIPT_PATH,
+                    caption=(
+                        "💻 **DARKBOXES INTELLIGENCE CLIENT**\n\n"
+                        "**Version:** 3.0 — Professional Terminal Edition\n"
+                        "**Compatible:** Termux, Linux, Kali, Windows WSL, macOS\n\n"
+                        "📋 **Quick Start:**\n"
+                        "`pip install requests`\n"
+                        "`python darkboxes_client.py`\n\n"
+                        "🔑 Login with your Account ID & Password from the bot.\n"
+                        "No Telegram account needed to use the client.\n\n"
+                        "📖 Instructions file is sent separately."
+                    ),
+                    parse_mode="md"
+                )
+                sent_files.append("darkboxes_client.py")
+            except Exception as e:
+                logger.error(f"Failed to send client script: {e}")
+                await bot_client.send_message(
+                    user_id,
+                    "⚠️ Client script file not found on server. Contact @darkboxesAdmin.",
+                    parse_mode="md"
+                )
+
+        # Send instructions file
+        if os.path.exists(INSTRUCTIONS_FILE_PATH):
+            try:
+                await bot_client.send_file(
+                    user_id,
+                    INSTRUCTIONS_FILE_PATH,
+                    caption=(
+                        "📖 **DARKBOXES INSTALLATION & USAGE GUIDE**\n\n"
+                        "Read this before running the client.\n"
+                        "Contact @darkboxesAdmin or yadiify@gmail.com for help."
+                    ),
+                    parse_mode="md"
+                )
+                sent_files.append("INSTRUCTIONS.txt")
+            except Exception as e:
+                logger.error(f"Failed to send instructions: {e}")
+
+        if sent_files:
+            await event.edit(
+                f"✅ **FILES SENT TO YOUR CHAT**\n\n"
+                f"📦 Sent: {', '.join(sent_files)}\n\n"
+                f"📋 **Next Steps:**\n"
+                f"1. Open `darkboxes_client.py`\n"
+                f"2. Install deps: `pip install requests`\n"
+                f"3. Run: `python darkboxes_client.py`\n"
+                f"4. Get credentials: tap **🗝️ Get My Login Credentials** below\n\n"
+                f"📖 Check the INSTRUCTIONS.txt file for detailed setup.\n"
+                f"❓ Help: @darkboxesAdmin | yadiify@gmail.com",
+                buttons=[
+                    [Button.inline("🗝️ Get My Login Credentials", "get_credentials")],
+                    [Button.inline("« Main Menu", "main_menu")]
+                ],
+                parse_mode="md"
+            )
+        else:
+            await event.edit(
+                "⚠️ **Client files not available on server.**\n\n"
+                "Please contact @darkboxesAdmin to get the client script.",
+                buttons=[[Button.inline("« Main Menu", "main_menu")]],
+                parse_mode="md"
+            )
+
+    except Exception as e:
+        logger.error(f"❌ download_client_callback: {e}")
+        await event.answer("❌ Error preparing download", alert=True)
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^get_credentials$'))
+async def get_credentials_callback(event):
+    """Show user their account credentials for the client script"""
+    try:
+        user_id = event.sender_id
+
+        account = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: db_manager.db.accounts.find_one({"linked_tg_ids": user_id})
+        )
+
+        if not account:
+            # Auto-create account
+            user = await event.get_sender()
+            account = await get_or_create_db_account(
+                user_id,
+                getattr(user, 'username', '') or '',
+                getattr(user, 'first_name', '') or 'User'
+            )
+
+        acc_id = account.get("account_id", "N/A")
+        sub = account.get("subscription") or "None"
+        credits = account.get("searches_remaining", 0)
+
+        cred_text = (
+            f"🗝️ **YOUR LOGIN CREDENTIALS**\n\n"
+            f"Use these to log into the terminal client.\n"
+            f"No Telegram account needed — just these details.\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🆔 **Account ID:** `{acc_id}`\n"
+            f"🔑 **Password:** *(set when account was created)*\n"
+            f"💰 **Credits:** {credits}\n"
+            f"📦 **Plan:** {sub}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"⚠️ If you forgot your password, contact @darkboxesAdmin.\n\n"
+            f"💻 **Use in client:**\n"
+            f"1. Run `python darkboxes_client.py`\n"
+            f"2. Enter Account ID: `{acc_id}`\n"
+            f"3. Enter your password\n\n"
+            f"🔒 Never share your password with anyone.\n"
+            f"Official support only: @darkboxesAdmin | yadiify@gmail.com"
+        )
+
+        await event.edit(
+            cred_text,
+            buttons=[
+                [Button.inline("💻 Download Client", "download_client")],
+                [Button.inline("🔄 Refresh Account Info", "get_credentials")],
+                [Button.inline("« Main Menu", "main_menu")]
+            ],
+            parse_mode="md"
+        )
+
+    except Exception as e:
+        logger.error(f"❌ get_credentials_callback: {e}")
+        await event.answer("❌ Error fetching credentials", alert=True)
+
+
+# ================== ENHANCED ADMIN — LAST ACTIVE USERS & SEARCH LOGS ==================
+
+@bot_client.on(events.CallbackQuery(pattern=r'^admin_last_active$'))
+async def admin_last_active_callback(event):
+    """Admin: show recently active users"""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.answer("❌ Admin only", alert=True)
+            return
+
+        loop = asyncio.get_running_loop()
+        users = await loop.run_in_executor(
+            None, lambda: list(db_manager.db.users.find(
+                {},
+                {"user_id": 1, "username": 1, "first_name": 1, "last_seen": 1,
+                 "searches_remaining": 1, "subscription": 1, "total_searches": 1}
+            ).sort("last_seen", -1).limit(20))
+        )
+
+        if not users:
+            await event.edit(
+                "👥 **LAST ACTIVE USERS**\n\nNo users found.",
+                buttons=[[Button.inline("« Admin Panel", "admin_panel")]],
+                parse_mode="md"
+            )
+            return
+
+        text = "👥 **LAST ACTIVE USERS** (Top 20)\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        now = datetime.now(timezone.utc)
+
+        for i, u in enumerate(users, 1):
+            uname = f"@{u.get('username')}" if u.get('username') else "no_username"
+            fname = u.get('first_name', 'Unknown')
+            uid = u.get('user_id', 'N/A')
+            last_seen_raw = u.get('last_seen', '')
+            sub = u.get('subscription') or "—"
+            credits = u.get('searches_remaining', 0)
+            searches = u.get('total_searches', 0)
+
+            # Format time ago
+            if last_seen_raw:
+                try:
+                    ls = datetime.fromisoformat(last_seen_raw.replace('Z', '+00:00'))
+                    diff = now - ls
+                    if diff.seconds < 60:
+                        ago = "just now"
+                    elif diff.seconds < 3600:
+                        ago = f"{diff.seconds // 60}m ago"
+                    elif diff.days == 0:
+                        ago = f"{diff.seconds // 3600}h ago"
+                    else:
+                        ago = f"{diff.days}d ago"
+                except Exception:
+                    ago = last_seen_raw[:10]
+            else:
+                ago = "unknown"
+
+            text += (
+                f"{i}. **{fname}** ({uname})\n"
+                f"   🆔 `{uid}` • 🕐 {ago}\n"
+                f"   💰 Credits: {credits} • 📦 Plan: {sub} • 🔍 Searches: {searches}\n\n"
+            )
+
+        await event.edit(
+            text,
+            buttons=[
+                [Button.inline("🔄 Refresh", "admin_last_active")],
+                [Button.inline("« Admin Panel", "admin_panel")]
+            ],
+            parse_mode="md"
+        )
+
+    except Exception as e:
+        logger.error(f"❌ admin_last_active_callback: {e}")
+        await event.answer("❌ Error loading last active users", alert=True)
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^admin_search_logs$'))
+async def admin_search_logs_callback(event):
+    """Admin: show recent search logs across all users"""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.answer("❌ Admin only", alert=True)
+            return
+
+        loop = asyncio.get_running_loop()
+        logs = await loop.run_in_executor(
+            None, lambda: list(db_manager.db.search_logs.find(
+                {},
+                {"user_id": 1, "search_type": 1, "query": 1, "timestamp": 1,
+                 "success": 1, "credits_used": 1}
+            ).sort("timestamp", -1).limit(25))
+        )
+
+        if not logs:
+            await event.edit(
+                "🔍 **SEARCH LOGS**\n\nNo search logs found.",
+                buttons=[[Button.inline("« Admin Panel", "admin_panel")]],
+                parse_mode="md"
+            )
+            return
+
+        text = "🔍 **RECENT SEARCH LOGS** (Last 25)\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+
+        for i, log in enumerate(logs, 1):
+            uid = log.get('user_id', 'N/A')
+            stype = log.get('search_type', 'unknown')
+            query = log.get('query', '—')
+            ts = log.get('timestamp', '')[:16].replace('T', ' ')
+            success = "✅" if log.get('success') else "❌"
+            credits = log.get('credits_used', 0)
+
+            # Mask sensitive query data
+            if len(query) > 12:
+                masked = query[:4] + "****" + query[-3:]
+            else:
+                masked = query[:3] + "****"
+
+            text += (
+                f"{i}. {success} **{stype}** — `{masked}`\n"
+                f"   👤 UID: `{uid}` • 🕐 {ts} • 💳 {credits}cr\n\n"
+            )
+
+        await event.edit(
+            text,
+            buttons=[
+                [Button.inline("🔄 Refresh", "admin_search_logs")],
+                [Button.inline("📊 User Search Logs", "admin_user_search_logs")],
+                [Button.inline("« Admin Panel", "admin_panel")]
+            ],
+            parse_mode="md"
+        )
+
+    except Exception as e:
+        logger.error(f"❌ admin_search_logs_callback: {e}")
+        await event.answer("❌ Error loading search logs", alert=True)
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^admin_user_search_logs$'))
+async def admin_user_search_logs_ask(event):
+    """Admin: ask for user ID to see their search logs"""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.answer("❌ Admin only", alert=True)
+            return
+
+        user_states[event.sender_id] = {"action": "admin_view_user_search_logs"}
+        await event.edit(
+            "🔍 **VIEW USER SEARCH LOGS**\n\n"
+            "Enter the User ID to see their complete search history:",
+            buttons=[[Button.inline("❌ Cancel", "admin_panel")]],
+            parse_mode="md"
+        )
+    except Exception as e:
+        logger.error(f"❌ admin_user_search_logs_ask: {e}")
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^admin_intent_monitor$'))
+async def admin_intent_monitor_callback(event):
+    """Admin: intent monitoring — show suspicious/high-volume users"""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.answer("❌ Admin only", alert=True)
+            return
+
+        loop = asyncio.get_running_loop()
+        now = datetime.now(timezone.utc)
+        one_hour_ago = (now - timedelta(hours=1)).isoformat()
+
+        # High-volume in last hour
+        pipeline = [
+            {"$match": {"timestamp": {"$gte": one_hour_ago}}},
+            {"$group": {
+                "_id": "$user_id",
+                "count": {"$sum": 1},
+                "types": {"$addToSet": "$search_type"}
+            }},
+            {"$sort": {"count": -1}},
+            {"$limit": 15}
+        ]
+
+        high_vol = await loop.run_in_executor(
+            None, lambda: list(db_manager.db.search_logs.aggregate(pipeline))
+        )
+
+        text = (
+            "🕵️ **INTENT MONITOR — ACTIVITY ANALYSIS**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "**High Volume Users (Last 1 Hour):**\n\n"
+        )
+
+        if not high_vol:
+            text += "No significant activity in the last hour.\n\n"
+        else:
+            for i, entry in enumerate(high_vol, 1):
+                uid = entry.get('_id', 'N/A')
+                count = entry.get('count', 0)
+                types = ", ".join(entry.get('types', []))
+
+                # Flag if suspicious
+                flag = "🚨" if count >= 10 else ("⚠️" if count >= 5 else "ℹ️")
+
+                # Look up username
+                u = await loop.run_in_executor(
+                    None, lambda: db_manager.db.users.find_one(
+                        {"user_id": uid}, {"username": 1, "first_name": 1}
+                    )
+                )
+                uname = f"@{u.get('username', '?')}" if u else "unknown"
+                fname = u.get('first_name', 'Unknown') if u else 'Unknown'
+
+                text += (
+                    f"{flag} {i}. **{fname}** ({uname})\n"
+                    f"   UID: `{uid}` • {count} searches\n"
+                    f"   Types: {types}\n\n"
+                )
+
+        text += "\n💡 High-volume = 10+ searches in 1 hour. Review manually."
+
+        await event.edit(
+            text,
+            buttons=[
+                [Button.inline("🔄 Refresh", "admin_intent_monitor")],
+                [Button.inline("📋 Search Logs", "admin_search_logs")],
+                [Button.inline("👥 Last Active", "admin_last_active")],
+                [Button.inline("« Admin Panel", "admin_panel")]
+            ],
+            parse_mode="md"
+        )
+
+    except Exception as e:
+        logger.error(f"❌ admin_intent_monitor_callback: {e}")
+        await event.answer("❌ Error loading intent monitor", alert=True)
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^admin_pending_utr$'))
+async def admin_pending_utr_callback(event):
+    """Admin: view all pending UTR payments"""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.answer("❌ Admin only", alert=True)
+            return
+
+        loop = asyncio.get_running_loop()
+        pending = await loop.run_in_executor(
+            None, lambda: list(db_manager.db.pending_payments.find(
+                {"status": "pending"}
+            ).sort("timestamp", -1).limit(20))
+        )
+
+        if not pending:
+            await event.edit(
+                "✅ **NO PENDING PAYMENTS**\n\nAll payments have been processed.",
+                buttons=[[Button.inline("« Admin Panel", "admin_panel")]],
+                parse_mode="md"
+            )
+            return
+
+        text = f"⏳ **PENDING UTR PAYMENTS** ({len(pending)} pending)\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+
+        for i, pay in enumerate(pending[:10], 1):
+            pid = pay.get('payment_id', 'N/A')
+            uid = pay.get('user_id', 'N/A')
+            fname = pay.get('first_name', 'N/A')
+            plan = pay.get('plan_name', 'N/A')
+            amount = pay.get('amount', 0)
+            utr = pay.get('utr', '—')
+            ts = pay.get('timestamp', '')[:16].replace('T', ' ')
+            plan_id = pay.get('plan_id', '')
+
+            text += (
+                f"{i}. **{fname}** — UID: `{uid}`\n"
+                f"   💳 Plan: {plan} (₹{amount})\n"
+                f"   🏦 UTR: `{utr}`\n"
+                f"   🕐 {ts}\n"
+                f"   [✅ Approve](tg://btn/approve_payment_{pid}_{uid}_{plan_id})\n\n"
+            )
+
+        await event.edit(
+            text,
+            buttons=[
+                [Button.inline("🔄 Refresh", "admin_pending_utr")],
+                [Button.inline("« Admin Panel", "admin_panel")]
+            ],
+            parse_mode="md"
+        )
+
+    except Exception as e:
+        logger.error(f"❌ admin_pending_utr_callback: {e}")
+        await event.answer("❌ Error loading pending payments", alert=True)
+
+
+async def handle_admin_view_user_search_logs(event):
+    """Handle admin request to view a specific user's search logs"""
+    try:
+        user_input = (event.text or "").strip()
+        if not user_input.isdigit():
+            await event.respond("❌ Please enter a valid numeric user ID.")
+            return
+
+        target_uid = int(user_input)
+        loop = asyncio.get_running_loop()
+
+        logs = await loop.run_in_executor(
+            None, lambda: list(db_manager.db.search_logs.find(
+                {"user_id": target_uid},
+                {"search_type": 1, "query": 1, "timestamp": 1, "success": 1, "credits_used": 1}
+            ).sort("timestamp", -1).limit(30))
+        )
+
+        user_doc = await db_manager.get_user(target_uid)
+        uname = f"@{user_doc.get('username', '?')}" if user_doc else "unknown"
+        fname = user_doc.get('first_name', 'Unknown') if user_doc else 'Unknown'
+
+        if not logs:
+            await event.respond(
+                f"📋 **SEARCH LOGS — {fname} ({uname})**\n\nNo search logs found for this user."
+            )
+            user_states.pop(event.sender_id, None)
+            return
+
+        text = f"📋 **SEARCH LOGS — {fname} ({uname})**\nUID: `{target_uid}`\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+
+        for i, log in enumerate(logs, 1):
+            stype = log.get('search_type', 'unknown')
+            query = log.get('query', '—')
+            ts = log.get('timestamp', '')[:16].replace('T', ' ')
+            success = "✅" if log.get('success') else "❌"
+            credits = log.get('credits_used', 0)
+
+            text += (
+                f"{i}. {success} **{stype}**\n"
+                f"   Query: `{query}`\n"
+                f"   🕐 {ts} • 💳 {credits}cr\n\n"
+            )
+
+        await event.respond(text, parse_mode="md")
+        user_states.pop(event.sender_id, None)
+
+    except Exception as e:
+        logger.error(f"❌ handle_admin_view_user_search_logs: {e}")
+        await event.respond("❌ Error retrieving search logs.")
+        user_states.pop(event.sender_id, None)
 
 async def daily_subscription_reset():
     """Background task: reset daily usage counter at midnight UTC"""
