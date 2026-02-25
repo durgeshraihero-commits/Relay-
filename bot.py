@@ -2652,17 +2652,22 @@ class AdminPanelHandler:
         user_states[event.sender_id] = {"action": "admin_management"}
     
     async def ask_for_add_credits(self, event):
-        """Ask for user ID and credits to add"""
-        await event.edit(
-            "🎯 **ADD CREDITS**\n\n"
-            "Enter in format:\n"
-            "`user_id credits`\n\n"
-            "Example: `123456789 10`\n"
-            "This will add 10 credits to user 123456789\n\n"
-            "Type the command:",
-            buttons=OneLineKeyboard.back_to_admin()
+        """Ask for user identifier and credits to add"""
+        plan_ids_list = "\n".join(
+            f"  • `{k}` — {v['name']}"
+            for k, v in SUBSCRIPTION_PLANS.items()
         )
-        
+        await event.edit(
+            "🎯 **ADD CREDITS TO USER**\n\n"
+            "Format: `identifier amount`\n\n"
+            "**Identifier can be:**\n"
+            "• Telegram user ID: `123456789 50`\n"
+            "• @username: `@johndoe 50`\n"
+            "• Account ID: `DB1A2B3C4D 50`\n\n"
+            "Type your command below:",
+            buttons=OneLineKeyboard.back_to_admin(),
+            parse_mode="md"
+        )
         user_states[event.sender_id] = {"action": "admin_add_credits"}
     
     async def show_bot_settings(self, event):
@@ -3094,19 +3099,24 @@ class AdminPanelHandler:
             await event.edit("❌ Error loading pending payments", buttons=OneLineKeyboard.back_to_admin())
 
     async def ask_for_give_subscription(self, event):
-        """Ask admin for user ID and plan to give subscription"""
+        """Ask admin for user identifier and plan to give subscription"""
+        plan_lines = "\n".join(
+            f"  • `{k}` — {v['name']} (₹{v['price']})"
+            for k, v in SUBSCRIPTION_PLANS.items()
+        )
         await event.edit(
-            "💎 **GIVE SUBSCRIPTION TO USER**\n\n"
-            "Type: `user_id plan`\n\n"
-            "Available plans:\n"
-            "• `credits_5` — 5 searches (credit pack)\n"
-            "• `credits_15` — 15 searches (credit pack)\n"
-            "• `daily10_30` — 10/day, 30 days\n"
-            "• `daily20_30` — 20/day, 30 days\n"
-            "• `daily10_60` — 10/day, 60 days\n"
-            "• `daily20_60` — 20/day, 60 days\n\n"
-            "**Example:** `123456789 premium`\n\n"
-            "💡 Tip: Use 'Search Users' to find a user first, then give sub from their detail page.",
+            "💎 **GIVE PLAN / SUBSCRIPTION**\n\n"
+            "Format: `identifier plan_id`\n\n"
+            "**Identifier can be:**\n"
+            "• Telegram user ID: `123456789`\n"
+            "• @username: `@johndoe`\n"
+            "• Account ID: `DB1A2B3C4D`\n\n"
+            "**Available plan IDs:**\n"
+            f"{plan_lines}\n\n"
+            "**Examples:**\n"
+            "`123456789 credits_5`\n"
+            "`@johndoe daily10_30`\n"
+            "`DB1A2B3C4D daily20_60`",
             buttons=OneLineKeyboard.back_to_admin(),
             parse_mode="md"
         )
@@ -5110,13 +5120,19 @@ async def grant_sub_callback(event):
             return
         
         data = event.data.decode()
-        parts = data.split('_')
+        # Format: grant_sub_USERID_PLANID  (plan_id may contain underscores)
+        parts = data.split('_', 3)
+        # parts = ['grant', 'sub', USERID, PLANID]
         user_id = int(parts[2])
         plan_id = parts[3]
-        
+
         plan = SUBSCRIPTION_PLANS.get(plan_id)
         if not plan:
-            await event.answer("❌ Invalid plan", alert=True)
+            await event.answer(
+                f"❌ Plan '{plan_id}' not recognised. "
+                f"Valid: {', '.join(SUBSCRIPTION_PLANS.keys())}",
+                alert=True
+            )
             return
         
         plan_type = plan.get("plan_type", "credit")
@@ -5918,15 +5934,36 @@ async def approve_payment_callback(event):
             return
 
         data = event.data.decode()
-        parts = data.split('_')
-        # approve_payment_PAYID_USERID_PLANID
+        # Format: approve_payment_PAYID_USERID_PLANID
+        # Plan IDs can contain underscores (e.g. credits_5, daily10_30),
+        # so we split on the first 4 underscores only.
+        parts = data.split('_', 4)
+        # parts = ['approve', 'payment', PAYID, USERID, PLANID]
+        if len(parts) < 5:
+            await event.answer("❌ Malformed approval data", alert=True)
+            return
+
         payment_id = parts[2]
-        user_id = int(parts[3])
-        plan_id = parts[4]
+        user_id    = int(parts[3])
+        plan_id    = parts[4]   # preserved intact even if it contains underscores
 
         plan = SUBSCRIPTION_PLANS.get(plan_id)
         if not plan:
-            await event.answer("❌ Invalid plan", alert=True)
+            # Fallback: check pending_payments for the plan_id stored there
+            loop = asyncio.get_running_loop()
+            pending = await loop.run_in_executor(
+                None, lambda: db_manager.db.pending_payments.find_one({"payment_id": payment_id})
+            )
+            if pending:
+                plan_id = pending.get("plan_id", plan_id)
+                plan = SUBSCRIPTION_PLANS.get(plan_id)
+
+        if not plan:
+            await event.answer(
+                f"❌ Plan '{plan_id}' not found in SUBSCRIPTION_PLANS. "
+                f"Valid: {', '.join(SUBSCRIPTION_PLANS.keys())}",
+                alert=True
+            )
             return
 
         # Grant plan (credit pack or subscription)
@@ -6067,75 +6104,172 @@ async def reject_payment_callback(event):
 
 
 async def handle_admin_give_subscription(event):
-    """Handle admin giving subscription to selected user"""
+    """Handle admin giving subscription — accepts TG user ID, @username, or Account ID (DB…)"""
     try:
         user_input = event.text.strip()
         parts = user_input.split()
 
-        if len(parts) != 2:
+        plan_ids_list = "\n".join(
+            f"  • `{k}` — {v['name']} (₹{v['price']})"
+            for k, v in SUBSCRIPTION_PLANS.items()
+        )
+
+        if len(parts) < 2:
             await event.respond(
-                "❌ Invalid format.\n"
-                "Use: `user_id plan_name`\n"
-                "Plans: basic, standard, premium\n\n"
-                "Example: `123456789 premium`",
+                "❌ **Invalid format.**\n\n"
+                "Use: `identifier plan_id`\n\n"
+                "**Identifier can be:**\n"
+                "• Telegram user ID: `123456789`\n"
+                "• @username: `@johndoe`\n"
+                "• Account ID: `DB1A2B3C4D`\n\n"
+                "**Available plan IDs:**\n"
+                f"{plan_ids_list}\n\n"
+                "**Examples:**\n"
+                "`123456789 credits_5`\n"
+                "`@johndoe daily10_30`\n"
+                "`DB1A2B3C4D daily20_60`",
                 parse_mode="md"
             )
             return
 
-        if not parts[0].isdigit():
-            await event.respond("❌ User ID must be a number.")
-            return
+        identifier = parts[0].strip()
+        plan_id    = parts[1].strip().lower()
 
-        user_id = int(parts[0])
-        plan_id = parts[1].lower()
-
+        # Validate plan
         if plan_id not in SUBSCRIPTION_PLANS:
-            await event.respond(f"❌ Invalid plan. Choose: basic, standard, premium")
+            await event.respond(
+                f"❌ **Unknown plan:** `{plan_id}`\n\n"
+                f"**Valid plan IDs:**\n{plan_ids_list}",
+                parse_mode="md"
+            )
             return
 
         plan = SUBSCRIPTION_PLANS[plan_id]
-        validity_days = {"basic": 7, "standard": 15, "premium": 30}.get(plan_id, 30)
-        expiry = datetime.now(timezone.utc) + timedelta(days=validity_days)
-        searches = plan.get('searches', 0)
 
-        user = await db_manager.get_user(user_id)
-        if not user:
-            await event.respond(f"❌ User {user_id} not found.")
-            user_states.pop(event.sender_id, None)
-            return
+        # Resolve identifier → user_id + user doc
+        loop = asyncio.get_running_loop()
+        user = None
+        user_id = None
 
-        update_data = {
-            "$set": {
-                "subscription": plan_id,
-                "subscription_expiry": expiry.isoformat(),
-                "last_seen": datetime.now(timezone.utc).isoformat()
-            }
-        }
-        if isinstance(searches, int):
-            update_data["$inc"] = {"searches_remaining": searches}
+        if identifier.lstrip('@').upper().startswith('DB') and len(identifier) >= 6:
+            # Account ID (DB…)
+            acc_id = identifier.lstrip('@').upper()
+            account = await loop.run_in_executor(
+                None, lambda: db_manager.db.accounts.find_one({"account_id": acc_id})
+            )
+            if account:
+                tg_ids = account.get("linked_tg_ids", [])
+                if tg_ids:
+                    user_id = tg_ids[0]
+                    user = await db_manager.get_user(user_id)
+                    # Also update the accounts collection directly
+                else:
+                    # No linked TG — update account directly
+                    await _apply_plan_to_account(acc_id, plan_id, plan)
+                    await event.respond(
+                        f"✅ **PLAN APPLIED TO ACCOUNT**\n\n"
+                        f"🆔 Account: `{acc_id}`\n"
+                        f"📦 Plan: {plan['name']}\n\n"
+                        f"⚠️ Account has no linked Telegram ID — user could not be notified.",
+                        parse_mode="md"
+                    )
+                    user_states.pop(event.sender_id, None)
+                    return
+            else:
+                await event.respond(f"❌ Account ID `{acc_id}` not found.", parse_mode="md")
+                return
 
-        await asyncio.get_running_loop().run_in_executor(
-            None, lambda: db_manager.db.users.update_one({"user_id": user_id}, update_data)
-        )
+        elif identifier.startswith('@'):
+            # @username
+            uname = identifier.lstrip('@').lower()
+            user = await loop.run_in_executor(
+                None, lambda: db_manager.db.users.find_one({"username": {"$regex": f"^{re.escape(uname)}$", "$options": "i"}})
+            )
+            if not user:
+                await event.respond(f"❌ Username `@{uname}` not found.", parse_mode="md")
+                return
+            user_id = user["user_id"]
+
+        elif identifier.isdigit():
+            # Numeric TG user ID
+            user_id = int(identifier)
+            user = await db_manager.get_user(user_id)
+            if not user:
+                await event.respond(f"❌ No user found with Telegram ID `{user_id}`.", parse_mode="md")
+                return
+
+        else:
+            # Try as username without @
+            user = await loop.run_in_executor(
+                None, lambda: db_manager.db.users.find_one({"username": {"$regex": f"^{re.escape(identifier)}$", "$options": "i"}})
+            )
+            if not user:
+                await event.respond(
+                    f"❌ Could not resolve `{identifier}`.\n\n"
+                    "Accepted formats: TG user ID, @username, or Account ID (DB…)",
+                    parse_mode="md"
+                )
+                return
+            user_id = user["user_id"]
+
+        # Apply plan
+        plan_type     = plan.get("plan_type", "credit")
+        validity_days = plan.get("validity_days", 0)
+        daily_limit   = plan.get("daily_limit", 0)
+        searches      = plan.get("searches", 0)
+        plan_name     = plan.get("name", plan_id)
+
+        if plan_type == "credit":
+            await loop.run_in_executor(
+                None, lambda: db_manager.db.users.update_one(
+                    {"user_id": user_id},
+                    {"$inc": {"searches_remaining": searches},
+                     "$set": {"last_seen": datetime.now(timezone.utc).isoformat()}}
+                )
+            )
+            result_str = f"{searches} credits added to balance"
+            expiry_str = "Never (credits never expire)"
+        else:
+            expiry = datetime.now(timezone.utc) + timedelta(days=validity_days)
+            expiry_str = expiry.strftime("%d %b %Y")
+            await loop.run_in_executor(
+                None, lambda: db_manager.db.users.update_one(
+                    {"user_id": user_id},
+                    {"$set": {
+                        "subscription": plan_id,
+                        "subscription_expiry": expiry.isoformat(),
+                        "subscription_daily_limit": daily_limit,
+                        "subscription_used_today": 0,
+                        "subscription_reset_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                        "last_seen": datetime.now(timezone.utc).isoformat()
+                    }}
+                )
+            )
+            result_str = f"{daily_limit} searches/day for {validity_days} days"
+
+        fname = user.get('first_name', 'N/A') if user else 'N/A'
+        uname_disp = f"@{user.get('username')}" if user and user.get('username') else str(user_id)
 
         await event.respond(
-            f"✅ **SUBSCRIPTION GRANTED**\n\n"
-            f"👤 User: {user.get('first_name', 'N/A')} (`{user_id}`)\n"
-            f"📦 Plan: {plan['name']}\n"
-            f"📅 Expires: {expiry.strftime('%d %b %Y')}\n\n"
+            f"✅ **PLAN GRANTED SUCCESSFULLY**\n\n"
+            f"👤 User: {fname} ({uname_disp})\n"
+            f"🆔 TG ID: `{user_id}`\n"
+            f"📦 Plan: **{plan_name}**\n"
+            f"🔍 {result_str}\n"
+            f"📅 Valid: {expiry_str}\n\n"
             f"User has been notified.",
             parse_mode="md"
         )
 
-        # Notify user
+        # Notify user in Telegram
         try:
             await bot_client.send_message(
                 user_id,
-                f"🎁 **FREE SUBSCRIPTION GRANTED!**\n\n"
-                f"✅ Admin has activated **{plan['name']}** for you!\n"
-                f"📅 Valid until: {expiry.strftime('%d %b %Y')}\n"
-                f"🔍 Searches: {'Unlimited' if plan_id == 'premium' else searches}\n\n"
-                f"Use /start to start searching! 🚀",
+                f"🎁 **PLAN ACTIVATED BY ADMIN!**\n\n"
+                f"✅ **{plan_name}** has been activated on your account!\n"
+                f"🔍 {result_str}\n"
+                f"📅 Valid: {expiry_str}\n\n"
+                f"Use /start to begin searching 🚀",
                 parse_mode="md"
             )
         except Exception:
@@ -6145,7 +6279,38 @@ async def handle_admin_give_subscription(event):
 
     except Exception as e:
         logger.error(f"❌ Error giving subscription: {e}")
-        await event.respond("❌ Error processing subscription.")
+        await event.respond("❌ Error processing subscription. Check logs.")
+
+
+async def _apply_plan_to_account(acc_id: str, plan_id: str, plan: dict):
+    """Apply a plan directly to an accounts document (no TG link)."""
+    loop = asyncio.get_running_loop()
+    plan_type     = plan.get("plan_type", "credit")
+    validity_days = plan.get("validity_days", 0)
+    daily_limit   = plan.get("daily_limit", 0)
+    searches      = plan.get("searches", 0)
+
+    if plan_type == "credit":
+        await loop.run_in_executor(
+            None, lambda: db_manager.db.accounts.update_one(
+                {"account_id": acc_id},
+                {"$inc": {"searches_remaining": searches}}
+            )
+        )
+    else:
+        expiry = datetime.now(timezone.utc) + timedelta(days=validity_days)
+        await loop.run_in_executor(
+            None, lambda: db_manager.db.accounts.update_one(
+                {"account_id": acc_id},
+                {"$set": {
+                    "subscription": plan_id,
+                    "subscription_expiry": expiry.isoformat(),
+                    "subscription_daily_limit": daily_limit,
+                    "subscription_used_today": 0,
+                    "subscription_reset_date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                }}
+            )
+        )
 
 
 async def handle_admin_broadcast_select_users(event):
@@ -6603,63 +6768,145 @@ async def handle_admin_management(event):
         await event.respond("❌ Error processing admin management request.")
 
 async def handle_admin_add_credits(event):
-    """Handle admin add credits"""
+    """Handle admin add credits — accepts TG user ID, @username, or Account ID (DB…)"""
     try:
         user_input = event.text.strip()
         state = user_states.get(event.sender_id, {})
         preset_user_id = state.get("preset_user_id")
-        
+        loop = asyncio.get_running_loop()
+
         if preset_user_id:
-            # Only credits amount needed
+            # User was pre-selected from the user detail panel — only need credits amount
             if not user_input.isdigit():
-                await event.respond("❌ Please enter a valid number of credits.")
-                return
-            user_id = preset_user_id
-            credits = int(user_input)
-        else:
-            parts = user_input.split()
-            if len(parts) != 2:
                 await event.respond(
-                    "❌ Invalid format.\n"
-                    "Use: `user_id credits`\n"
-                    "Example: `123456789 10`",
+                    "❌ Please enter a valid number of credits (1–10000).",
                     parse_mode="md"
                 )
                 return
-            
-            if not parts[0].isdigit() or not parts[1].isdigit():
-                await event.respond("❌ Both user ID and credits must be numbers.")
+            user_id = preset_user_id
+            credits = int(user_input)
+            user = await db_manager.get_user(user_id)
+
+        else:
+            # Expect: identifier credits
+            # Identifier: TG ID, @username, or Account ID (DB…)
+            parts = user_input.rsplit(None, 1)   # split from the right so username spaces don't break it
+            if len(parts) != 2:
+                await event.respond(
+                    "❌ **Invalid format.**\n\n"
+                    "Use: `identifier credits`\n\n"
+                    "**Identifier can be:**\n"
+                    "• Telegram user ID: `123456789 10`\n"
+                    "• @username: `@johndoe 10`\n"
+                    "• Account ID: `DB1A2B3C4D 10`",
+                    parse_mode="md"
+                )
                 return
-            
-            user_id = int(parts[0])
-            credits = int(parts[1])
-        
+
+            identifier, credits_str = parts[0].strip(), parts[1].strip()
+
+            if not credits_str.isdigit():
+                await event.respond("❌ Credits must be a number. Format: `identifier credits`", parse_mode="md")
+                return
+
+            credits = int(credits_str)
+            user = None
+            user_id = None
+
+            # Resolve identifier
+            if identifier.lstrip('@').upper().startswith('DB') and len(identifier) >= 6:
+                # Account ID
+                acc_id = identifier.lstrip('@').upper()
+                account = await loop.run_in_executor(
+                    None, lambda: db_manager.db.accounts.find_one({"account_id": acc_id})
+                )
+                if account:
+                    tg_ids = account.get("linked_tg_ids", [])
+                    if tg_ids:
+                        user_id = tg_ids[0]
+                        user = await db_manager.get_user(user_id)
+                    else:
+                        # Apply directly to accounts collection
+                        await loop.run_in_executor(
+                            None, lambda: db_manager.db.accounts.update_one(
+                                {"account_id": acc_id},
+                                {"$inc": {"searches_remaining": credits}}
+                            )
+                        )
+                        await event.respond(
+                            f"✅ **{credits} CREDITS ADDED** to account `{acc_id}`\n\n"
+                            f"⚠️ Account has no linked Telegram ID — user could not be notified.",
+                            parse_mode="md"
+                        )
+                        user_states.pop(event.sender_id, None)
+                        return
+                else:
+                    await event.respond(f"❌ Account ID `{acc_id}` not found.", parse_mode="md")
+                    return
+
+            elif identifier.startswith('@'):
+                uname = identifier.lstrip('@').lower()
+                user = await loop.run_in_executor(
+                    None, lambda: db_manager.db.users.find_one(
+                        {"username": {"$regex": f"^{re.escape(uname)}$", "$options": "i"}}
+                    )
+                )
+                if not user:
+                    await event.respond(f"❌ Username `@{uname}` not found.", parse_mode="md")
+                    return
+                user_id = user["user_id"]
+
+            elif identifier.isdigit():
+                user_id = int(identifier)
+                user = await db_manager.get_user(user_id)
+                if not user:
+                    await event.respond(f"❌ No user found with Telegram ID `{user_id}`.", parse_mode="md")
+                    return
+
+            else:
+                # Try as bare username
+                user = await loop.run_in_executor(
+                    None, lambda: db_manager.db.users.find_one(
+                        {"username": {"$regex": f"^{re.escape(identifier)}$", "$options": "i"}}
+                    )
+                )
+                if not user:
+                    await event.respond(
+                        f"❌ Could not resolve `{identifier}`.\n\n"
+                        "Use TG user ID, @username, or Account ID (DB…)",
+                        parse_mode="md"
+                    )
+                    return
+                user_id = user["user_id"]
+
         if credits <= 0 or credits > 10000:
             await event.respond("❌ Credits must be between 1 and 10,000.")
             return
-        
-        user = await db_manager.get_user(user_id)
+
         if not user:
-            await event.respond(f"❌ User with ID {user_id} not found.")
+            user = await db_manager.get_user(user_id)
+        if not user:
+            await event.respond(f"❌ User `{user_id}` not found in database.")
             user_states.pop(event.sender_id, None)
             return
-        
-        # Add credits
+
         success = await db_manager.add_credits(user_id, credits)
-        
+
         if success:
             new_balance = user.get('searches_remaining', 0) + credits
+            fname      = user.get('first_name', 'N/A')
+            uname_disp = f"@{user.get('username')}" if user.get('username') else str(user_id)
+
             await event.respond(
                 f"✅ **CREDITS ADDED SUCCESSFULLY**\n\n"
-                f"👤 User: {user.get('first_name', 'N/A')}\n"
-                f"🆔 ID: `{user_id}`\n"
+                f"👤 User: {fname} ({uname_disp})\n"
+                f"🆔 TG ID: `{user_id}`\n"
                 f"🎯 Credits Added: **{credits}**\n"
                 f"💰 New Balance: **{new_balance}**\n\n"
                 f"User has been notified.",
                 parse_mode="md"
             )
-            
-            # Notify user
+
             try:
                 await bot_client.send_message(
                     user_id,
@@ -6672,10 +6919,10 @@ async def handle_admin_add_credits(event):
             except Exception:
                 pass
         else:
-            await event.respond("❌ Failed to add credits.")
-        
+            await event.respond("❌ Failed to add credits. Check logs.")
+
         user_states.pop(event.sender_id, None)
-        
+
     except Exception as e:
         logger.error(f"❌ Error in handle_admin_add_credits: {e}")
         await event.respond("❌ Error adding credits.")
