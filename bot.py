@@ -391,7 +391,7 @@ SEARCH_COMMANDS = {
     "family": {
         "name": "👨‍👩‍👧‍👦 Family Network",
         "description": "🏠 **Complete Family Analysis**\n\n🔸 **Input:** 12-digit Aadhar number\n🔸 **Returns:** All family members • Names • Relations • Ages • Addresses\n🔸 **Sources:** UIDAI database • Family registration • Government records\n🔸 **Depth:** 3-level relationship mapping",
-        "commands": ["/familyinfo", "/familyinfo"],
+        "commands": ["/family", "/familyinfo"],
         "example": "123456789012",
         "validation": r"^\d{12}$",
         "cost": 1,
