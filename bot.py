@@ -4266,8 +4266,16 @@ class SearchEngine:
         """Handle incoming messages for search responses"""
         try:
             message = event.message
+
+            # ── CRITICAL: Skip our OWN outgoing messages ──────────────────────
+            # user_client fires events for messages WE send (outgoing=True).
+            # Without this guard, the /num command we just sent would instantly
+            # resolve the future with success=False before any bot can reply.
+            if getattr(message, 'out', False):
+                return
+
             text = message.text or message.raw_text or ""
-            
+
             # ── Priority 1: Direct reply to our sent command ──────────────────
             if message.reply_to:
                 reply_to_id = message.reply_to.reply_to_msg_id
@@ -4300,32 +4308,41 @@ class SearchEngine:
                     query = search_info.get("query", "").lower().strip()
                     text_lower = text.lower()
 
-                    # Condition A: query string appears in the message (e.g. plain JSON result)
+                    # Condition A: query string appears in the message
                     query_in_message = bool(query and query in text_lower)
 
-                    # Condition B: waiting for ENCOREX result after scanning message
+                    # Condition B: waiting for ENCOREX result after a scanning placeholder
                     pending_encorex = bool(search_info.get("pending_encorex"))
 
-                    # Condition C: message looks like an ENCOREX OSINT result frame
-                    # These messages may contain a DIFFERENT number than queried — we must accept them
+                    # Condition C: ENCOREX OSINT / INTELX result frame
+                    # Results may contain a DIFFERENT number than queried — accept regardless
                     is_encorex_osint_result = (
-                        ('encorex osint' in text_lower or '╔═══《' in text or '╘══《' in text)
-                        and ('✅' in text or '"result"' in text_lower or '"success"' in text_lower or '"status"' in text_lower)
+                        ('encorex osint' in text_lower or 'encorex intelx' in text_lower
+                         or '╔═══《' in text or '╘══《' in text)
+                        and ('✅' in text or '"result"' in text_lower
+                             or '"success"' in text_lower or '"status"' in text_lower)
                         and 'scanning' not in text_lower
+                        and '📡 service:' not in text
                     )
 
-                    # Condition D: message is a JSON/result in our chat even without ENCOREX branding
-                    # (e.g. plain JSON responses from other bots in same group)
+                    # Condition D: plain JSON result (no ENCOREX frame)
+                    # Require real data-field keywords to avoid false positives
+                    has_data_fields = any(f in text_lower for f in [
+                        '"name":', '"mobile":', '"number":', '"address":',
+                        '"result":', '"results":', '"aadhar":', '"fname":',
+                        '"circle":', '"country":', '"email":', '"alt":',
+                    ])
                     looks_like_result = (
-                        text_lower.count('": ') >= 3
+                        has_data_fields
+                        and text_lower.count('": ') >= 3
                         and not self._is_encorex_scanning_message(text)
                     )
 
                     if query_in_message or pending_encorex or is_encorex_osint_result or looks_like_result:
                         logger.info(
-                            f"📨 Found candidate result in {search_info['group']['name']} "
-                            f"(query_match={query_in_message}, pending={pending_encorex}, "
-                            f"encorex_fmt={is_encorex_osint_result}, json_result={looks_like_result})"
+                            f"📨 Candidate result in {search_info['group']['name']} "
+                            f"(query={query_in_message}, pending={pending_encorex}, "
+                            f"encorex={is_encorex_osint_result}, json={looks_like_result})"
                         )
                         await self._process_search_response(search_id, search_info, message)
                         return
@@ -4875,16 +4892,25 @@ class SearchEngine:
             return {"success": False}
     
     async def _process_text(self, text: str, search_info: Dict) -> Dict:
-        """Process text message — handles both plain responses and ENCOREX OSINT frames"""
+        """Process text message — handles ENCOREX OSINT frames and plain responses"""
 
-        # ── Detect ENCOREX OSINT / INTELX result frame and extract JSON directly ──
-        # These look like:
-        #   🛡️ ENCOREX OSINT / 🛡️ ENCOREX INTELX
-        #   ╔═══《 ... 》═══╗
+        # Helper: strip ENCOREX/IntelX branding words from any string shown to users
+        def _strip_branding(s: str) -> str:
+            """Remove ENCOREX, INTELX, OSINT branding words from a display string"""
+            s = re.sub(r'ENCOREX\s*(OSINT|INTELX|TUNNEL)?', '', s, flags=re.IGNORECASE).strip()
+            s = re.sub(r'INTELX\s*(OSINT|TUNNEL)?', '', s, flags=re.IGNORECASE).strip()
+            s = re.sub(r'\bINTELX\b', '', s, flags=re.IGNORECASE).strip()
+            s = re.sub(r'\s{2,}', ' ', s).strip(' -|:')
+            return s
+
+        # ── Detect ENCOREX OSINT / INTELX result frame ───────────────────────
+        # Frame format:
+        #   🛡️ ENCOREX OSINT  ← header line (branding — strip this)
+        #   ╔═══《 CMD 》═══╗
         #   ║  ✅ SUCCESS
-        #   ║  { ... JSON ... }
+        #   ║  { ...JSON... }
         #   ╚════════════════════════════╝
-        #   ╘══《 ⚡ ...ms  ⏳ ...s 》══╛
+        #   ╘══《 ⚡ Xms  ⏳ Ys 》══╛   ← timing footer (strip this)
         text_lower = text.lower()
         is_encorex_frame = (
             ('encorex osint' in text_lower or 'encorex intelx' in text_lower
@@ -4893,50 +4919,69 @@ class SearchEngine:
         )
 
         if is_encorex_frame:
-            # Extract JSON block: find the first { and the last }
+            # Extract the JSON block between the first { and last }
             json_start = text.find('{')
             json_end   = text.rfind('}')
             extracted_json = ""
-            parsed_data = None
 
             if json_start != -1 and json_end > json_start:
                 raw_json = text[json_start:json_end + 1].strip()
                 try:
                     parsed_data = json.loads(raw_json)
-                    # Pretty-format so user gets readable output
+                    # Remove _powered_by and similar internal fields before showing user
+                    if isinstance(parsed_data, dict):
+                        parsed_data.pop('_powered_by', None)
+                        parsed_data.pop('powered_by', None)
+                        # If there's a nested result list, clean each entry
+                        if isinstance(parsed_data.get('result'), list):
+                            for item in parsed_data['result']:
+                                if isinstance(item, dict):
+                                    item.pop('_powered_by', None)
+                        if isinstance(parsed_data.get('results'), list):
+                            for item in parsed_data['results']:
+                                if isinstance(item, dict):
+                                    item.pop('_powered_by', None)
                     extracted_json = json.dumps(parsed_data, indent=2, ensure_ascii=False)
                     logger.info(f"✅ Extracted clean JSON from ENCOREX frame ({len(extracted_json)} chars)")
                 except json.JSONDecodeError:
-                    # JSON parse failed — use the raw extracted text as-is
                     extracted_json = raw_json
-                    logger.info(f"⚠️ Could not parse JSON from ENCOREX frame, using raw ({len(extracted_json)} chars)")
+                    logger.info(f"⚠️ Raw JSON from ENCOREX frame ({len(extracted_json)} chars)")
 
             if not extracted_json or len(extracted_json.strip()) < 5:
-                logger.info(f"⚠️ ENCOREX frame but no JSON found — trying full text")
-                extracted_json = text  # fall through to normal clean below
+                logger.info(f"⚠️ ENCOREX frame but no JSON — using cleaned full text")
+                extracted_json = TextProcessor.clean_content(text, search_info["search_type"])
 
-            # Format with our premium template using the extracted JSON
+            # Use cleaned group name (no ENCOREX/INTELX branding shown to user)
+            clean_source = _strip_branding(search_info["group"]["name"])
+            if not clean_source:
+                clean_source = "Intelligence Source"
+
             formatted = PremiumFormatter.format_result(
                 extracted_json,
                 search_info["search_type"],
                 search_info["query"],
-                search_info["group"]["name"]
+                clean_source
             )
             return {"success": True, "result": formatted, "has_file": False}
 
         # ── Normal (non-ENCOREX-frame) response ──────────────────────────────
         cleaned = TextProcessor.clean_content(text, search_info["search_type"])
-        
+
         if len(cleaned) < 20:
             return {"success": False}
-        
+
+        # Strip branding from source name for non-frame responses too
+        clean_source = _strip_branding(search_info["group"]["name"])
+        if not clean_source:
+            clean_source = "Intelligence Source"
+
         formatted = PremiumFormatter.format_result(
             cleaned,
             search_info["search_type"],
             search_info["query"],
-            search_info["group"]["name"]
+            clean_source
         )
-        
+
         return {
             "success": True,
             "result": formatted,
