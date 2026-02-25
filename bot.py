@@ -248,7 +248,7 @@ class APIResponseFormatter:
 GROUP_PRIORITIES = {
     "primary": {
         "name": "⚡ Premium Database",
-        "identifier": "RAJIV_THE_LOOKUP_HUB",
+        "identifier": "IntelXGroup",
         "timeout": 30,
         "weight": 10,
         "enabled": True,
@@ -256,7 +256,7 @@ GROUP_PRIORITIES = {
     },
     "secondary": {
         "name": "🌐 IntelX Network",
-        "identifier": "IntelXGroup",
+        "identifier": "RAJIV_THE_LOOKUP_HUB",
         "timeout": 35,
         "weight": 7,
         "enabled": True,
