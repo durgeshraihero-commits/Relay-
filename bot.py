@@ -4377,6 +4377,46 @@ class APIHandler:
 # ================== API SERVER ==================
 
 
+
+# Search types that should wait 8s and pick the richest result from multiple responses
+MULTI_COLLECT_TYPES = {"telegram", "insta", "gst", "ip", "ifsc"}
+MULTI_COLLECT_WINDOW = 8   # seconds to wait for additional results
+
+
+def _score_result_richness(text: str) -> int:
+    """Score a result message by how much data it contains.
+    Higher = more information = better candidate to show the user.
+    """
+    if not text:
+        return 0
+    score = len(text)   # base: length in characters
+
+    # Each key-value-style pair adds a bonus
+    kv_patterns = [
+        '": ', ': ', ' : ',
+        'name', 'mobile', 'number', 'address', 'email',
+        'father', 'mother', 'dob', 'gender', 'state',
+        'district', 'operator', 'circle', 'uid', 'aadhar',
+        'pan', 'gst', 'ifsc', 'bank', 'country', 'ip',
+        'username', 'bio', 'followers', 'following',
+        'company', 'phone', 'gstin', 'turnover',
+        'city', 'pincode', 'village', 'relation',
+    ]
+    for kp in kv_patterns:
+        score += text.lower().count(kp) * 25
+
+    # Bonus for structured dividers (formatted output)
+    for divider in ['━', '═', '─', '║', '╔', '╚']:
+        if divider in text:
+            score += 50
+
+    # Penalty for very short messages
+    if len(text.strip()) < 50:
+        score -= 500
+
+    return score
+
+
 class SearchEngine:
     def __init__(self, db_manager, user_manager):
         self.db = db_manager
@@ -4402,6 +4442,9 @@ class SearchEngine:
         # Check for leak search
         if search_type == "leak":
             return await self.perform_leak_search(query, user_id)
+
+        # Determine if this type should use multi-collect (wait 8s, pick best result)
+        is_multi_collect = search_type in MULTI_COLLECT_TYPES
         
         # Get command priority
         cmd = SEARCH_COMMANDS.get(search_type, {})
@@ -4428,6 +4471,9 @@ class SearchEngine:
                 # Create search tracking
                 search_id = f"{user_id}_{int(time.time())}_{group['name']}"
                 future = asyncio.get_running_loop().create_future()
+
+                # ── Multi-collect fields ──────────────────────────────────────
+                collect_until = time.time() + MULTI_COLLECT_WINDOW if is_multi_collect else None
                 
                 self.active_searches[search_id] = {
                     "user_id": user_id,
@@ -4440,17 +4486,16 @@ class SearchEngine:
                     "chat_id": group["entity"].id if hasattr(group["entity"], 'id') else str(group["entity"]),
                     "expecting_file": False,
                     "file_wait_start": None,
-                    "priority": group["weight"]
+                    "priority": group["weight"],
+                    # ── multi-collect fields ──────────────────────────────────
+                    "multi_collect": is_multi_collect,
+                    "candidates": [],           # list of (score, result_dict) tuples
+                    "collect_until": collect_until,
                 }
                 # Auto-cleanup this search after 180 seconds to prevent memory leaks
                 asyncio.create_task(self._auto_cleanup(search_id))
                 
                 # ── Scanning-aware wait loop ──────────────────────────────────
-                # Replaces asyncio.wait_for() to avoid hard-cancelling futures
-                # when a scanning placeholder has been detected.
-                # After a scanning message, we extend the deadline by 20s from
-                # the moment scanning was detected, so edits AND new follow-up
-                # messages both have time to arrive and be processed.
                 SCAN_EXTRA_WAIT = 20   # seconds to wait after a scanning msg
                 POLL_INTERVAL   = 0.3  # polling granularity (seconds)
 
@@ -4459,15 +4504,37 @@ class SearchEngine:
                 timed_out = False
 
                 while True:
-                    # Check if future resolved (set by _process_search_response)
+                    now = time.time()
+
+                    # ── Multi-collect: check if collection window has closed ───
+                    if is_multi_collect:
+                        search_ref = self.active_searches.get(search_id, {})
+                        candidates = search_ref.get("candidates", [])
+                        collect_end = search_ref.get("collect_until", 0)
+
+                        if collect_end and now >= collect_end:
+                            # Window closed — pick best candidate
+                            if candidates:
+                                # Sort descending by score, pick richest
+                                candidates.sort(key=lambda x: x[0], reverse=True)
+                                best_score, best_result = candidates[0]
+                                logger.info(
+                                    f"🏆 Multi-collect: picked best of {len(candidates)} "
+                                    f"candidates (score={best_score}) for {search_type}/{query}"
+                                )
+                                result = best_result
+                            else:
+                                # No candidates came in — fall through to timeout / next group
+                                timed_out = True
+                            break
+
+                    # Check if future resolved (set by _process_search_response for non-multi-collect)
                     if future.done():
                         try:
                             result = future.result()
                         except Exception:
                             result = {"success": False}
                         break
-
-                    now = time.time()
 
                     # Dynamically extend deadline when scanning placeholder seen
                     search_ref = self.active_searches.get(search_id, {})
@@ -4685,7 +4752,9 @@ class SearchEngine:
                     if reply_to_id == search_info["message_id"]:
                         logger.info(f"📩 Found direct reply to our search message")
                         await self._process_search_response(search_id, search_info, message)
-                        return
+                        # For multi-collect, don't return — keep listening for more
+                        if not search_info.get("multi_collect"):
+                            return
             
             # ── Priority 2: Any message in the same chat ──────────────────────
             for search_id, search_info in list(self.active_searches.items()):
@@ -4705,16 +4774,19 @@ class SearchEngine:
                     if file_check is not None:
                         logger.info(f"📁 Found file in {search_info['group']['name']}")
                         await self._process_search_response(search_id, search_info, message)
-                        return
+                        if not search_info.get("multi_collect"):
+                            return
+                        continue
                     
                     query = search_info.get("query", "").lower().strip()
                     text_lower = text.lower()
 
                     # ── Skip if this is a scanning placeholder ─────────────
                     if self._is_encorex_scanning_message(text):
-                        # Mark pending so the polling loop extends its deadline
                         await self._process_search_response(search_id, search_info, message)
-                        return
+                        if not search_info.get("multi_collect"):
+                            return
+                        continue
 
                     # ── Skip obviously empty / too-short messages ──────────────
                     if not text or len(text.strip()) < 5:
@@ -4753,7 +4825,6 @@ class SearchEngine:
                     )
 
                     # D) Plain JSON / key-value result (any search type)
-                    #    Require at least 1 known data field + 2 key-value pairs
                     data_field_indicators = [
                         '"name":', '"mobile":', '"number":', '"address":',
                         '"result":', '"results":', '"aadhar":', '"fname":',
@@ -4771,7 +4842,6 @@ class SearchEngine:
                     )
 
                     # E) Common result-style patterns for ALL search types
-                    #    (covers non-JSON formatted results from any group bot)
                     universal_result_patterns = [
                         'number fetched', 'fetched :-', 'fetched:',
                         'mobile:', 'phone:', 'telecom:', 'operator:',
@@ -4784,16 +4854,15 @@ class SearchEngine:
                         '✅ result', '✅ found', '✅ success',
                         'name :', 'mobile :', 'address :',
                         'result :', 'info :', 'details :',
-                        '━━━━', '────', '═══',   # formatted result dividers
-                        '║', '╔', '╚',           # box-drawing result frames
+                        '━━━━', '────', '═══',
+                        '║', '╔', '╚',
                     ]
                     universal_match = (
                         len(text.strip()) >= 20
                         and any(p in text_lower for p in universal_result_patterns)
                     )
 
-                    # F) Large substantive message from this group — likely a result
-                    #    Only accept if the message is long enough to be real data
+                    # F) Large substantive message from this group
                     large_message_result = (
                         len(text.strip()) >= 100
                         and not TextProcessor.is_processing_message(text)
@@ -4816,7 +4885,9 @@ class SearchEngine:
                             f"universal={universal_match}, large={large_message_result})"
                         )
                         await self._process_search_response(search_id, search_info, message)
-                        return
+                        # For multi-collect, keep iterating to catch all results
+                        if not search_info.get("multi_collect"):
+                            return
 
                 except Exception:
                     continue
@@ -4905,8 +4976,6 @@ class SearchEngine:
             logger.info(f"📨 Processing message in {search_info['group']['name']}: {text[:120]}...")
             
             # ===== SCANNING PLACEHOLDER FILTER =====
-            # If this message IS a scanning placeholder → mark pending, return.
-            # The polling loop in perform_search extends the deadline automatically.
             if self._is_encorex_scanning_message(text):
                 logger.info(
                     f"🛰️ Scanning placeholder from {search_info['group']['name']} "
@@ -4918,18 +4987,13 @@ class SearchEngine:
                     search_info["scanning_message_id"]  = message.id
                 return  # Do NOT resolve future — wait for edit or next message
 
-            # If we already received a scanning placeholder, accept the VERY NEXT
-            # non-scanning message unconditionally — whether it's an edit of the
-            # scanning message OR a brand-new follow-up message from the group.
-            # No time-based grace period needed: if the group sent a scanning msg
-            # for our query, whatever it sends/edits next is the result.
             if search_info.get("pending_encorex"):
                 logger.info(
                     f"✅ Result received after scanning wait from {search_info['group']['name']} "
                     f"(msg_id={message.id}, scanning_msg_id={search_info.get('scanning_message_id')})"
                 )
                 search_info["pending_encorex"]  = False
-                search_info["_came_after_scan"] = True  # bypass no-info check below
+                search_info["_came_after_scan"] = True
             # ===== END SCANNING FILTER =====
             
             # Special handling for leak search
@@ -4971,16 +5035,11 @@ class SearchEngine:
                 logger.info(f"⏳ Waiting for file to arrive...")
                 return
             
-            # is_processing_message now correctly ignores ENCOREX result frames
             if TextProcessor.is_processing_message(text):
                 logger.info(f"⏳ Processing message, waiting...")
                 return
             
             # ── No-info / result decision ─────────────────────────────────
-            # If the message arrived after a scanning placeholder (the group
-            # already confirmed it processed our query), trust the group and
-            # treat it as a real result even if it contains "not found" words.
-            # This prevents false failures on telegram/family searches.
             came_after_scan = search_info.pop("_came_after_scan", False)
 
             if TextProcessor.is_no_info_message(text) and not came_after_scan:
@@ -4992,7 +5051,23 @@ class SearchEngine:
             else:
                 logger.info(f"⚠️ Empty or short message, ignoring")
                 return
-            
+
+            # ── Multi-collect: accumulate candidate instead of resolving early ──
+            if search_info.get("multi_collect") and search_id in self.active_searches:
+                if result.get("success"):
+                    score = _score_result_richness(
+                        result.get("result") or result.get("content") or text
+                    )
+                    search_info["candidates"].append((score, result))
+                    logger.info(
+                        f"📥 Multi-collect candidate added "
+                        f"(score={score}, total={len(search_info['candidates'])}) "
+                        f"for {search_info['search_type']}/{search_info['query']}"
+                    )
+                # Do NOT resolve future — polling loop will pick best after 8s
+                return
+
+            # ── Normal mode: resolve future immediately ──────────────────────
             if search_id in self.active_searches:
                 future = self.active_searches[search_id]["future"]
                 if not future.done():
