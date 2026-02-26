@@ -5257,8 +5257,22 @@ async def cleanup_expired_searches():
 
 # ================== WEB SERVER ==================
 
+_WEB_SERVER_STARTED = False  # singleton guard — only one instance ever binds
+
+
 async def start_web_server():
-    """Start unified web server with API endpoints"""
+    """Start unified web server with API endpoints.
+
+    Singleton: if the port is already bound (e.g. after a bot reconnect),
+    this coroutine parks itself forever so _safe_task does not spin-restart.
+    """
+    global _WEB_SERVER_STARTED
+    if _WEB_SERVER_STARTED:
+        logger.info("🌐 Web server already running — skipping duplicate start.")
+        await asyncio.Event().wait()  # park forever
+        return
+    _WEB_SERVER_STARTED = True
+
     app = web.Application()
     
     # Health check endpoint
@@ -5271,7 +5285,6 @@ async def start_web_server():
     
     # Add API endpoints if enabled
     if config.API_ENABLED:
-        logger.info("🔑 Adding API endpoints to web server...")
         
         # Create API handler
         api_handler = APIHandler(db_manager, search_engine)
@@ -5616,10 +5629,24 @@ async def start_web_server():
         await site.start()
         logger.info(f"🌐 Web server running on port {config.PORT}")
         if config.API_ENABLED:
+            logger.info("🔑 API endpoints active on web server.")
             logger.info(f"🔑 API endpoints available at {config.API_BASE_URL}/api/v1/")
             logger.info(f"📚 API Documentation: {config.API_BASE_URL}/api/v1/docs")
+        # Keep running until cancelled
+        await asyncio.Event().wait()
+    except OSError as e:
+        if e.errno == 98:  # EADDRINUSE — already bound by another process/instance
+            logger.warning(f"⚠️  Port {config.PORT} already in use — web server skipping bind, parking task.")
+            _WEB_SERVER_STARTED = False  # allow future retry after real restart
+            await asyncio.Event().wait()  # park forever — do NOT return (avoids _safe_task spam)
+        else:
+            logger.error(f"❌ Web server OS error: {e}")
+            _WEB_SERVER_STARTED = False
+            raise  # let _safe_task handle retry with delay
     except Exception as e:
         logger.error(f"❌ Web server failed: {e}")
+        _WEB_SERVER_STARTED = False
+        raise  # let _safe_task handle retry with delay
 
 # ================== GLOBAL VARIABLES ==================
 
