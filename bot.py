@@ -1167,38 +1167,41 @@ class DatabaseManager:
             )
             
             # Create API-specific indexes
-            await asyncio.get_running_loop().run_in_executor(
+            # ── Drop old non-sparse client_token index BEFORE recreating ──
+            # Must happen first; create_index fails if same name exists with
+            # different options (e.g. missing sparse=True).
+            loop = asyncio.get_running_loop()
+            def _fix_client_token_index():
+                try:
+                    self.db.api_keys.drop_index("client_token_1")
+                    logger.info("🔧 Dropped old client_token_1 index — will recreate as sparse")
+                except Exception:
+                    pass  # didn't exist, nothing to drop
+                self.db.api_keys.create_index(
+                    [("client_token", 1)],
+                    unique=True,
+                    sparse=True,
+                    name="client_token_1"
+                )
+            await loop.run_in_executor(None, _fix_client_token_index)
+
+            await loop.run_in_executor(
                 None, lambda: self.db.api_keys.create_index([("api_key", 1)], unique=True)
             )
-            await asyncio.get_running_loop().run_in_executor(
-                None, lambda: self.db.api_keys.create_index(
-                    [("client_token", 1)], unique=True, sparse=True
-                )
-            )
-            await asyncio.get_running_loop().run_in_executor(
+            await loop.run_in_executor(
                 None, lambda: self.db.api_keys.create_index([("user_id", 1)])
             )
-            await asyncio.get_running_loop().run_in_executor(
+            await loop.run_in_executor(
                 None, lambda: self.db.api_logs.create_index([("timestamp", -1)])
             )
-            
+
             # Create protected queries indexes
-            await asyncio.get_running_loop().run_in_executor(
+            await loop.run_in_executor(
                 None, lambda: self.db.protected_queries.create_index([("query", 1)])
             )
-            await asyncio.get_running_loop().run_in_executor(
+            await loop.run_in_executor(
                 None, lambda: self.db.protection_payments.create_index([("request_id", 1)], unique=True)
             )
-            
-            # Drop the old non-sparse client_token_1 index if it exists
-            # (it rejects null values; the new sparse index allows them)
-            try:
-                await asyncio.get_running_loop().run_in_executor(
-                    None, lambda: self.db.api_keys.drop_index("client_token_1")
-                )
-                logger.info("🔧 Dropped old client_token_1 index (replaced with sparse)")
-            except Exception:
-                pass  # index didn't exist — that's fine
 
             logger.info("✅ MongoDB connected")
             return True
