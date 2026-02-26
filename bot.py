@@ -1800,6 +1800,7 @@ class OneLineKeyboard:
             [Button.inline("🔑 API Panel", "admin_api")],
             [Button.inline("🔒 Manage Restricted Queries", "admin_restricted_queries")],
             [Button.inline("⏳ Pending Protection Requests", "admin_pending_protections")],
+            [Button.inline("🔑 Reset User Password", "admin_reset_password")],
             [Button.inline("« Main Menu", "main_menu")]
         ]
         return buttons
@@ -2107,6 +2108,11 @@ class AdminPanelHandler:
                 await self.show_api_plan_details(event, plan_id)
             elif data == "create_api_key":
                 await self.ask_for_api_plan_selection(event)
+            elif data == "admin_reset_password":
+                await self.ask_for_password_reset(event)
+            elif data.startswith("admin_reset_pass_confirm_"):
+                account_id_target = data.split("admin_reset_pass_confirm_")[1]
+                await self.confirm_password_reset(event, account_id_target)
 
         except Exception as e:
             logger.error(f"❌ Error in admin callback: {e}")
@@ -2230,6 +2236,65 @@ class AdminPanelHandler:
             logger.error(f"Error showing user list: {e}")
             await event.edit(f"❌ Error loading user list: {e}", buttons=OneLineKeyboard.back_to_admin())
     
+    async def ask_for_password_reset(self, event):
+        """Admin: prompt for account ID to reset password"""
+        user_states[event.sender_id] = {"action": "admin_reset_password"}
+        await event.edit(
+            "🔑 **RESET USER PASSWORD**\n\n"
+            "Enter the **Account ID** (e.g. `DBEFBF325A`) of the account\n"
+            "whose password you want to reset.\n\n"
+            "The user will receive their new temporary password via this bot.",
+            buttons=[[Button.inline("« Admin Panel", "admin_panel")]],
+            parse_mode="md"
+        )
+
+    async def confirm_password_reset(self, event, account_id_target: str):
+        """Admin: show confirmation before resetting password"""
+        loop = asyncio.get_running_loop()
+        account = await loop.run_in_executor(
+            None, lambda: db_manager.db.accounts.find_one({"account_id": account_id_target.upper()})
+        )
+        if not account:
+            await event.answer(f"❌ Account {account_id_target} not found", alert=True)
+            return
+        # Generate a temp password
+        import secrets as _sec
+        temp_pass = _sec.token_urlsafe(8)
+        pwd_hash = __import__("hashlib").sha256(temp_pass.encode()).hexdigest()
+        await loop.run_in_executor(
+            None, lambda: db_manager.db.accounts.update_one(
+                {"account_id": account_id_target.upper()},
+                {"$set": {"password_hash": pwd_hash, "temp_password": True}}
+            )
+        )
+        # Notify all linked TG users
+        linked_ids = account.get("linked_tg_ids", [])
+        notified = 0
+        for tg_id in linked_ids:
+            try:
+                await bot_client.send_message(
+                    tg_id,
+                    f"🔑 **PASSWORD RESET — DARKBOXES**\n\n"
+                    f"An admin has reset your account password.\n\n"
+                    f"🆔 **Account ID:** `{account_id_target.upper()}`\n"
+                    f"🔐 **New Temporary Password:** `{temp_pass}`\n\n"
+                    f"⚠️ Please log in and note this password securely.\n"
+                    f"Contact @darkboxesAdmin if you need further help.",
+                    parse_mode="md"
+                )
+                notified += 1
+            except Exception:
+                pass
+        await event.edit(
+            f"✅ **PASSWORD RESET SUCCESSFUL**\n\n"
+            f"🆔 Account: `{account_id_target.upper()}`\n"
+            f"🔐 New temp password: `{temp_pass}`\n"
+            f"📲 Notified {notified}/{len(linked_ids)} linked TG account(s)\n\n"
+            f"Share this password with the user via a secure channel.",
+            buttons=[[Button.inline("« Admin Panel", "admin_panel")]],
+            parse_mode="md"
+        )
+
     async def show_user_management(self, event):
         """Show user management panel"""
         management_text = (
@@ -5691,6 +5756,51 @@ async def start_handler(event):
                 referrer = await db_manager.get_user(referrer_id)
                 if referrer:
                     await db_manager.add_referral_credit(referrer_id, config.REFERRAL_REWARD)
+
+            # ── Auto-create client account & send credentials ──────────────
+            try:
+                import secrets as _sec, hashlib as _hl
+                loop = asyncio.get_running_loop()
+                existing_acc = await loop.run_in_executor(
+                    None, lambda: db_manager.db.accounts.find_one({"linked_tg_ids": user_id})
+                )
+                if not existing_acc:
+                    auto_pass = _sec.token_urlsafe(10)
+                    acc_id = f"DB{_sec.token_hex(4).upper()}"
+                    pwd_hash = _hl.sha256(auto_pass.encode()).hexdigest()
+                    new_acc = {
+                        "account_id": acc_id,
+                        "username": (user.username or "").lower() or acc_id.lower(),
+                        "display_name": user.first_name or "User",
+                        "password_hash": pwd_hash,
+                        "linked_tg_ids": [user_id],
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                        "searches_remaining": config.NEW_USER_CREDITS,
+                        "subscription": None,
+                        "subscription_expiry": None,
+                        "is_banned": False,
+                        "total_searches": 0,
+                        "source": "telegram_start"
+                    }
+                    await loop.run_in_executor(
+                        None, lambda: db_manager.db.accounts.insert_one(new_acc)
+                    )
+                    await bot_client.send_message(
+                        user_id,
+                        f"🎉 **WELCOME TO DARKBOXES!**\n\n"
+                        f"Your client account has been automatically created.\n\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        f"🆔 **Account ID:** `{acc_id}`\n"
+                        f"🔐 **Password:** `{auto_pass}`\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                        f"⚠️ **Save these now** — this is the only time your password will be shown.\n\n"
+                        f"Use these to log into the terminal client (`darkboxes_client.py`).\n"
+                        f"If you ever forget your password, contact @darkboxesAdmin.\n\n"
+                        f"🔒 Never share your password with anyone.",
+                        parse_mode="md"
+                    )
+            except Exception as _ce:
+                logger.error(f"❌ Auto account creation on /start failed: {_ce}")
         
         is_admin = admin_panel.is_admin(user_id) if admin_panel else (user_id == config.ADMIN_USER_ID)
         
@@ -6415,6 +6525,8 @@ async def private_message_handler(event):
 
         elif state.get("action") == "admin_give_subscription":
             await handle_admin_give_subscription(event)
+        elif state.get("action") == "admin_reset_password":
+            await handle_admin_reset_password(event)
 
         elif state.get("action") == "enter_account_credentials":
             await handle_account_login(event)
@@ -6738,6 +6850,75 @@ async def reject_payment_callback(event):
     except Exception as e:
         logger.error(f"❌ Error rejecting payment: {e}")
         await event.answer("❌ Error rejecting payment", alert=True)
+
+
+async def handle_admin_reset_password(event):
+    """Admin typed an account ID for password reset — confirm and do it."""
+    try:
+        account_id_input = event.text.strip().upper()
+        if not account_id_input.startswith("DB") or len(account_id_input) < 4:
+            await event.respond(
+                "❌ Invalid Account ID. Format: `DBXXXXXX` (e.g. `DBEFBF325A`)\n"
+                "Try again or press « Admin Panel to cancel.",
+                parse_mode="md"
+            )
+            return
+
+        loop = asyncio.get_running_loop()
+        account = await loop.run_in_executor(
+            None, lambda: db_manager.db.accounts.find_one({"account_id": account_id_input})
+        )
+        if not account:
+            await event.respond(
+                f"❌ Account `{account_id_input}` not found in the database.\n"
+                "Check the ID and try again.",
+                parse_mode="md"
+            )
+            return
+
+        import secrets as _sec
+        import hashlib as _hl
+        temp_pass = _sec.token_urlsafe(8)
+        pwd_hash = _hl.sha256(temp_pass.encode()).hexdigest()
+        await loop.run_in_executor(
+            None, lambda: db_manager.db.accounts.update_one(
+                {"account_id": account_id_input},
+                {"$set": {"password_hash": pwd_hash, "temp_password": True}}
+            )
+        )
+        user_states.pop(event.sender_id, None)
+
+        linked_ids = account.get("linked_tg_ids", [])
+        notified = 0
+        for tg_id in linked_ids:
+            try:
+                await bot_client.send_message(
+                    tg_id,
+                    f"🔑 **PASSWORD RESET — DARKBOXES**\n\n"
+                    f"An admin has reset your account password.\n\n"
+                    f"🆔 **Account ID:** `{account_id_input}`\n"
+                    f"🔐 **New Temporary Password:** `{temp_pass}`\n\n"
+                    f"⚠️ Please log in and note this password securely.\n"
+                    f"Contact @darkboxesAdmin if you need further help.",
+                    parse_mode="md"
+                )
+                notified += 1
+            except Exception:
+                pass
+
+        await event.respond(
+            f"✅ **PASSWORD RESET DONE**\n\n"
+            f"🆔 Account ID: `{account_id_input}`\n"
+            f"🔐 New Temporary Password: `{temp_pass}`\n"
+            f"📲 Notified {notified}/{len(linked_ids)} linked Telegram account(s)\n\n"
+            f"📋 Share this with the user via a secure channel.\n"
+            f"They should change it after logging in.",
+            buttons=[[Button.inline("« Admin Panel", "admin_panel")]],
+            parse_mode="md"
+        )
+    except Exception as e:
+        logger.error(f"❌ handle_admin_reset_password: {e}")
+        await event.respond("❌ Error resetting password.")
 
 
 async def handle_admin_give_subscription(event):
@@ -7726,6 +7907,132 @@ async def noop_callback(event):
         
     except Exception as e:
         logger.error(f"❌ Error in main_menu_callback: {e}")
+
+@bot_client.on(events.CallbackQuery(pattern=r'^main_menu$'))
+async def main_menu_callback(event):
+    """Return to main menu — handles ALL « Main Menu button presses"""
+    try:
+        user_id = event.sender_id
+        user_states.pop(user_id, None)
+
+        user_doc = await db_manager.get_user(user_id)
+        is_admin = admin_panel.is_admin(user_id) if admin_panel else (user_id == config.ADMIN_USER_ID)
+
+        credits = user_doc.get('searches_remaining', 0) if user_doc else 0
+        total   = user_doc.get('total_searches', 0) if user_doc else 0
+        sub     = (user_doc.get('subscription') or 'None') if user_doc else 'None'
+
+        message = (
+            f"🎭 **DARK BOXES INTELLIGENCE**\n\n"
+            f"📊 **ACCOUNT STATUS**\n"
+            f"├─ Credits: {credits}\n"
+            f"├─ Total Searches: {total}\n"
+            f"└─ Subscription: {sub}\n\n"
+            f"🛠️ **SELECT SERVICE**"
+        )
+
+        await event.edit(message, buttons=OneLineKeyboard.main_menu(is_admin), parse_mode="md")
+
+    except Exception as e:
+        logger.error(f"❌ Error in main_menu_callback: {e}")
+        await event.answer("❌ Error loading menu", alert=True)
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^faq$'))
+async def faq_callback(event):
+    """FAQ inline button handler"""
+    await event.edit(
+        "❓ **FREQUENTLY ASKED QUESTIONS**\n\n"
+        "**Q: How do I get credits?**\n"
+        "Buy via the 💎 Premium Plans button or contact @darkboxesAdmin.\n\n"
+        "**Q: I forgot my password for the client script.**\n"
+        "Contact @darkboxesAdmin with your Account ID. They can reset it.\n\n"
+        "**Q: What data sources do you use?**\n"
+        "We aggregate data from multiple verified databases. Results are for lawful OSINT only.\n\n"
+        "**Q: Is my search history saved?**\n"
+        "Search logs are stored for security and compliance purposes.\n\n"
+        "**Q: Can I use the API?**\n"
+        "Yes — tap 🔑 API Access from the main menu for API keys and docs.",
+        buttons=[[Button.inline("« Main Menu", "main_menu")]],
+        parse_mode="md"
+    )
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^tutorial$'))
+async def tutorial_callback(event):
+    """Tutorial inline button handler"""
+    await event.edit(
+        "📖 **HOW TO USE DARKBOXES**\n\n"
+        "**1️⃣ Get Credits**\n"
+        "Tap 💎 Premium Plans → choose a pack → pay via UPI → submit UTR.\n\n"
+        "**2️⃣ Run a Search**\n"
+        "Tap any search button (e.g. 📱 Phone Intelligence) → enter your query.\n\n"
+        "**3️⃣ Read Results**\n"
+        "Results arrive in seconds. Use the copy button to save them.\n\n"
+        "**4️⃣ Client Script**\n"
+        "Download the terminal client via 💻 Download Client Script.\n"
+        "Your Account ID and Password are shown when you first started the bot.\n"
+        "Forgot password? → 🗝️ Get My Login Credentials → contact admin.\n\n"
+        "**5️⃣ API Access**\n"
+        "For developers: tap 🔑 API Access to generate keys and view docs.",
+        buttons=[[Button.inline("« Main Menu", "main_menu")]],
+        parse_mode="md"
+    )
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^report_issue$'))
+async def report_issue_callback(event):
+    """Report issue inline button handler"""
+    await event.edit(
+        "⚠️ **REPORT AN ISSUE**\n\n"
+        "Please describe your issue to our support team:\n\n"
+        "📬 **Telegram:** @darkboxesAdmin\n"
+        "📧 **Email:** yadiify@gmail.com\n\n"
+        "When reporting, include:\n"
+        "• Your Account ID (tap 🗝️ Get My Login Credentials)\n"
+        "• What you searched for\n"
+        "• What went wrong\n"
+        "• Screenshot if possible\n\n"
+        "We respond within 24 hours.",
+        buttons=[
+            [Button.inline("📞 Contact Admin", "contact_admin")],
+            [Button.inline("« Main Menu", "main_menu")]
+        ],
+        parse_mode="md"
+    )
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^referral_stats$'))
+async def referral_stats_callback(event):
+    """Referral stats for regular users"""
+    try:
+        user_id = event.sender_id
+        user_doc = await db_manager.get_user(user_id)
+        if not user_doc:
+            await event.answer("❌ Account not found", alert=True)
+            return
+        referrals = user_doc.get('referrals', [])
+        earned = user_doc.get('referral_credits_earned', 0)
+        ref_link = f"https://t.me/{(await bot_client.get_me()).username}?start={user_id}"
+        text = (
+            f"📊 **YOUR REFERRAL STATS**\n\n"
+            f"👥 Total Referrals: {len(referrals)}\n"
+            f"💰 Credits Earned: {earned}\n\n"
+            f"🔗 **Your Referral Link:**\n`{ref_link}`\n\n"
+            f"Share this link — earn {config.REFERRAL_REWARD} credit per referral!"
+        )
+        await event.edit(
+            text,
+            buttons=[
+                [Button.inline("📢 Share Referral", "share_referral")],
+                [Button.inline("« Main Menu", "main_menu")]
+            ],
+            parse_mode="md"
+        )
+    except Exception as e:
+        logger.error(f"❌ referral_stats_callback: {e}")
+        await event.answer("❌ Error loading referral stats", alert=True)
+
 
 @bot_client.on(events.CallbackQuery(pattern=r'^user_detail_(\d+)$'))
 async def user_detail_callback(event):
@@ -9355,15 +9662,17 @@ async def get_credentials_callback(event):
             f"No Telegram account needed — just these details.\n\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"🆔 **Account ID:** `{acc_id}`\n"
-            f"🔑 **Password:** *(set when account was created)*\n"
+            f"🔑 **Password:** Your password was sent when you first started the bot.\n"
+            f"   If you can't find it, scroll up in this chat to the welcome message,\n"
+            f"   or contact @darkboxesAdmin with your Account ID to reset it.\n"
             f"💰 **Credits:** {credits}\n"
             f"📦 **Plan:** {sub}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"⚠️ If you forgot your password, contact @darkboxesAdmin.\n\n"
             f"💻 **Use in client:**\n"
             f"1. Run `python darkboxes_client.py`\n"
-            f"2. Enter Account ID: `{acc_id}`\n"
-            f"3. Enter your password\n\n"
+            f"2. Choose Log In (option 2)\n"
+            f"3. Enter Account ID: `{acc_id}`\n"
+            f"4. Enter your password\n\n"
             f"🔒 Never share your password with anyone.\n"
             f"Official support only: @darkboxesAdmin | yadiify@gmail.com"
         )
