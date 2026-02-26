@@ -1352,23 +1352,42 @@ class DatabaseManager:
             return False
     
     async def add_subscription(self, user_id: int, plan_id: str, days: int) -> bool:
-        """Add subscription to user"""
+        """Add subscription to user and sync to linked client account"""
         try:
             plan = SUBSCRIPTION_PLANS[plan_id]
             expiry_date = datetime.now(timezone.utc) + timedelta(days=days)
+            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             
+            sub_update = {
+                "subscription": plan_id,
+                "subscription_expiry": expiry_date.isoformat(),
+                "searches_remaining": 0,  # subscription replaces credits
+                "subscription_used_today": 0,
+                "subscription_reset_date": today_str
+            }
+
             await asyncio.get_running_loop().run_in_executor(
                 None, lambda: self.db.users.update_one(
                     {"user_id": user_id},
-                    {
-                        "$set": {
-                            "subscription": plan_id,
-                            "subscription_expiry": expiry_date.isoformat(),
-                            "searches_remaining": 0  # Reset as unlimited
-                        }
-                    }
+                    {"$set": sub_update}
                 )
             )
+
+            # Sync subscription to linked accounts collection so client script works
+            try:
+                await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: self.db.accounts.update_one(
+                        {"linked_tg_ids": user_id},
+                        {"$set": {
+                            "subscription": plan_id,
+                            "subscription_expiry": expiry_date.isoformat(),
+                            "subscription_used_today": 0,
+                            "subscription_reset_date": today_str
+                        }}
+                    )
+                )
+            except Exception as _se:
+                logger.warning(f"Could not sync subscription to accounts collection for user {user_id}: {_se}")
             
             # Log payment
             payment_log = {
@@ -1480,7 +1499,7 @@ class DatabaseManager:
             return False
     
     async def add_credits(self, user_id: int, credits: int) -> bool:
-        """Add credits to user"""
+        """Add credits to user and sync to linked client account"""
         try:
             await asyncio.get_running_loop().run_in_executor(
                 None, lambda: self.db.users.update_one(
@@ -1488,6 +1507,16 @@ class DatabaseManager:
                     {"$inc": {"searches_remaining": credits}}
                 )
             )
+            # Sync to linked accounts collection
+            try:
+                await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: self.db.accounts.update_one(
+                        {"linked_tg_ids": user_id},
+                        {"$inc": {"searches_remaining": credits}}
+                    )
+                )
+            except Exception as _se:
+                logger.warning(f"Could not sync credits to accounts collection for user {user_id}: {_se}")
             return True
         except Exception as e:
             logger.error(f"❌ Error adding credits: {e}")
@@ -3784,6 +3813,42 @@ class APIHandler:
                             logger.warning(f"Subscription check error: {_se}")
 
                 if not used_subscription:
+                    # Check account's own subscription (set via /approve_client)
+                    acc_sub = account_doc.get("subscription")
+                    acc_sub_expiry = account_doc.get("subscription_expiry")
+                    if acc_sub and acc_sub_expiry:
+                        try:
+                            acc_expiry_dt = datetime.fromisoformat(acc_sub_expiry)
+                            if acc_expiry_dt > datetime.now(timezone.utc):
+                                acc_daily_lim = SUBSCRIPTION_PLANS.get(acc_sub, {}).get("daily_limit", 0)
+                                acc_used_today = account_doc.get("subscription_used_today", 0)
+                                today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                                last_reset = account_doc.get("subscription_reset_date", "")
+                                if last_reset != today_str:
+                                    acc_used_today = 0
+                                if acc_daily_lim == 0 or acc_used_today < acc_daily_lim:
+                                    await loop.run_in_executor(
+                                        None, lambda: self.db.db.accounts.update_one(
+                                            {"account_id": account_id_key},
+                                            {"$inc": {"subscription_used_today": 1, "total_searches": 1},
+                                             "$set": {"subscription_reset_date": today_str,
+                                                      "last_seen": datetime.now(timezone.utc).isoformat()}}
+                                        )
+                                    )
+                                    used_subscription = True
+                                    logger.info(f"🔍 Client Search (acct-subscription): {search_type} - {query} (Account: {account_id_key})")
+                                else:
+                                    return web.json_response(
+                                        APIResponseFormatter.error(
+                                            f"Daily limit reached ({acc_used_today}/{acc_daily_lim}). Resets tomorrow.",
+                                            "DAILY_LIMIT"
+                                        ),
+                                        status=403
+                                    )
+                        except Exception as _ase:
+                            logger.warning(f"Account subscription check error: {_ase}")
+
+                if not used_subscription:
                     # Fall back to credits
                     credits_left = account_doc.get("searches_remaining", 0)
                     if credits_left <= 0:
@@ -4153,19 +4218,47 @@ class APIHandler:
                 subscription   = acc.get("subscription")
                 valid_until    = acc.get("subscription_expiry") or "—"
                 total_searches = acc.get("total_searches", 0)
-                plan           = subscription or "None"
 
-                # Also check if linked TG user has subscription
-                linked = acc.get("linked_tg_ids", [])
-                if linked and not subscription:
-                    tg_doc = await self.db.get_user(linked[0])
-                    if tg_doc and tg_doc.get("subscription"):
-                        plan        = tg_doc.get("subscription", "None")
-                        valid_until = tg_doc.get("subscription_expiry") or "—"
-                        daily_used  = tg_doc.get("subscription_used_today", 0)
-                        sub_plan    = tg_doc.get("subscription", "")
-                        from config import PLANS
-                        daily_limit = PLANS.get(sub_plan, {}).get("daily_limit", 0) if hasattr(config, "PLANS") else 0
+                if subscription and valid_until != "—":
+                    # Check if account subscription is still valid
+                    try:
+                        exp_dt = datetime.fromisoformat(valid_until)
+                        if exp_dt > datetime.now(timezone.utc):
+                            plan = subscription
+                            daily_used = acc.get("subscription_used_today", 0)
+                            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                            if acc.get("subscription_reset_date", "") != today_str:
+                                daily_used = 0
+                            daily_limit = SUBSCRIPTION_PLANS.get(subscription, {}).get("daily_limit", 0)
+                        else:
+                            subscription = None  # expired
+                            plan = "None"
+                    except Exception:
+                        plan = subscription or "None"
+                else:
+                    plan = "None"
+
+                # Also check if linked TG user has subscription (if account has none)
+                if not subscription:
+                    linked = acc.get("linked_tg_ids", [])
+                    if linked:
+                        tg_doc = await self.db.get_user(linked[0])
+                        if tg_doc and tg_doc.get("subscription"):
+                            try:
+                                tg_exp = datetime.fromisoformat(tg_doc.get("subscription_expiry", ""))
+                                if tg_exp > datetime.now(timezone.utc):
+                                    plan        = tg_doc.get("subscription", "None")
+                                    valid_until = tg_doc.get("subscription_expiry") or "—"
+                                    today_str   = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                                    daily_used  = tg_doc.get("subscription_used_today", 0)
+                                    if tg_doc.get("subscription_reset_date", "") != today_str:
+                                        daily_used = 0
+                                    sub_plan_name = tg_doc.get("subscription", "")
+                                    daily_limit = SUBSCRIPTION_PLANS.get(sub_plan_name, {}).get("daily_limit", 0)
+                                    # Also show TG credits if higher
+                                    credits = max(credits, tg_doc.get("searches_remaining", 0))
+                            except Exception:
+                                pass
             else:
                 user_doc = await self.db.get_user(user_id)
                 if not user_doc:
@@ -5738,7 +5831,28 @@ async def start_web_server():
 
                 account_id = account.get("account_id")
                 credits = account.get("searches_remaining", 0)
-                sub = account.get("subscription") or "None"
+                sub = account.get("subscription") or None
+                sub_expiry = account.get("subscription_expiry") or None
+
+                # If account has no subscription, check linked TG user subscription
+                if not sub:
+                    linked_ids = account.get("linked_tg_ids", [])
+                    if linked_ids:
+                        tg_doc_login = await loop.run_in_executor(
+                            None, lambda: db_manager.db.users.find_one({"user_id": linked_ids[0]})
+                        )
+                        if tg_doc_login and tg_doc_login.get("subscription"):
+                            try:
+                                exp = datetime.fromisoformat(tg_doc_login.get("subscription_expiry", ""))
+                                if exp > datetime.now(timezone.utc):
+                                    sub = tg_doc_login.get("subscription")
+                                    sub_expiry = tg_doc_login.get("subscription_expiry")
+                                    # Also add TG user credits to display
+                                    credits = max(credits, tg_doc_login.get("searches_remaining", 0))
+                            except Exception:
+                                pass
+
+                sub_display = sub or "None"
 
                 # Generate or retrieve API key for this account
                 existing_key = await loop.run_in_executor(
@@ -5793,7 +5907,7 @@ async def start_web_server():
                     "account_id": account_id,
                     "api_key": api_key,
                     "credits": credits,
-                    "plan": sub,
+                    "plan": sub_display,
                     "message": "Login successful"
                 })
 
@@ -6009,6 +6123,7 @@ async def start_handler(event):
                     pwd_hash = _hl.sha256(auto_pass.encode()).hexdigest()
                     new_acc = {
                         "account_id": acc_id,
+                        "telegram_user_id": user_id,  # explicit field for easy lookup
                         "username": (user.username or "").lower() or acc_id.lower(),
                         "display_name": user.first_name or "User",
                         "password_hash": pwd_hash,
@@ -6023,6 +6138,13 @@ async def start_handler(event):
                     }
                     await loop.run_in_executor(
                         None, lambda: db_manager.db.accounts.insert_one(new_acc)
+                    )
+                    # Also store account_id in users collection for cross-reference
+                    await loop.run_in_executor(
+                        None, lambda: db_manager.db.users.update_one(
+                            {"user_id": user_id},
+                            {"$set": {"client_account_id": acc_id}}
+                        )
                     )
                     await bot_client.send_message(
                         user_id,
@@ -6040,6 +6162,30 @@ async def start_handler(event):
                     )
             except Exception as _ce:
                 logger.error(f"❌ Auto account creation on /start failed: {_ce}")
+        else:
+            # Returning user — ensure account is still linked (in case it was created separately)
+            try:
+                loop = asyncio.get_running_loop()
+                existing_acc = await loop.run_in_executor(
+                    None, lambda: db_manager.db.accounts.find_one({"linked_tg_ids": user_id})
+                )
+                if existing_acc:
+                    # Ensure telegram_user_id field is set and users collection has account_id
+                    await loop.run_in_executor(
+                        None, lambda: db_manager.db.accounts.update_one(
+                            {"_id": existing_acc["_id"]},
+                            {"$set": {"telegram_user_id": user_id},
+                             "$addToSet": {"linked_tg_ids": user_id}}
+                        )
+                    )
+                    await loop.run_in_executor(
+                        None, lambda: db_manager.db.users.update_one(
+                            {"user_id": user_id},
+                            {"$set": {"client_account_id": existing_acc.get("account_id", "")}}
+                        )
+                    )
+            except Exception as _le:
+                logger.warning(f"Could not sync account link on /start for user {user_id}: {_le}")
         
         is_admin = admin_panel.is_admin(user_id) if admin_panel else (user_id == config.ADMIN_USER_ID)
         
@@ -8342,29 +8488,77 @@ async def approve_client_payment(event):
                     {"$inc": {"searches_remaining": credits_to_add}}
                 )
             )
+            # Also add credits to linked TG users collection
+            acc_doc_tmp = await loop.run_in_executor(
+                None, lambda: db_manager.db.accounts.find_one({"account_id": acc_id_a})
+            )
+            for tg_id_sync in (acc_doc_tmp or {}).get("linked_tg_ids", []):
+                try:
+                    await loop.run_in_executor(
+                        None, lambda tid=tg_id_sync: db_manager.db.users.update_one(
+                            {"user_id": tid},
+                            {"$inc": {"searches_remaining": credits_to_add}}
+                        )
+                    )
+                except Exception as _se:
+                    logger.warning(f"Could not sync credits to TG user {tg_id_sync}: {_se}")
             result_msg = f"✅ Added {credits_to_add} credits to `{acc_id_a}`"
         elif plan_key_a in SUB_PLANS:
             sub_name, days = SUB_PLANS[plan_key_a]
             expiry = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             await loop.run_in_executor(
                 None, lambda: db_manager.db.accounts.update_one(
                     {"account_id": acc_id_a},
-                    {"$set": {"subscription": sub_name, "subscription_expiry": expiry}}
+                    {"$set": {
+                        "subscription": sub_name,
+                        "subscription_expiry": expiry,
+                        "subscription_used_today": 0,
+                        "subscription_reset_date": today_str
+                    }}
                 )
             )
+            # Sync subscription to linked TG users so both can search with it
+            acc_doc_tmp = await loop.run_in_executor(
+                None, lambda: db_manager.db.accounts.find_one({"account_id": acc_id_a})
+            )
+            for tg_id_sync in (acc_doc_tmp or {}).get("linked_tg_ids", []):
+                try:
+                    await loop.run_in_executor(
+                        None, lambda tid=tg_id_sync: db_manager.db.users.update_one(
+                            {"user_id": tid},
+                            {"$set": {
+                                "subscription": sub_name,
+                                "subscription_expiry": expiry,
+                                "subscription_used_today": 0,
+                                "subscription_reset_date": today_str
+                            }}
+                        )
+                    )
+                except Exception as _se:
+                    logger.warning(f"Could not sync subscription to TG user {tg_id_sync}: {_se}")
             result_msg = f"✅ Activated `{sub_name}` subscription for `{acc_id_a}` ({days} days)"
         else:
             await event.respond(f"❌ Unknown plan: `{plan_key_a}`", parse_mode="md")
             return
 
-        # Update payment record
-        await loop.run_in_executor(
-            None, lambda: db_manager.db.client_payments.update_one(
+        # Update payment record — find latest pending doc first, then update by _id
+        # (update_one does NOT support a sort parameter in PyMongo)
+        pending_pay = await loop.run_in_executor(
+            None, lambda: db_manager.db.client_payments.find_one(
                 {"account_id": acc_id_a, "status": "pending"},
-                {"$set": {"status": "approved", "approved_at": datetime.now(timezone.utc).isoformat()}},
                 sort=[("submitted_at", -1)]
             )
         )
+        if pending_pay:
+            pay_oid = pending_pay["_id"]
+            await loop.run_in_executor(
+                None, lambda: db_manager.db.client_payments.update_one(
+                    {"_id": pay_oid},
+                    {"$set": {"status": "approved", "approved_at": datetime.now(timezone.utc).isoformat()}}
+                )
+            )
+
         # Notify linked TG users
         acc_doc = await loop.run_in_executor(
             None, lambda: db_manager.db.accounts.find_one({"account_id": acc_id_a})
@@ -8376,7 +8570,7 @@ async def approve_client_payment(event):
                     f"✅ **PAYMENT APPROVED**\n\n"
                     f"Your payment for account `{acc_id_a}` has been approved!\n"
                     f"{result_msg.replace('✅ ', '')}\n\n"
-                    f"You can now search using the client script.",
+                    f"You can now search using the client script and the Telegram bot.",
                     parse_mode="md"
                 )
             except Exception:
@@ -8394,13 +8588,20 @@ async def reject_client_payment(event):
     try:
         acc_id_r = event.pattern_match.group(1).strip().upper()
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None, lambda: db_manager.db.client_payments.update_one(
+        # find_one with sort first, then update by _id (update_one has no sort param in PyMongo)
+        pending_pay_r = await loop.run_in_executor(
+            None, lambda: db_manager.db.client_payments.find_one(
                 {"account_id": acc_id_r, "status": "pending"},
-                {"$set": {"status": "rejected", "rejected_at": datetime.now(timezone.utc).isoformat()}},
                 sort=[("submitted_at", -1)]
             )
         )
+        if pending_pay_r:
+            await loop.run_in_executor(
+                None, lambda: db_manager.db.client_payments.update_one(
+                    {"_id": pending_pay_r["_id"]},
+                    {"$set": {"status": "rejected", "rejected_at": datetime.now(timezone.utc).isoformat()}}
+                )
+            )
         acc_doc = await loop.run_in_executor(
             None, lambda: db_manager.db.accounts.find_one({"account_id": acc_id_r})
         )
