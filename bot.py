@@ -1171,6 +1171,11 @@ class DatabaseManager:
                 None, lambda: self.db.api_keys.create_index([("api_key", 1)], unique=True)
             )
             await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.api_keys.create_index(
+                    [("client_token", 1)], unique=True, sparse=True
+                )
+            )
+            await asyncio.get_running_loop().run_in_executor(
                 None, lambda: self.db.api_keys.create_index([("user_id", 1)])
             )
             await asyncio.get_running_loop().run_in_executor(
@@ -1185,6 +1190,16 @@ class DatabaseManager:
                 None, lambda: self.db.protection_payments.create_index([("request_id", 1)], unique=True)
             )
             
+            # Drop the old non-sparse client_token_1 index if it exists
+            # (it rejects null values; the new sparse index allows them)
+            try:
+                await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: self.db.api_keys.drop_index("client_token_1")
+                )
+                logger.info("🔧 Dropped old client_token_1 index (replaced with sparse)")
+            except Exception:
+                pass  # index didn't exist — that's fine
+
             logger.info("✅ MongoDB connected")
             return True
         except Exception as e:
@@ -5677,9 +5692,11 @@ async def start_web_server():
                 else:
                     # Create a session API key — unlimited so requests_remaining check never blocks it
                     api_key = APIKeyManager.generate_api_key(0, f"client_{account_id}")
+                    client_token = APIKeyManager.generate_client_token(api_key)
                     expiry = datetime.now(timezone.utc) + timedelta(days=365)
                     key_doc = {
                         "api_key":            api_key,
+                        "client_token":       client_token,
                         "account_id":         account_id,
                         "user_id":            0,
                         "plan_id":            "client",
@@ -5689,7 +5706,7 @@ async def start_web_server():
                         "total_requests":     0,
                         "requests_used":      0,
                         "requests_remaining": 99999,
-                        "unlimited":          True,   # client keys bypass request-limit checks
+                        "unlimited":          True,
                     }
                     await loop.run_in_executor(
                         None, lambda: db_manager.db.api_keys.insert_one(key_doc)
