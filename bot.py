@@ -5373,18 +5373,18 @@ async def start_web_server():
         return
     _WEB_SERVER_STARTED = True
 
-    # ── Wait until DB is connected (db_manager.db is set after connect()) ──
+    # ── Wait until DB is connected AND api_handler is initialized ──
     waited = 0
-    while db_manager.db is None:
+    while db_manager.db is None or api_handler is None:
         if waited == 0:
-            logger.info("⏳ Web server waiting for DB connection...")
+            logger.info("⏳ Web server waiting for DB + api_handler...")
         await asyncio.sleep(1)
         waited += 1
         if waited > 60:
-            logger.error("❌ Web server: DB never connected after 60s — starting anyway")
+            logger.error("❌ Web server: still not ready after 60s — starting anyway")
             break
-    if waited > 0 and db_manager.db is not None:
-        logger.info(f"✅ Web server: DB ready after {waited}s")
+    if waited > 0:
+        logger.info(f"✅ Web server: ready after {waited}s wait")
 
     app = web.Application()
 
@@ -10144,17 +10144,27 @@ async def daily_subscription_reset():
 
 
 async def memory_monitor():
-    """Background task: log memory usage every 5 minutes to detect leaks"""
-    import psutil
+    """Background task: log memory usage every 5 minutes to detect leaks.
+    Uses /proc/self/status (always available on Linux) — no psutil needed.
+    """
+    def _get_rss_mb() -> float:
+        try:
+            with open("/proc/self/status") as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        return int(line.split()[1]) / 1024  # kB → MB
+        except Exception:
+            pass
+        return 0.0
+
     while True:
         try:
-            process = psutil.Process(os.getpid())
-            mem_mb = process.memory_info().rss / 1024 / 1024
-            logger.info(f"📊 Memory: {mem_mb:.2f} MB | Active searches: {len(search_engine.active_searches) if search_engine else 0}")
-            await asyncio.sleep(300)
+            mem_mb = _get_rss_mb()
+            active = len(search_engine.active_searches) if search_engine else 0
+            logger.info(f"📊 Memory: {mem_mb:.1f} MB | Active searches: {active}")
         except Exception as e:
             logger.error(f"❌ memory_monitor error: {e}")
-            await asyncio.sleep(300)
+        await asyncio.sleep(300)
 
 
 async def _run_bot():
@@ -10216,11 +10226,12 @@ async def _run_bot():
                     logger.error(f"❌ Background task '{name}' crashed: {_e} — restarting in 10s")
                     await asyncio.sleep(10)
 
-        # Start background tasks
-        asyncio.create_task(_safe_task(cleanup_expired_searches, "cleanup_expired_searches"))
-        asyncio.create_task(_safe_task(start_web_server, "start_web_server"))
-        asyncio.create_task(_safe_task(daily_subscription_reset, "daily_subscription_reset"))
-        asyncio.create_task(memory_monitor())
+        # Start background tasks — ALL wrapped in _safe_task so exceptions
+        # are caught, logged, and the task restarts rather than dying silently.
+        asyncio.create_task(_safe_task(cleanup_expired_searches,  "cleanup_expired_searches"))
+        asyncio.create_task(_safe_task(start_web_server,          "start_web_server"))
+        asyncio.create_task(_safe_task(daily_subscription_reset,  "daily_subscription_reset"))
+        asyncio.create_task(_safe_task(memory_monitor,            "memory_monitor"))
 
         logger.info("=" * 60)
         logger.info("🎭 DARK BOXES INTELLIGENCE SYSTEM - OPERATIONAL")
