@@ -8561,6 +8561,7 @@ async def admin_confirm_take_all_callback(event):
 
 
 
+@bot_client.on(events.CallbackQuery(pattern=r'^confirm_broadcast_yes$'))
 async def confirm_broadcast_handler(event):
     """Handle broadcast confirmation"""
     try:
