@@ -248,7 +248,7 @@ class APIResponseFormatter:
 GROUP_PRIORITIES = {
     "primary": {
         "name": "⚡ Premium Database",
-        "identifier": -1003320004816,
+        "identifier": -1003808381406,
         "timeout": 30,
         "weight": 10,
         "enabled": True,
@@ -292,85 +292,44 @@ DESTINATION_GROUPS = sorted(
 
 SUBSCRIPTION_PLANS = {
     # ── Credit packs (one-time top-up, credits never expire) ──────────────
-    "credits_5": {
+    "credits_1": {
+        "name": "🔹 SINGLE SEARCH",
+        "price": 10,
+        "searches": 1,
+        "validity": "No expiry",
+        "validity_days": 0,
+        "daily_limit": 0,
+        "plan_type": "credit",
+        "features": ["1 Premium Search", "All Databases", "Credits Never Expire", "Email Support"],
+        "icon": "🔹",
+        "color": "#27AE60",
+        "for": "One-off single lookup"
+    },
+    "credits_12": {
         "name": "⚡ STARTER PACK",
         "price": 100,
-        "searches": 5,
+        "searches": 12,
         "validity": "No expiry",
         "validity_days": 0,
         "daily_limit": 0,
         "plan_type": "credit",
-        "features": ["5 Premium Searches", "All Databases", "Credits Never Expire", "Email Support"],
+        "features": ["12 Premium Searches", "All Databases", "Credits Never Expire", "Email Support"],
         "icon": "⚡",
-        "color": "#27AE60",
-        "for": "Quick one-off lookups"
-    },
-    "credits_15": {
-        "name": "🔍 EXPLORER PACK",
-        "price": 250,
-        "searches": 15,
-        "validity": "No expiry",
-        "validity_days": 0,
-        "daily_limit": 0,
-        "plan_type": "credit",
-        "features": ["15 Premium Searches", "All Databases", "Credits Never Expire", "Priority Support"],
-        "icon": "🔍",
         "color": "#3498DB",
         "for": "Regular occasional users"
     },
-    # ── Daily-limit subscriptions (30 days) ───────────────────────────────
-    "daily10_30": {
-        "name": "🚀 DAILY 10 — 30 Days",
-        "price": 800,
-        "searches": 10,
-        "validity": "30 days",
-        "validity_days": 30,
-        "daily_limit": 10,
-        "plan_type": "subscription",
-        "features": ["10 Searches/Day", "30-Day Access", "All Databases", "Priority Support", "Auto daily reset"],
-        "icon": "🚀",
-        "color": "#F39C12",
-        "for": "Regular daily researchers"
-    },
-    "daily20_30": {
-        "name": "💎 DAILY 20 — 30 Days",
-        "price": 1000,
+    "credits_20": {
+        "name": "💎 VALUE PACK",
+        "price": 150,
         "searches": 20,
-        "validity": "30 days",
-        "validity_days": 30,
-        "daily_limit": 20,
-        "plan_type": "subscription",
-        "features": ["20 Searches/Day", "30-Day Access", "All Databases", "24/7 Priority Support", "Auto daily reset"],
+        "validity": "No expiry",
+        "validity_days": 0,
+        "daily_limit": 0,
+        "plan_type": "credit",
+        "features": ["20 Premium Searches", "All Databases", "Credits Never Expire", "Priority Support"],
         "icon": "💎",
         "color": "#9B59B6",
-        "for": "Power users needing high volume"
-    },
-    # ── Daily-limit subscriptions (60 days) ───────────────────────────────
-    "daily10_60": {
-        "name": "🌟 DAILY 10 — 2 Months",
-        "price": 1500,
-        "searches": 10,
-        "validity": "60 days",
-        "validity_days": 60,
-        "daily_limit": 10,
-        "plan_type": "subscription",
-        "features": ["10 Searches/Day", "60-Day Access", "All Databases", "Priority Support", "Best value monthly"],
-        "icon": "🌟",
-        "color": "#E74C3C",
-        "for": "Long-term regular researchers"
-    },
-    "daily20_60": {
-        "name": "👑 DAILY 20 — 2 Months",
-        "price": 1800,
-        "searches": 20,
-        "validity": "60 days",
-        "validity_days": 60,
-        "daily_limit": 20,
-        "plan_type": "subscription",
-        "features": ["20 Searches/Day", "60-Day Access", "All Databases", "24/7 VIP Support", "Best value high-volume"],
-        "icon": "👑",
-        "color": "#F39C12",
-        "for": "Professional investigators & teams"
+        "for": "Power users & best value"
     }
 }
 
@@ -1873,14 +1832,9 @@ class OneLineKeyboard:
         """Premium plan selection — credit packs + subscriptions"""
         buttons = [
             # Credit packs
-            [Button.inline("⚡ Starter Pack  · 5 searches · ₹100", "plan_credits_5")],
-            [Button.inline("🔍 Explorer Pack · 15 searches · ₹250", "plan_credits_15")],
-            # 30-day subscriptions
-            [Button.inline("🚀 Daily 10 · 30 Days · ₹800", "plan_daily10_30")],
-            [Button.inline("💎 Daily 20 · 30 Days · ₹1000", "plan_daily20_30")],
-            # 60-day subscriptions
-            [Button.inline("🌟 Daily 10 · 2 Months · ₹1500", "plan_daily10_60")],
-            [Button.inline("👑 Daily 20 · 2 Months · ₹1800", "plan_daily20_60")],
+            [Button.inline("🔹 1 Search  · ₹10", "plan_credits_1")],
+            [Button.inline("⚡ 12 Searches · ₹100", "plan_credits_12")],
+            [Button.inline("💎 20 Searches · ₹150  (Best Value)", "plan_credits_20")],
             [Button.inline("« Main Menu", "main_menu")]
         ]
         return buttons
@@ -3339,12 +3293,9 @@ class AdminPanelHandler:
             )
             
             buttons = [
-                [Button.inline("⚡ Starter Pack (5 credits, ₹100)", f"grant_sub_{user_id}_credits_5")],
-                [Button.inline("🔍 Explorer Pack (15 credits, ₹250)", f"grant_sub_{user_id}_credits_15")],
-                [Button.inline("🚀 Daily 10 × 30d (₹800)", f"grant_sub_{user_id}_daily10_30")],
-                [Button.inline("💎 Daily 20 × 30d (₹1000)", f"grant_sub_{user_id}_daily20_30")],
-                [Button.inline("🌟 Daily 10 × 60d (₹1500)", f"grant_sub_{user_id}_daily10_60")],
-                [Button.inline("👑 Daily 20 × 60d (₹1800)", f"grant_sub_{user_id}_daily20_60")],
+                [Button.inline("🔹 Single Search (1 credit, ₹10)", f"grant_sub_{user_id}_credits_1")],
+                [Button.inline("⚡ Starter Pack (12 credits, ₹100)", f"grant_sub_{user_id}_credits_12")],
+                [Button.inline("💎 Value Pack (20 credits, ₹150)", f"grant_sub_{user_id}_credits_20")],
                 [Button.inline("« Back", f"user_detail_{user_id}")]
             ]
             
@@ -3519,9 +3470,9 @@ class AdminPanelHandler:
             "**Available plan IDs:**\n"
             f"{plan_lines}\n\n"
             "**Examples:**\n"
-            "`123456789 credits_5`\n"
-            "`@johndoe daily10_30`\n"
-            "`DB1A2B3C4D daily20_60`",
+            "`123456789 credits_1`\n"
+            "`@johndoe credits_12`\n"
+            "`DB1A2B3C4D credits_20`",
             buttons=OneLineKeyboard.back_to_admin(),
             parse_mode="md"
         )
@@ -6153,12 +6104,9 @@ async def start_web_server():
 
                 # Notify admin on Telegram
                 plan_labels = {
-                    "credits_5":      "⚡ Starter Pack — 5 searches — ₹100",
-                    "credits_15":     "🔍 Explorer Pack — 15 searches — ₹250",
-                    "daily10_30":     "🚀 Daily 10 / 30 days — ₹800",
-                    "daily20_30":     "💎 Daily 20 / 30 days — ₹1000",
-                    "daily10_60":     "🌟 Daily 10 / 2 months — ₹1500",
-                    "daily20_60":     "👑 Daily 20 / 2 months — ₹1800",
+                    "credits_1":      "🔹 Single Search — 1 search — ₹10",
+                    "credits_12":     "⚡ Starter Pack — 12 searches — ₹100",
+                    "credits_20":     "💎 Value Pack — 20 searches — ₹150",
                 }
                 plan_label = plan_labels.get(plan_key, plan_key)
                 try:
@@ -6568,10 +6516,9 @@ async def search_callback(event):
             await event.edit(
                 "🔒 **NO CREDITS REMAINING**\n\n"
                 "You have 0 search credits. Choose a plan to continue:\n\n"
-                "⚡ **Starter Pack** — ₹100 → 5 searches\n"
-                "🔍 **Explorer Pack** — ₹250 → 15 searches\n"
-                "🚀 **Daily 10/30d** — ₹800/month\n"
-                "💎 **Daily 20/30d** — ₹1,000/month\n"
+                "🔹 **Single Search** — ₹10 → 1 search\n"
+                "⚡ **Starter Pack** — ₹100 → 12 searches\n"
+                "💎 **Value Pack** — ₹150 → 20 searches\n"
                 "🌟 **Daily 10/60d** — ₹1,500/2 months\n"
                 "👑 **Daily 20/60d** — ₹1,800/2 months\n\n"
                 "📞 Issues? Message **@darkboxesAdmin**",
@@ -6690,20 +6637,12 @@ async def premium_callback(event):
             "💎 **DARKBOXES PLANS & PRICING**\n"
             "═══════════════════════\n\n"
             "━━ 🎟️ CREDIT PACKS (Never Expire) ━━\n\n"
+            "🔹 **SINGLE SEARCH** — ₹10\n"
+            "└─ 1 search (no expiry)\n\n"
             "⚡ **STARTER PACK** — ₹100\n"
-            "└─ 5 searches (any time, no expiry)\n\n"
-            "🔍 **EXPLORER PACK** — ₹250\n"
-            "└─ 15 searches (any time, no expiry)\n\n"
-            "━━ 📅 30-DAY SUBSCRIPTIONS ━━\n\n"
-            "🚀 **DAILY 10** — ₹800/month\n"
-            "└─ 10 searches/day × 30 days\n\n"
-            "💎 **DAILY 20** — ₹1,000/month\n"
-            "└─ 20 searches/day × 30 days\n\n"
-            "━━ 📅 2-MONTH SUBSCRIPTIONS ━━\n\n"
-            "🌟 **DAILY 10** — ₹1,500/2 months\n"
-            "└─ 10 searches/day × 60 days\n\n"
-            "👑 **DAILY 20** — ₹1,800/2 months\n"
-            "└─ 20 searches/day × 60 days\n\n"
+            "└─ 12 searches (no expiry)\n\n"
+            "💎 **VALUE PACK** — ₹150\n"
+            "└─ 20 searches (no expiry) · Best Value 🏆\n\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━\n"
             "💳 **UPI ID:** `darkboxes@ybl`\n"
             "📞 **Support:** @darkboxesAdmin\n\n"
@@ -7282,7 +7221,7 @@ async def approve_payment_callback(event):
 
         data = event.data.decode()
         # Format: approve_payment_PAYID_USERID_PLANID
-        # Plan IDs can contain underscores (e.g. credits_5, daily10_30),
+        # Plan IDs can contain underscores (e.g. credits_1, credits_12, credits_20),
         # so we split on the first 4 underscores only.
         parts = data.split('_', 4)
         # parts = ['approve', 'payment', PAYID, USERID, PLANID]
@@ -7541,9 +7480,9 @@ async def handle_admin_give_subscription(event):
                 "**Available plan IDs:**\n"
                 f"{plan_ids_list}\n\n"
                 "**Examples:**\n"
-                "`123456789 credits_5`\n"
-                "`@johndoe daily10_30`\n"
-                "`DB1A2B3C4D daily20_60`",
+                "`123456789 credits_1`\n"
+                "`@johndoe credits_12`\n"
+                "`DB1A2B3C4D credits_20`",
                 parse_mode="md"
             )
             return
@@ -8892,9 +8831,8 @@ async def approve_client_payment(event):
             return
         acc_id_a, plan_key_a = parts[0].upper(), parts[1]
 
-        CREDIT_PLANS = {"credits_5": 5, "credits_15": 15}
-        SUB_PLANS    = {"daily10_30": ("daily10", 30), "daily20_30": ("daily20", 30),
-                        "daily10_60": ("daily10", 60), "daily20_60": ("daily20", 60)}
+        CREDIT_PLANS = {"credits_1": 1, "credits_12": 12, "credits_20": 20}
+        SUB_PLANS    = {}
         loop = asyncio.get_running_loop()
 
         if plan_key_a in CREDIT_PLANS:
@@ -9130,38 +9068,25 @@ async def add_credits_command_handler(event):
     except Exception as e:
         logger.error(f"❌ Error in add_credits_command_handler: {e}")
 
-@bot_client.on(events.NewMessage(pattern=re.compile(r'/reply (\d+) ([\s\S]+)', re.DOTALL)))
+@bot_client.on(events.NewMessage(pattern=r'/reply (\d+) (.+)'))
 async def admin_reply_handler(event):
-    """Handle admin reply command — supports multiline messages"""
+    """Handle admin reply command"""
     try:
         if not admin_panel.is_admin(event.sender_id):
             return
-
+        
         user_id = int(event.pattern_match.group(1))
-        message = event.pattern_match.group(2).strip()
-
-        if not message:
-            await event.respond("❌ Message cannot be empty.\nUsage: `/reply USER_ID your message here`")
-            return
-
-        # Split into chunks if message is very long (Telegram 4096 char limit)
-        header = f"👤 **ADMINISTRATOR RESPONSE**\n\n{message}\n\n— DarkBoxes Support Team"
-        chunks = TextProcessor.split_long_text(header, max_length=4096)
-
-        for chunk in chunks:
-            await bot_client.send_message(user_id, chunk, parse_mode="md")
-
-        lines = message.count('\n') + 1
-        chars = len(message)
-        await event.respond(
-            f"✅ **Reply sent to user `{user_id}`**\n"
-            f"📝 {lines} line(s) • {chars} characters • {len(chunks)} message(s)",
-            parse_mode="md"
+        message = event.pattern_match.group(2)
+        
+        await bot_client.send_message(
+            user_id,
+            f"👤 **ADMINISTRATOR RESPONSE**\n\n{message}\n\n— DarkBoxes Support Team"
         )
-
+        
+        await event.respond(f"✅ Reply sent to user {user_id}")
+        
     except Exception as e:
         logger.error(f"❌ Error in admin_reply_handler: {e}")
-        await event.respond(f"❌ Failed to send reply: {e}")
 
 @bot_client.on(events.NewMessage(pattern=r'/leak (.+)'))
 async def leak_command_handler(event):
