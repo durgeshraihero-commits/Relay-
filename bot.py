@@ -9130,25 +9130,38 @@ async def add_credits_command_handler(event):
     except Exception as e:
         logger.error(f"❌ Error in add_credits_command_handler: {e}")
 
-@bot_client.on(events.NewMessage(pattern=r'/reply (\d+) (.+)'))
+@bot_client.on(events.NewMessage(pattern=re.compile(r'/reply (\d+) ([\s\S]+)', re.DOTALL)))
 async def admin_reply_handler(event):
-    """Handle admin reply command"""
+    """Handle admin reply command — supports multiline messages"""
     try:
         if not admin_panel.is_admin(event.sender_id):
             return
-        
+
         user_id = int(event.pattern_match.group(1))
-        message = event.pattern_match.group(2)
-        
-        await bot_client.send_message(
-            user_id,
-            f"👤 **ADMINISTRATOR RESPONSE**\n\n{message}\n\n— DarkBoxes Support Team"
+        message = event.pattern_match.group(2).strip()
+
+        if not message:
+            await event.respond("❌ Message cannot be empty.\nUsage: `/reply USER_ID your message here`")
+            return
+
+        # Split into chunks if message is very long (Telegram 4096 char limit)
+        header = f"👤 **ADMINISTRATOR RESPONSE**\n\n{message}\n\n— DarkBoxes Support Team"
+        chunks = TextProcessor.split_long_text(header, max_length=4096)
+
+        for chunk in chunks:
+            await bot_client.send_message(user_id, chunk, parse_mode="md")
+
+        lines = message.count('\n') + 1
+        chars = len(message)
+        await event.respond(
+            f"✅ **Reply sent to user `{user_id}`**\n"
+            f"📝 {lines} line(s) • {chars} characters • {len(chunks)} message(s)",
+            parse_mode="md"
         )
-        
-        await event.respond(f"✅ Reply sent to user {user_id}")
-        
+
     except Exception as e:
         logger.error(f"❌ Error in admin_reply_handler: {e}")
+        await event.respond(f"❌ Failed to send reply: {e}")
 
 @bot_client.on(events.NewMessage(pattern=r'/leak (.+)'))
 async def leak_command_handler(event):
