@@ -248,7 +248,7 @@ class APIResponseFormatter:
 GROUP_PRIORITIES = {
     "primary": {
         "name": "⚡ Premium Database",
-        "identifier": -1003320004816,
+        "identifier": "EncoreXgroup",
         "timeout": 30,
         "weight": 10,
         "enabled": True,
@@ -264,7 +264,7 @@ GROUP_PRIORITIES = {
     },
     "tertiary": {
         "name": "🔍 Basic Database",
-        "identifier": "EncoreXgroup",
+        "identifier": -1003320004816,
         "timeout": 40,
         "weight": 5,
         "enabled": True,
