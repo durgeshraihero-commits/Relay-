@@ -71,7 +71,7 @@ class BotConfig:
     MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "20"))
     
     # Credits and rewards
-    NEW_USER_CREDITS: int = int(os.getenv("NEW_USER_CREDITS", "0"))
+    NEW_USER_CREDITS: int = int(os.getenv("NEW_USER_CREDITS", "1"))
     REFERRAL_REWARD: int = int(os.getenv("REFERRAL_REWARD", "1"))
     
     # Payment
