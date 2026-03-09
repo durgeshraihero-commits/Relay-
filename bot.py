@@ -248,7 +248,7 @@ class APIResponseFormatter:
 GROUP_PRIORITIES = {
     "primary": {
         "name": "⚡ Premium Database",
-        "identifier": -1003808381406,
+        "identifier": -1003320004816,
         "timeout": 30,
         "weight": 10,
         "enabled": True,
