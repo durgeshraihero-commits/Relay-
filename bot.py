@@ -248,7 +248,7 @@ class APIResponseFormatter:
 GROUP_PRIORITIES = {
     "primary": {
         "name": "⚡ Premium Database",
-        "identifier": "RAJIV_THE_LOOKUP_HUB",
+        "identifier": -1003808381406,
         "timeout": 30,
         "weight": 10,
         "enabled": True,
@@ -256,7 +256,7 @@ GROUP_PRIORITIES = {
     },
     "secondary": {
         "name": "🌐 IntelX Network",
-        "identifier": "EncoreXgroup",
+        "identifier": "+sOYPdIX89lg1ZDdl",
         "timeout": 35,
         "weight": 7,
         "enabled": True,
@@ -264,7 +264,7 @@ GROUP_PRIORITIES = {
     },
     "tertiary": {
         "name": "🔍 Basic Database",
-        "identifier": "OsintInformationGroup",
+        "identifier": "EncoreXgroup",
         "timeout": 40,
         "weight": 5,
         "enabled": True,
@@ -391,7 +391,7 @@ SEARCH_COMMANDS = {
     "family": {
         "name": "👨‍👩‍👧‍👦 Family Network",
         "description": "🏠 **Complete Family Analysis**\n\n🔸 **Input:** 12-digit Aadhar number\n🔸 **Returns:** All family members • Names • Relations • Ages • Addresses\n🔸 **Sources:** UIDAI database • Family registration • Government records\n🔸 **Depth:** 3-level relationship mapping",
-        "commands": ["/family", "/familyinfo"],
+        "commands": ["/familyinfo", "/family"],
         "example": "123456789012",
         "validation": r"^\d{12}$",
         "cost": 1,
