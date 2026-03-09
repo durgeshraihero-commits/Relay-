@@ -1522,6 +1522,71 @@ class DatabaseManager:
             logger.error(f"❌ Error adding credits: {e}")
             return False
 
+    async def take_credits(self, user_id: int, credits: int) -> bool:
+        """Subtract credits from a user (floors at 0, never goes negative)"""
+        try:
+            user = await asyncio.get_running_loop().run_in_executor(
+                None, self.db.users.find_one, {"user_id": user_id}
+            )
+            if not user:
+                return False
+            current = user.get("searches_remaining", 0)
+            deduct = min(credits, current)
+            if deduct <= 0:
+                return True
+            await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.users.update_one(
+                    {"user_id": user_id},
+                    {"$inc": {"searches_remaining": -deduct}}
+                )
+            )
+            try:
+                await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: self.db.accounts.update_one(
+                        {"linked_tg_ids": user_id},
+                        {"$inc": {"searches_remaining": -deduct}}
+                    )
+                )
+            except Exception:
+                pass
+            return True
+        except Exception as e:
+            logger.error(f"❌ Error taking credits: {e}")
+            return False
+
+    async def give_credits_all_users(self, credits: int) -> int:
+        """Add credits to EVERY user. Returns count of updated users."""
+        try:
+            result = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.users.update_many(
+                    {},
+                    {"$inc": {"searches_remaining": credits}}
+                )
+            )
+            return result.modified_count
+        except Exception as e:
+            logger.error(f"❌ Error giving credits to all: {e}")
+            return 0
+
+    async def take_credits_all_users(self, credits: int) -> int:
+        """Subtract up to `credits` from every user (each floored at 0).
+        Returns count of updated users."""
+        try:
+            result = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: self.db.users.update_many(
+                    {"searches_remaining": {"$gt": 0}},
+                    [{"$set": {
+                        "searches_remaining": {
+                            "$max": [0, {"$subtract": ["$searches_remaining", credits]}]
+                        }
+                    }}]
+                )
+            )
+            return result.modified_count
+        except Exception as e:
+            logger.error(f"❌ Error taking credits from all: {e}")
+            return 0
+
 # ================== ONE COMMAND PER LINE KEYBOARD ==================
 
 class APIDatabaseManager:
@@ -1848,6 +1913,9 @@ class OneLineKeyboard:
             [Button.inline("🔒 Manage Restricted Queries", "admin_restricted_queries")],
             [Button.inline("⏳ Pending Protection Requests", "admin_pending_protections")],
             [Button.inline("🔑 Reset User Password", "admin_reset_password")],
+            [Button.inline("💰 Give Credits to ALL Users", "admin_give_credits_all")],
+            [Button.inline("➖ Take Credits from User", "admin_take_credits_user")],
+            [Button.inline("🔥 Take Credits from ALL Users", "admin_take_credits_all")],
             [Button.inline("« Main Menu", "main_menu")]
         ]
         return buttons
@@ -2160,6 +2228,12 @@ class AdminPanelHandler:
             elif data.startswith("admin_reset_pass_confirm_"):
                 account_id_target = data.split("admin_reset_pass_confirm_")[1]
                 await self.confirm_password_reset(event, account_id_target)
+            elif data == "admin_give_credits_all":
+                await self.ask_for_give_credits_all(event)
+            elif data == "admin_take_credits_user":
+                await self.ask_for_take_credits_user(event)
+            elif data == "admin_take_credits_all":
+                await self.ask_for_take_credits_all(event)
 
         except Exception as e:
             logger.error(f"❌ Error in admin callback: {e}")
@@ -2959,6 +3033,48 @@ class AdminPanelHandler:
         )
         user_states[event.sender_id] = {"action": "admin_add_credits"}
     
+    async def ask_for_give_credits_all(self, event):
+        """Ask admin how many credits to give ALL users"""
+        await event.edit(
+            "💰 **GIVE CREDITS TO ALL USERS**\n\n"
+            "⚠️ This will add credits to EVERY registered user.\n\n"
+            "Enter the number of credits to add:\n"
+            "(e.g. `5` to give 5 credits to everyone)\n\n"
+            "Type the number:",
+            buttons=OneLineKeyboard.back_to_admin(),
+            parse_mode="md"
+        )
+        user_states[event.sender_id] = {"action": "admin_give_credits_all"}
+
+    async def ask_for_take_credits_user(self, event):
+        """Ask admin which user to take credits from"""
+        await event.edit(
+            "➖ **TAKE CREDITS FROM A USER**\n\n"
+            "Format: `identifier amount`\n\n"
+            "Examples:\n"
+            "• `123456789 10`  — take 10 credits from user ID\n"
+            "• `@username 5`   — take 5 credits from @username\n\n"
+            "Credits floor at 0 — user will never go negative.\n\n"
+            "Type your command:",
+            buttons=OneLineKeyboard.back_to_admin(),
+            parse_mode="md"
+        )
+        user_states[event.sender_id] = {"action": "admin_take_credits_user"}
+
+    async def ask_for_take_credits_all(self, event):
+        """Ask admin how many credits to remove from ALL users"""
+        await event.edit(
+            "🔥 **TAKE CREDITS FROM ALL USERS**\n\n"
+            "⚠️ This will remove credits from EVERY registered user.\n"
+            "Each user's credits floor at 0 (never go negative).\n\n"
+            "Enter the number of credits to remove:\n"
+            "(e.g. `3` to remove up to 3 credits from everyone)\n\n"
+            "Type the number:",
+            buttons=OneLineKeyboard.back_to_admin(),
+            parse_mode="md"
+        )
+        user_states[event.sender_id] = {"action": "admin_take_credits_all"}
+
     async def show_bot_settings(self, event):
         """Show bot settings"""
         settings_text = (
@@ -6285,6 +6401,19 @@ async def admin_callback_handler(event):
     await admin_panel.handle_admin_callback(event)
 
 
+# ── CRITICAL FIX: Route confirm_* and user_detail_* callbacks ────────────
+# These callbacks are generated by admin panel buttons but do NOT start with
+# "admin_", so they were silently dropped by the handler above. This handler
+# catches them all and routes them to handle_admin_callback.
+@bot_client.on(events.CallbackQuery(
+    pattern=r'^(confirm_ban_|confirm_unban_|confirm_add_admin_|'
+            r'confirm_remove_admin_|user_detail_|admin_give_sub_|'
+            r'admin_add_credits_user_|confirm_create_api_|confirm_revoke_api_)'))
+async def admin_confirm_action_callback_handler(event):
+    """Route confirm/user-detail action callbacks to the admin panel handler"""
+    await admin_panel.handle_admin_callback(event)
+
+
 @bot_client.on(events.CallbackQuery(pattern=r'^grant_sub_(\d+)_(.+)$'))
 async def grant_sub_callback(event):
     """Grant subscription to a user directly"""
@@ -6987,6 +7116,15 @@ async def private_message_handler(event):
             await handle_admin_give_subscription(event)
         elif state.get("action") == "admin_reset_password":
             await handle_admin_reset_password(event)
+
+        elif state.get("action") == "admin_give_credits_all":
+            await handle_admin_give_credits_all(event)
+
+        elif state.get("action") == "admin_take_credits_user":
+            await handle_admin_take_credits_user(event)
+
+        elif state.get("action") == "admin_take_credits_all":
+            await handle_admin_take_credits_all(event)
 
         elif state.get("action") == "enter_account_credentials":
             await handle_account_login(event)
@@ -8219,7 +8357,210 @@ async def handle_admin_add_credits(event):
         logger.error(f"❌ Error in handle_admin_add_credits: {e}")
         await event.respond("❌ Error adding credits.")
 
-@bot_client.on(events.CallbackQuery(pattern=r'^confirm_broadcast_yes$'))
+async def handle_admin_give_credits_all(event):
+    """Handle admin giving credits to ALL users"""
+    try:
+        user_input = event.text.strip()
+        if not user_input.isdigit() or int(user_input) <= 0:
+            await event.respond("❌ Please enter a valid positive number of credits.")
+            return
+        credits = int(user_input)
+        if credits > 10000:
+            await event.respond("❌ Maximum 10,000 credits per operation.")
+            return
+
+        user_states.pop(event.sender_id, None)
+        buttons = [
+            [Button.inline(f"✅ YES — Give {credits} credits to ALL users", f"admin_confirm_give_all_{credits}")],
+            [Button.inline("❌ Cancel", "admin_panel")]
+        ]
+        await event.respond(
+            f"⚠️ **CONFIRM BULK CREDIT GRANT**\n\n"
+            f"You are about to give **{credits} credits** to EVERY registered user.\n"
+            f"This action cannot be undone.\n\n"
+            f"Are you sure?",
+            buttons=buttons,
+            parse_mode="md"
+        )
+    except Exception as e:
+        logger.error(f"❌ handle_admin_give_credits_all: {e}")
+        await event.respond("❌ Error processing request.")
+        user_states.pop(event.sender_id, None)
+
+
+async def handle_admin_take_credits_user(event):
+    """Handle admin taking credits from a specific user"""
+    try:
+        user_input = event.text.strip()
+        loop = asyncio.get_running_loop()
+
+        parts = user_input.rsplit(None, 1)
+        if len(parts) != 2:
+            await event.respond(
+                "❌ **Invalid format.**\n\nUse: `identifier amount`\n"
+                "Example: `123456789 10` or `@username 5`",
+                parse_mode="md"
+            )
+            return
+
+        identifier, amount_str = parts[0].strip(), parts[1].strip()
+        if not amount_str.isdigit() or int(amount_str) <= 0:
+            await event.respond("❌ Amount must be a positive number.")
+            return
+
+        credits = int(amount_str)
+        user = None
+        user_id = None
+
+        if identifier.startswith('@'):
+            uname = identifier.lstrip('@').lower()
+            user = await loop.run_in_executor(
+                None, lambda: db_manager.db.users.find_one(
+                    {"username": {"$regex": f"^{re.escape(uname)}$", "$options": "i"}}
+                )
+            )
+            if user:
+                user_id = user["user_id"]
+        elif identifier.isdigit():
+            user_id = int(identifier)
+            user = await db_manager.get_user(user_id)
+        else:
+            user = await loop.run_in_executor(
+                None, lambda: db_manager.db.users.find_one(
+                    {"username": {"$regex": f"^{re.escape(identifier)}$", "$options": "i"}}
+                )
+            )
+            if user:
+                user_id = user["user_id"]
+
+        if not user or not user_id:
+            await event.respond(f"❌ User `{identifier}` not found.", parse_mode="md")
+            user_states.pop(event.sender_id, None)
+            return
+
+        current_credits = user.get("searches_remaining", 0)
+        actual_deduct   = min(credits, current_credits)
+        success = await db_manager.take_credits(user_id, credits)
+
+        fname  = user.get('first_name', 'N/A')
+        uname  = f"@{user.get('username')}" if user.get('username') else str(user_id)
+
+        if success:
+            new_balance = max(0, current_credits - credits)
+            await event.respond(
+                f"✅ **CREDITS REMOVED SUCCESSFULLY**\n\n"
+                f"👤 User: {fname} ({uname})\n"
+                f"🔢 UID: `{user_id}`\n"
+                f"➖ Removed: **{actual_deduct}** credits\n"
+                f"💰 Old balance: {current_credits}\n"
+                f"💰 New balance: **{new_balance}**\n"
+                + (f"\n⚠️ User had fewer credits — floored at 0." if actual_deduct < credits else ""),
+                parse_mode="md",
+                buttons=OneLineKeyboard.back_to_admin()
+            )
+            try:
+                await bot_client.send_message(
+                    user_id,
+                    f"⚠️ **CREDITS ADJUSTED BY ADMIN**\n\n"
+                    f"An admin has removed **{actual_deduct} credits** from your account.\n"
+                    f"💰 New balance: **{new_balance} credits**\n\n"
+                    f"Contact @darkboxesAdmin for questions.",
+                    parse_mode="md"
+                )
+            except Exception:
+                pass
+        else:
+            await event.respond("❌ Failed to remove credits. Check logs.")
+
+        user_states.pop(event.sender_id, None)
+
+    except Exception as e:
+        logger.error(f"❌ handle_admin_take_credits_user: {e}")
+        await event.respond("❌ Error processing request.")
+        user_states.pop(event.sender_id, None)
+
+
+async def handle_admin_take_credits_all(event):
+    """Handle admin removing credits from ALL users"""
+    try:
+        user_input = event.text.strip()
+        if not user_input.isdigit() or int(user_input) <= 0:
+            await event.respond("❌ Please enter a valid positive number of credits.")
+            return
+        credits = int(user_input)
+        if credits > 10000:
+            await event.respond("❌ Maximum 10,000 credits per operation.")
+            return
+
+        user_states.pop(event.sender_id, None)
+        buttons = [
+            [Button.inline(f"✅ YES — Remove {credits} credits from ALL users", f"admin_confirm_take_all_{credits}")],
+            [Button.inline("❌ Cancel", "admin_panel")]
+        ]
+        await event.respond(
+            f"⚠️ **CONFIRM BULK CREDIT REMOVAL**\n\n"
+            f"You are about to remove up to **{credits} credits** from EVERY user.\n"
+            f"Credits floor at 0 — no user will go negative.\n"
+            f"This action cannot be undone.\n\n"
+            f"Are you sure?",
+            buttons=buttons,
+            parse_mode="md"
+        )
+    except Exception as e:
+        logger.error(f"❌ handle_admin_take_credits_all: {e}")
+        await event.respond("❌ Error processing request.")
+        user_states.pop(event.sender_id, None)
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^admin_confirm_give_all_(\d+)$'))
+async def admin_confirm_give_all_callback(event):
+    """Execute bulk credit grant to ALL users"""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.answer("❌ Admin only", alert=True)
+            return
+        credits = int(event.data.decode().split("_")[-1])
+        await event.edit(f"⏳ Giving {credits} credits to all users... please wait.")
+        count = await db_manager.give_credits_all_users(credits)
+        await event.edit(
+            f"✅ **BULK CREDIT GRANT COMPLETE**\n\n"
+            f"💰 Credits Added: **{credits}** per user\n"
+            f"👥 Users Updated: **{count}**\n"
+            f"💎 Total Credits Distributed: **{credits * count:,}**",
+            buttons=OneLineKeyboard.back_to_admin(),
+            parse_mode="md"
+        )
+        logger.info(f"✅ Admin {event.sender_id} gave {credits} credits to {count} users")
+    except Exception as e:
+        logger.error(f"❌ admin_confirm_give_all_callback: {e}")
+        await event.answer("❌ Error executing bulk grant", alert=True)
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^admin_confirm_take_all_(\d+)$'))
+async def admin_confirm_take_all_callback(event):
+    """Execute bulk credit removal from ALL users"""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.answer("❌ Admin only", alert=True)
+            return
+        credits = int(event.data.decode().split("_")[-1])
+        await event.edit(f"⏳ Removing up to {credits} credits from all users... please wait.")
+        count = await db_manager.take_credits_all_users(credits)
+        await event.edit(
+            f"✅ **BULK CREDIT REMOVAL COMPLETE**\n\n"
+            f"➖ Credits Removed: up to **{credits}** per user\n"
+            f"👥 Users Affected: **{count}**\n"
+            f"⚠️ All balances floored at 0 — no negatives.",
+            buttons=OneLineKeyboard.back_to_admin(),
+            parse_mode="md"
+        )
+        logger.info(f"✅ Admin {event.sender_id} removed up to {credits} credits from {count} users")
+    except Exception as e:
+        logger.error(f"❌ admin_confirm_take_all_callback: {e}")
+        await event.answer("❌ Error executing bulk removal", alert=True)
+
+
+
 async def confirm_broadcast_handler(event):
     """Handle broadcast confirmation"""
     try:
