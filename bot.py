@@ -80,6 +80,7 @@ class BotConfig:
     
     # API Configuration
     API_ENABLED: bool = bool(os.getenv("API_ENABLED", "True"))
+    INTELGRID_SECRET: str = os.getenv("INTELGRID_SECRET", "")  # shared secret with IntelGrid website
     API_PORT: int = int(os.getenv("API_PORT", "8000"))
     API_RATE_LIMIT: int = int(os.getenv("API_RATE_LIMIT", "100"))
     API_SECRET_KEY: str = os.getenv("API_SECRET_KEY", secrets.token_hex(32))
@@ -3749,697 +3750,178 @@ class AdminPanelHandler:
 # ================== SEARCH ENGINE WITH PRIORITY MANAGEMENT ==================
 
 class APIHandler:
-    """Handle API requests"""
+    """Handle API requests.
+
+    Authentication is a single shared secret (INTELGRID_SECRET env var).
+    IntelGrid passes this key on every request — no per-user accounts,
+    no api_keys collection, no Telegram required.
+    """
 
     def __init__(self, db_manager: DatabaseManager, search_engine):
         self.db = db_manager
         self.search_engine = search_engine
-    
-    async def authenticate_request(self, request: web.Request) -> Tuple[bool, Optional[Dict], str]:
-        """Authenticate API request"""
-        try:
-            # Get API key from header or query parameter
-            api_key = request.headers.get('X-API-Key') or request.query.get('api_key')
-            
-            if not api_key:
-                return False, None, "API key required"
-            
-            # Validate API key
-            api_info = await self.db.api_db.get_api_key(api_key)
-            if not api_info:
-                return False, None, "Invalid API key"
-            
-            # Check if API key is active
-            if not api_info.get("is_active", True):
-                return False, None, "API key is inactive"
-            
-            # Check expiry
-            expires_at = datetime.fromisoformat(api_info["expires_at"])
-            if expires_at < datetime.now(timezone.utc):
-                return False, None, "API key expired"
-            
-            # Check request limits (skip for unlimited plans)
-            if not api_info.get("unlimited", False):
-                if api_info.get("requests_remaining", 0) <= 0:
-                    return False, None, "API request limit exceeded"
-            
-            return True, api_info, ""
-            
-        except Exception as e:
-            logger.error(f"❌ API authentication error: {e}")
-            return False, None, "Authentication failed"
+
+    def _check_secret(self, request: web.Request) -> bool:
+        """Verify the shared IntelGrid secret key."""
+        secret = os.getenv("INTELGRID_SECRET", "")
+        if not secret:
+            logger.warning("⚠️  INTELGRID_SECRET not set — all API requests will be rejected")
+            return False
+        provided = request.headers.get("X-API-Key") or request.query.get("api_key")
+        return provided == secret
     
     async def handle_search_request(self, request: web.Request, search_type: str) -> web.Response:
-        """Handle search API request"""
+        """Handle search request. Auth = shared INTELGRID_SECRET."""
         try:
-            # Authenticate
-            auth_result, api_info, error = await self.authenticate_request(request)
-            if not auth_result:
+            if not self._check_secret(request):
                 return web.json_response(
-                    APIResponseFormatter.error(error, "AUTH_FAILED"),
+                    APIResponseFormatter.error("Invalid or missing API key", "AUTH_FAILED"),
                     status=401
                 )
-            
-            # Parse request data
+
             data = await request.json()
             query = data.get("query", "").strip()
-            
             if not query:
                 return web.json_response(
-                    APIResponseFormatter.error("Query parameter required", "INVALID_REQUEST"),
+                    APIResponseFormatter.error("query is required", "INVALID_REQUEST"),
                     status=400
                 )
-            
-            # Validate query
+
             cmd = SEARCH_COMMANDS.get(search_type, {})
             validation = cmd.get("validation")
             if validation and not re.match(validation, query):
                 return web.json_response(
-                    APIResponseFormatter.error(f"Invalid query format. Example: {cmd['example']}", "INVALID_QUERY"),
+                    APIResponseFormatter.error(
+                        f"Invalid query format. Example: {cmd['example']}", "INVALID_QUERY"
+                    ),
                     status=400
                 )
-            
-            # Get user info — client keys have user_id=0, look up via account_id in accounts collection
-            user_id = api_info.get("user_id", 0)
-            account_id_key = api_info.get("account_id", "")
-            loop = asyncio.get_running_loop()
 
-            if user_id == 0 and account_id_key:
-                # Client-script user — authenticate against accounts collection
-                account_doc = await loop.run_in_executor(
-                    None, lambda: self.db.db.accounts.find_one({"account_id": account_id_key})
-                )
-                if not account_doc:
-                    return web.json_response(
-                        APIResponseFormatter.error("Account not found", "USER_NOT_FOUND"),
-                        status=404
-                    )
-                if account_doc.get("is_banned"):
-                    return web.json_response(
-                        APIResponseFormatter.error("Account banned. Contact @darkboxesAdmin", "ACCOUNT_BANNED"),
-                        status=403
-                    )
+            # Use a neutral user_id=0 — credits/quota are managed by IntelGrid, not here
+            result = await self.search_engine.perform_search(search_type, query, 0)
 
-                # Check linked TG user subscription first — if active, use that (no credit deduction)
-                linked = account_doc.get("linked_tg_ids", [])
-                effective_uid = linked[0] if linked else 0
-                used_subscription = False
-
-                if effective_uid:
-                    tg_doc = await self.db.get_user(effective_uid)
-                    if tg_doc and tg_doc.get("subscription") and tg_doc.get("subscription_expiry"):
-                        try:
-                            expiry = datetime.fromisoformat(tg_doc["subscription_expiry"])
-                            if expiry > datetime.now(timezone.utc):
-                                # Valid subscription — check daily limit
-                                sub_plan   = tg_doc["subscription"]
-                                daily_lim  = SUBSCRIPTION_PLANS.get(sub_plan, {}).get("daily_limit", 0)
-                                used_today = tg_doc.get("subscription_used_today", 0)
-                                today_str  = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                                last_reset = tg_doc.get("subscription_reset_date", "")
-                                if last_reset != today_str:
-                                    used_today = 0  # new day
-                                if daily_lim == 0 or used_today < daily_lim:
-                                    # Use subscription
-                                    await loop.run_in_executor(
-                                        None, lambda: self.db.db.users.update_one(
-                                            {"user_id": effective_uid},
-                                            {"$inc": {"subscription_used_today": 1, "total_searches": 1},
-                                             "$set": {"subscription_reset_date": today_str,
-                                                      "last_seen": datetime.now(timezone.utc).isoformat()}}
-                                        )
-                                    )
-                                    used_subscription = True
-                                    logger.info(f"🔍 Client Search (subscription): {search_type} - {query} (Account: {account_id_key}, TG: {effective_uid})")
-                                else:
-                                    return web.json_response(
-                                        APIResponseFormatter.error(f"Daily limit reached ({used_today}/{daily_lim}). Resets tomorrow.", "DAILY_LIMIT"),
-                                        status=403
-                                    )
-                        except Exception as _se:
-                            logger.warning(f"Subscription check error: {_se}")
-
-                if not used_subscription:
-                    # Check account's own subscription (set via /approve_client)
-                    acc_sub = account_doc.get("subscription")
-                    acc_sub_expiry = account_doc.get("subscription_expiry")
-                    if acc_sub and acc_sub_expiry:
-                        try:
-                            acc_expiry_dt = datetime.fromisoformat(acc_sub_expiry)
-                            if acc_expiry_dt > datetime.now(timezone.utc):
-                                acc_daily_lim = SUBSCRIPTION_PLANS.get(acc_sub, {}).get("daily_limit", 0)
-                                acc_used_today = account_doc.get("subscription_used_today", 0)
-                                today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                                last_reset = account_doc.get("subscription_reset_date", "")
-                                if last_reset != today_str:
-                                    acc_used_today = 0
-                                if acc_daily_lim == 0 or acc_used_today < acc_daily_lim:
-                                    await loop.run_in_executor(
-                                        None, lambda: self.db.db.accounts.update_one(
-                                            {"account_id": account_id_key},
-                                            {"$inc": {"subscription_used_today": 1, "total_searches": 1},
-                                             "$set": {"subscription_reset_date": today_str,
-                                                      "last_seen": datetime.now(timezone.utc).isoformat()}}
-                                        )
-                                    )
-                                    used_subscription = True
-                                    logger.info(f"🔍 Client Search (acct-subscription): {search_type} - {query} (Account: {account_id_key})")
-                                else:
-                                    return web.json_response(
-                                        APIResponseFormatter.error(
-                                            f"Daily limit reached ({acc_used_today}/{acc_daily_lim}). Resets tomorrow.",
-                                            "DAILY_LIMIT"
-                                        ),
-                                        status=403
-                                    )
-                        except Exception as _ase:
-                            logger.warning(f"Account subscription check error: {_ase}")
-
-                if not used_subscription:
-                    # Fall back to credits
-                    credits_left = account_doc.get("searches_remaining", 0)
-                    if credits_left <= 0:
-                        return web.json_response(
-                            APIResponseFormatter.error(
-                                "No credits remaining. Use option 7 (Buy Credits) to purchase more.",
-                                "INSUFFICIENT_CREDITS"
-                            ),
-                            status=403
-                        )
-                    await loop.run_in_executor(
-                        None, lambda: self.db.db.accounts.update_one(
-                            {"account_id": account_id_key},
-                            {"$inc": {"searches_remaining": -1, "total_searches": 1},
-                             "$set": {"last_seen": datetime.now(timezone.utc).isoformat()}}
-                        )
-                    )
-                    logger.info(f"🔍 Client Search (credits): {search_type} - {query} (Account: {account_id_key}, Credits left: {credits_left-1})")
-
-                result = await self.search_engine.perform_search(search_type, query, effective_uid)
-            else:
-                # Regular TG-linked API key user
-                user_doc = await self.db.get_user(user_id)
-                if not user_doc:
-                    return web.json_response(
-                        APIResponseFormatter.error("User not found", "USER_NOT_FOUND"),
-                        status=404
-                    )
-                if user_doc.get("is_banned"):
-                    return web.json_response(
-                        APIResponseFormatter.error("Account banned", "ACCOUNT_BANNED"),
-                        status=403
-                    )
-                if not user_doc.get("has_api_access"):
-                    return web.json_response(
-                        APIResponseFormatter.error("API access not enabled for this account", "API_ACCESS_DENIED"),
-                        status=403
-                    )
-                api_expiry = user_doc.get("api_expiry")
-                if api_expiry:
-                    expiry_date = datetime.fromisoformat(api_expiry)
-                    if expiry_date < datetime.now(timezone.utc):
-                        return web.json_response(
-                            APIResponseFormatter.error("API access expired", "API_ACCESS_EXPIRED"),
-                            status=403
-                        )
-                logger.info(f"🔍 API Search: {search_type} - {query} (User: {user_id}, API: {api_info['api_key'][:8]}...)")
-                result = await self.search_engine.perform_search(search_type, query, user_id)
-            
-            # Record API request
-            await self.db.api_db.record_api_request(
-                api_info["api_key"], 
-                f"/api/v1/search/{search_type}", 
-                result["success"]
-            )
-            
             if result["success"]:
-                # Update user search count (only for real TG users; client users already deducted above)
-                if user_id != 0:
-                    await self.db.update_searches(user_id, search_type, query, True)
-                
-                # Format response
                 if search_type == "leak":
-                    # Special handling for leak search
-                    api_result = APIResponseFormatter.format_leak_result(
-                        result.get("files", []),
-                        query
-                    )
+                    api_result = APIResponseFormatter.format_leak_result(result.get("files", []), query)
                 else:
-                    # Regular search
                     api_result = APIResponseFormatter.format_search_result(
-                        result.get("result", ""),
-                        search_type,
-                        query,
-                        result.get("source", "Unknown")
+                        result.get("result", ""), search_type, query, result.get("source", "Unknown")
                     )
-                
                 response_data = APIResponseFormatter.success(api_result, "Search completed")
-                
-                # Include raw content for non-leak searches
                 if search_type != "leak" and result.get("has_file") and result.get("content"):
                     response_data["data"]["raw_content"] = result["content"]
-                
+                logger.info(f"🔍 IntelGrid Search: {search_type} — {query}")
                 return web.json_response(response_data)
             else:
-                if user_id != 0:
-                    await self.db.update_searches(user_id, search_type, query, False)
                 return web.json_response(
                     APIResponseFormatter.error(result.get("error", "Search failed"), "SEARCH_FAILED"),
                     status=404
                 )
-            
+
         except json.JSONDecodeError:
-            return web.json_response(
-                APIResponseFormatter.error("Invalid JSON", "INVALID_JSON"),
-                status=400
-            )
+            return web.json_response(APIResponseFormatter.error("Invalid JSON", "INVALID_JSON"), status=400)
         except Exception as e:
             logger.error(f"❌ API search error: {e}")
             return web.json_response(
-                APIResponseFormatter.error("Internal server error", "INTERNAL_ERROR"),
-                status=500
-            )
-    
-    async def handle_batch_search(self, request: web.Request) -> web.Response:
-        """Handle batch search API request"""
-        try:
-            # Authenticate
-            auth_result, api_info, error = await self.authenticate_request(request)
-            if not auth_result:
-                return web.json_response(
-                    APIResponseFormatter.error(error, "AUTH_FAILED"),
-                    status=401
-                )
-            
-            # Parse request data
-            data = await request.json()
-            searches = data.get("searches", [])
-            
-            if not searches or not isinstance(searches, list):
-                return web.json_response(
-                    APIResponseFormatter.error("Searches array required", "INVALID_REQUEST"),
-                    status=400
-                )
-            
-            if len(searches) > 10:  # Limit batch size
-                return web.json_response(
-                    APIResponseFormatter.error("Maximum 10 searches per batch", "BATCH_LIMIT_EXCEEDED"),
-                    status=400
-                )
-            
-            user_id = api_info["user_id"]
-            user_doc = await self.db.get_user(user_id)
-            
-            if not user_doc:
-                return web.json_response(
-                    APIResponseFormatter.error("User not found", "USER_NOT_FOUND"),
-                    status=404
-                )
-            
-            # Check if user is banned
-            if user_doc.get('is_banned'):
-                return web.json_response(
-                    APIResponseFormatter.error("Account banned", "ACCOUNT_BANNED"),
-                    status=403
-                )
-            
-            # Check if user has API access
-            if not user_doc.get('has_api_access'):
-                return web.json_response(
-                    APIResponseFormatter.error("API access not enabled for this account", "API_ACCESS_DENIED"),
-                    status=403
-                )
-            
-            # Check API access expiry
-            api_expiry = user_doc.get('api_expiry')
-            if api_expiry:
-                expiry_date = datetime.fromisoformat(api_expiry)
-                if expiry_date < datetime.now(timezone.utc):
-                    return web.json_response(
-                        APIResponseFormatter.error("API access expired", "API_ACCESS_EXPIRED"),
-                        status=403
-                    )
-            
-            # Calculate total cost for limited plans
-            if not api_info.get("unlimited", False):
-                total_cost = 0
-                for search in searches:
-                    search_type = search.get("type")
-                    if search_type in API_COMMANDS:
-                        total_cost += API_COMMANDS[search_type].get("cost", 1)
-                
-                if api_info.get("requests_remaining", 0) < total_cost:
-                    return web.json_response(
-                        APIResponseFormatter.error(f"Insufficient API requests. Required: {total_cost}, Available: {api_info.get('requests_remaining', 0)}", "INSUFFICIENT_API_REQUESTS"),
-                        status=402
-                    )
-            
-            logger.info(f"🔍 API Batch Search: {len(searches)} queries (User: {user_id})")
-            
-            # Perform batch searches
-            results = []
-            successful_searches = 0
-            
-            for search in searches:
-                search_type = search.get("type")
-                query = search.get("query", "").strip()
-                
-                if not query or search_type not in SEARCH_COMMANDS:
-                    results.append({
-                        "type": search_type,
-                        "query": query,
-                        "success": False,
-                        "error": "Invalid search type or query"
-                    })
-                    continue
-                
-                # Validate query
-                cmd = SEARCH_COMMANDS[search_type]
-                validation = cmd.get("validation")
-                if validation and not re.match(validation, query):
-                    results.append({
-                        "type": search_type,
-                        "query": query,
-                        "success": False,
-                        "error": f"Invalid format. Example: {cmd['example']}"
-                    })
-                    continue
-                
-                # Perform individual search
-                result = await self.search_engine.perform_search(search_type, query, user_id)
-                
-                if result["success"]:
-                    successful_searches += 1
-                    await self.db.update_searches(user_id, search_type, query, True)
-                    
-                    # Format result
-                    if search_type == "leak":
-                        formatted = APIResponseFormatter.format_leak_result(
-                            result.get("files", []),
-                            query
-                        )
-                    else:
-                        formatted = APIResponseFormatter.format_search_result(
-                            result.get("result", ""),
-                            search_type,
-                            query,
-                            result.get("source", "Unknown")
-                        )
-                    
-                    results.append({
-                        "type": search_type,
-                        "query": query,
-                        "success": True,
-                        "data": formatted
-                    })
-                else:
-                    await self.db.update_searches(user_id, search_type, query, False)
-                    results.append({
-                        "type": search_type,
-                        "query": query,
-                        "success": False,
-                        "error": result.get("error", "Search failed")
-                    })
-            
-            # Record API request
-            await self.db.api_db.record_api_request(
-                api_info["api_key"], 
-                "/api/v1/search/batch", 
-                successful_searches > 0
-            )
-            
-            response_data = {
-                "total_searches": len(searches),
-                "successful": successful_searches,
-                "failed": len(searches) - successful_searches,
-                "results": results,
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
-            
-            return web.json_response(APIResponseFormatter.success(response_data, "Batch search completed"))
-            
-        except json.JSONDecodeError:
-            return web.json_response(
-                APIResponseFormatter.error("Invalid JSON", "INVALID_JSON"),
-                status=400
-            )
-        except Exception as e:
-            logger.error(f"❌ API batch search error: {e}")
-            return web.json_response(
-                APIResponseFormatter.error("Internal server error", "INTERNAL_ERROR"),
-                status=500
-            )
-    
-    async def handle_status_request(self, request: web.Request) -> web.Response:
-        """Handle status API request"""
-        try:
-            # Authenticate
-            auth_result, api_info, error = await self.authenticate_request(request)
-            if not auth_result:
-                return web.json_response(
-                    APIResponseFormatter.error(error, "AUTH_FAILED"),
-                    status=401
-                )
-            
-            # Get API key info
-            api_key = api_info["api_key"]
-            
-            # Get user info
-            user_id = api_info["user_id"]
-            user_doc = await self.db.get_user(user_id)
-            
-            status_data = {
-                "api_key": api_key[:8] + "..." + api_key[-4:],  # Mask API key
-                "plan": api_info.get("plan_id", "unknown"),
-                "created_at": api_info.get("created_at"),
-                "expires_at": api_info.get("expires_at"),
-                "is_active": api_info.get("is_active", True),
-                "requests": {
-                    "total": api_info.get("total_requests", 0),
-                    "used": api_info.get("requests_used", 0),
-                    "remaining": api_info.get("requests_remaining", 999999) if api_info.get("unlimited") else api_info.get("requests_remaining", 0)
-                },
-                "limits": {
-                    "rate_limit": api_info.get("rate_limit", 10),
-                    "concurrent_limit": api_info.get("concurrent_limit", 1)
-                },
-                "unlimited": api_info.get("unlimited", False),
-                "user": {
-                    "id": user_id,
-                    "username": user_doc.get("username") if user_doc else None,
-                    "has_api_access": user_doc.get("has_api_access", False) if user_doc else False,
-                    "api_plan": user_doc.get("api_plan") if user_doc else None,
-                    "api_expiry": user_doc.get("api_expiry") if user_doc else None
-                },
-                "server": {
-                    "status": "online",
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "version": "2.0.0",
-                    "base_url": config.API_BASE_URL
-                }
-            }
-            
-            # Record API request (status endpoint doesn't count against limit)
-            await self.db.api_db.record_api_request(api_key, "/api/v1/status", True)
-            
-            return web.json_response(APIResponseFormatter.success(status_data, "API status retrieved"))
-            
-        except Exception as e:
-            logger.error(f"❌ API status error: {e}")
-            return web.json_response(
-                APIResponseFormatter.error("Internal server error", "INTERNAL_ERROR"),
-                status=500
-            )
-    
-    async def handle_balance_request(self, request: web.Request) -> web.Response:
-        """Handle balance API request — supports both TG-linked and client-only keys."""
-        try:
-            auth_result, api_info, error = await self.authenticate_request(request)
-            if not auth_result:
-                return web.json_response(
-                    APIResponseFormatter.error(error, "AUTH_FAILED"), status=401
-                )
-
-            loop = asyncio.get_running_loop()
-            user_id      = api_info.get("user_id", 0)
-            account_id_k = api_info.get("account_id", "")
-
-            credits      = 0
-            plan         = "None"
-            valid_until  = "—"
-            daily_used   = 0
-            daily_limit  = 0
-            total_searches = 0
-            subscription = None
-
-            if user_id == 0 and account_id_k:
-                # Client-script account — read from accounts collection
-                acc = await loop.run_in_executor(
-                    None, lambda: self.db.db.accounts.find_one({"account_id": account_id_k})
-                )
-                if not acc:
-                    return web.json_response(
-                        APIResponseFormatter.error("Account not found", "USER_NOT_FOUND"), status=404
-                    )
-                credits        = acc.get("searches_remaining", 0)
-                subscription   = acc.get("subscription")
-                valid_until    = acc.get("subscription_expiry") or "—"
-                total_searches = acc.get("total_searches", 0)
-
-                if subscription and valid_until != "—":
-                    # Check if account subscription is still valid
-                    try:
-                        exp_dt = datetime.fromisoformat(valid_until)
-                        if exp_dt > datetime.now(timezone.utc):
-                            plan = subscription
-                            daily_used = acc.get("subscription_used_today", 0)
-                            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                            if acc.get("subscription_reset_date", "") != today_str:
-                                daily_used = 0
-                            daily_limit = SUBSCRIPTION_PLANS.get(subscription, {}).get("daily_limit", 0)
-                        else:
-                            subscription = None  # expired
-                            plan = "None"
-                    except Exception:
-                        plan = subscription or "None"
-                else:
-                    plan = "None"
-
-                # Also check if linked TG user has subscription (if account has none)
-                if not subscription:
-                    linked = acc.get("linked_tg_ids", [])
-                    if linked:
-                        tg_doc = await self.db.get_user(linked[0])
-                        if tg_doc and tg_doc.get("subscription"):
-                            try:
-                                tg_exp = datetime.fromisoformat(tg_doc.get("subscription_expiry", ""))
-                                if tg_exp > datetime.now(timezone.utc):
-                                    plan        = tg_doc.get("subscription", "None")
-                                    valid_until = tg_doc.get("subscription_expiry") or "—"
-                                    today_str   = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                                    daily_used  = tg_doc.get("subscription_used_today", 0)
-                                    if tg_doc.get("subscription_reset_date", "") != today_str:
-                                        daily_used = 0
-                                    sub_plan_name = tg_doc.get("subscription", "")
-                                    daily_limit = SUBSCRIPTION_PLANS.get(sub_plan_name, {}).get("daily_limit", 0)
-                                    # Also show TG credits if higher
-                                    credits = max(credits, tg_doc.get("searches_remaining", 0))
-                            except Exception:
-                                pass
-            else:
-                user_doc = await self.db.get_user(user_id)
-                if not user_doc:
-                    return web.json_response(
-                        APIResponseFormatter.error("User not found", "USER_NOT_FOUND"), status=404
-                    )
-                credits        = user_doc.get("searches_remaining", 0)
-                subscription   = user_doc.get("subscription")
-                valid_until    = user_doc.get("subscription_expiry") or "—"
-                daily_used     = user_doc.get("subscription_used_today", 0)
-                total_searches = user_doc.get("total_searches", 0)
-                plan           = subscription or "None"
-
-            balance_data = {
-                "credits":       credits,
-                "plan":          plan,
-                "valid_until":   valid_until,
-                "daily_used":    daily_used,
-                "daily_limit":   daily_limit,
-                "total_searches": total_searches,
-                "timestamp":     datetime.now(timezone.utc).isoformat()
-            }
-
-            await self.db.api_db.record_api_request(api_info["api_key"], "/api/v1/balance", True)
-            return web.json_response(APIResponseFormatter.success(balance_data, "Balance retrieved"))
-
-        except Exception as e:
-            logger.error(f"❌ API balance error: {e}")
-            return web.json_response(
                 APIResponseFormatter.error("Internal server error", "INTERNAL_ERROR"), status=500
             )
-    
-    async def handle_usage_request(self, request: web.Request) -> web.Response:
-        """Handle usage API request"""
+
+    async def handle_batch_search(self, request: web.Request) -> web.Response:
+        """Handle batch search. Max 10 queries per call."""
         try:
-            # Authenticate
-            auth_result, api_info, error = await self.authenticate_request(request)
-            if not auth_result:
+            if not self._check_secret(request):
                 return web.json_response(
-                    APIResponseFormatter.error(error, "AUTH_FAILED"),
-                    status=401
+                    APIResponseFormatter.error("Invalid or missing API key", "AUTH_FAILED"), status=401
                 )
-            
-            # Get API usage stats
-            api_key = api_info["api_key"]
-            
-            # Get recent API logs
-            recent_logs = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: list(self.db.db.api_logs.find(
-                    {"api_key": api_key},
-                    {"timestamp": 1, "endpoint": 1, "success": 1}
-                ).sort("timestamp", -1).limit(50))
-            )
-            
-            # Get daily usage for last 7 days
-            seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
-            
-            pipeline = [
-                {"$match": {"api_key": api_key, "timestamp": {"$gte": seven_days_ago.isoformat()}}},
-                {"$group": {
-                    "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": {"$toDate": "$timestamp"}}},
-                    "count": {"$sum": 1},
-                    "success": {"$sum": {"$cond": [{"$eq": ["$success", True]}, 1, 0]}},
-                    "failed": {"$sum": {"$cond": [{"$eq": ["$success", False]}, 1, 0]}}
-                }},
-                {"$sort": {"_id": 1}}
-            ]
-            
-            daily_usage = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: list(self.db.db.api_logs.aggregate(pipeline))
-            )
-            
-            # Get endpoint usage
-            endpoint_pipeline = [
-                {"$match": {"api_key": api_key}},
-                {"$group": {
-                    "_id": "$endpoint",
-                    "count": {"$sum": 1},
-                    "success": {"$sum": {"$cond": [{"$eq": ["$success", True]}, 1, 0]}},
-                    "failed": {"$sum": {"$cond": [{"$eq": ["$success", False]}, 1, 0]}}
-                }},
-                {"$sort": {"count": -1}},
-                {"$limit": 10}
-            ]
-            
-            endpoint_usage = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: list(self.db.db.api_logs.aggregate(endpoint_pipeline))
-            )
-            
-            usage_data = {
-                "api_key": api_key[:8] + "..." + api_key[-4:],
-                "plan": api_info.get("plan_id", "unknown"),
-                "total_requests": api_info.get("total_requests", 0),
-                "requests_used": api_info.get("requests_used", 0),
-                "requests_remaining": api_info.get("requests_remaining", 999999) if api_info.get("unlimited") else api_info.get("requests_remaining", 0),
-                "created_at": api_info.get("created_at"),
-                "expires_at": api_info.get("expires_at"),
-                "daily_usage": daily_usage,
-                "endpoint_usage": endpoint_usage,
-                "recent_activity": recent_logs,
+
+            data = await request.json()
+            searches = data.get("searches", [])
+            if not searches or not isinstance(searches, list):
+                return web.json_response(
+                    APIResponseFormatter.error("searches array required", "INVALID_REQUEST"), status=400
+                )
+            if len(searches) > 10:
+                return web.json_response(
+                    APIResponseFormatter.error("Maximum 10 searches per batch", "BATCH_LIMIT_EXCEEDED"), status=400
+                )
+
+            results = []
+            successful = 0
+            for search in searches:
+                stype = search.get("type")
+                query = search.get("query", "").strip()
+                cmd = SEARCH_COMMANDS.get(stype, {})
+                if not query or not cmd:
+                    results.append({"type": stype, "query": query, "success": False, "error": "Invalid type or query"})
+                    continue
+                validation = cmd.get("validation")
+                if validation and not re.match(validation, query):
+                    results.append({"type": stype, "query": query, "success": False, "error": f"Invalid format. Example: {cmd['example']}"})
+                    continue
+                result = await self.search_engine.perform_search(stype, query, 0)
+                if result["success"]:
+                    successful += 1
+                    if stype == "leak":
+                        formatted = APIResponseFormatter.format_leak_result(result.get("files", []), query)
+                    else:
+                        formatted = APIResponseFormatter.format_search_result(
+                            result.get("result", ""), stype, query, result.get("source", "Unknown")
+                        )
+                    results.append({"type": stype, "query": query, "success": True, "data": formatted})
+                else:
+                    results.append({"type": stype, "query": query, "success": False, "error": result.get("error", "Search failed")})
+
+            logger.info(f"🔍 IntelGrid Batch: {successful}/{len(searches)} succeeded")
+            return web.json_response(APIResponseFormatter.success({
+                "total_searches": len(searches), "successful": successful,
+                "failed": len(searches) - successful, "results": results,
                 "timestamp": datetime.now(timezone.utc).isoformat()
-            }
-            
-            # Record API request
-            await self.db.api_db.record_api_request(api_key, "/api/v1/usage", True)
-            
-            return web.json_response(APIResponseFormatter.success(usage_data, "Usage data retrieved"))
-            
+            }, "Batch search completed"))
+
+        except json.JSONDecodeError:
+            return web.json_response(APIResponseFormatter.error("Invalid JSON", "INVALID_JSON"), status=400)
         except Exception as e:
-            logger.error(f"❌ API usage error: {e}")
-            return web.json_response(
-                APIResponseFormatter.error("Internal server error", "INTERNAL_ERROR"),
-                status=500
-            )
+            logger.error(f"❌ API batch error: {e}")
+            return web.json_response(APIResponseFormatter.error("Internal server error", "INTERNAL_ERROR"), status=500)
+
+    async def handle_status_request(self, request: web.Request) -> web.Response:
+        """Return server status."""
+        try:
+            if not self._check_secret(request):
+                return web.json_response(APIResponseFormatter.error("Auth failed", "AUTH_FAILED"), status=401)
+            return web.json_response(APIResponseFormatter.success({
+                "status": "online",
+                "version": "2.0.0",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "base_url": config.API_BASE_URL
+            }, "Server online"))
+        except Exception as e:
+            return web.json_response(APIResponseFormatter.error("Internal error", "INTERNAL_ERROR"), status=500)
+
+    async def handle_balance_request(self, request: web.Request) -> web.Response:
+        """Balance is managed by IntelGrid — relay just confirms it's alive."""
+        try:
+            if not self._check_secret(request):
+                return web.json_response(APIResponseFormatter.error("Auth failed", "AUTH_FAILED"), status=401)
+            return web.json_response(APIResponseFormatter.success(
+                {"message": "Credits are managed by IntelGrid", "relay_status": "online"},
+                "OK"
+            ))
+        except Exception as e:
+            return web.json_response(APIResponseFormatter.error("Internal error", "INTERNAL_ERROR"), status=500)
+
+    async def handle_usage_request(self, request: web.Request) -> web.Response:
+        """Usage stats are managed by IntelGrid."""
+        try:
+            if not self._check_secret(request):
+                return web.json_response(APIResponseFormatter.error("Auth failed", "AUTH_FAILED"), status=401)
+            return web.json_response(APIResponseFormatter.success(
+                {"message": "Usage tracking is managed by IntelGrid"},
+                "OK"
+            ))
+        except Exception as e:
+            return web.json_response(APIResponseFormatter.error("Internal error", "INTERNAL_ERROR"), status=500)
+
 
 # ================== API SERVER ==================
 
@@ -5820,323 +5302,6 @@ async def start_web_server():
             }
             return web.json_response(docs)
         
-        # Account management endpoints (no Telegram needed)
-        async def register_endpoint(request):
-            """Register new account with username + password (no Telegram needed)"""
-            try:
-                # Guard: DB must be connected
-                if db_manager.db is None:
-                    return web.json_response(
-                        {"status": "error", "message": "Server starting up — please retry in a few seconds"},
-                        status=503
-                    )
-
-                data = await request.json()
-                username = (data.get("username") or "").strip()
-                password = (data.get("password") or "").strip()
-
-                if not username or not password:
-                    return web.json_response(
-                        {"status": "error", "message": "username and password required"},
-                        status=400
-                    )
-                if len(password) < 6:
-                    return web.json_response(
-                        {"status": "error", "message": "password must be at least 6 characters"},
-                        status=400
-                    )
-                if len(username) < 3:
-                    return web.json_response(
-                        {"status": "error", "message": "username must be at least 3 characters"},
-                        status=400
-                    )
-
-                # Check if username already taken
-                loop = asyncio.get_running_loop()
-                existing = await loop.run_in_executor(
-                    None, lambda: db_manager.db.accounts.find_one({"username": username.lower()})
-                )
-                if existing:
-                    return web.json_response(
-                        {"status": "error", "message": "Username already taken"},
-                        status=409
-                    )
-
-                # Create account
-                account_id = f"DB{secrets.token_hex(4).upper()}"
-                pwd_hash = hashlib.sha256(password.encode()).hexdigest()
-
-                new_account = {
-                    "account_id": account_id,
-                    "username": username.lower(),
-                    "display_name": username,
-                    "password_hash": pwd_hash,
-                    "linked_tg_ids": [],
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "searches_remaining": config.NEW_USER_CREDITS,
-                    "subscription": None,
-                    "subscription_expiry": None,
-                    "is_banned": False,
-                    "total_searches": 0,
-                    "source": "client_registration"
-                }
-
-                await loop.run_in_executor(
-                    None, lambda: db_manager.db.accounts.insert_one(new_account)
-                )
-
-                # Notify admin
-                try:
-                    await bot_client.send_message(
-                        config.ADMIN_USER_ID,
-                        f"🆕 **NEW CLIENT REGISTRATION**\n\n"
-                        f"👤 Username: `{username}`\n"
-                        f"🆔 Account ID: `{account_id}`\n"
-                        f"🕐 Time: {datetime.now().strftime('%d %b %Y %H:%M')}\n"
-                        f"📱 Source: Terminal Client (No Telegram)\n\n"
-                        f"Starting credits: {config.NEW_USER_CREDITS}",
-                        parse_mode="md"
-                    )
-                except Exception:
-                    pass
-
-                return web.json_response({
-                    "status": "success",
-                    "message": "Account created successfully",
-                    "account_id": account_id,
-                    "credits": config.NEW_USER_CREDITS,
-                    "info": "Save your Account ID and password securely. "
-                            "Contact @darkboxesAdmin or yadiify@gmail.com for support."
-                })
-
-            except Exception as e:
-                logger.error(f"Register endpoint error: {e}")
-                return web.json_response(
-                    {"status": "error", "message": "Server error"},
-                    status=500
-                )
-
-        async def auth_login_endpoint(request):
-            """Authenticate with account_id/username + password, return API key"""
-            try:
-                # Guard: DB must be connected
-                if db_manager.db is None:
-                    return web.json_response(
-                        {"status": "error", "message": "Server starting up — please retry in a few seconds"},
-                        status=503
-                    )
-
-                data = await request.json()
-                identifier = (data.get("account_id") or data.get("username") or "").strip()
-                password = (data.get("password") or "").strip()
-
-                if not identifier or not password:
-                    return web.json_response(
-                        {"status": "error", "message": "account_id/username and password required"},
-                        status=400
-                    )
-
-                loop = asyncio.get_running_loop()
-                pwd_hash = hashlib.sha256(password.encode()).hexdigest()
-
-                # Find by account_id or username
-                if identifier.upper().startswith("DB"):
-                    account = await loop.run_in_executor(
-                        None, lambda: db_manager.db.accounts.find_one(
-                            {"account_id": identifier.upper()}
-                        )
-                    )
-                else:
-                    account = await loop.run_in_executor(
-                        None, lambda: db_manager.db.accounts.find_one(
-                            {"username": identifier.lower()}
-                        )
-                    )
-
-                if not account:
-                    return web.json_response(
-                        {"status": "error", "message": "Account not found"},
-                        status=404
-                    )
-
-                if account.get("password_hash") != pwd_hash:
-                    return web.json_response(
-                        {"status": "error", "message": "Incorrect password"},
-                        status=401
-                    )
-
-                if account.get("is_banned"):
-                    return web.json_response(
-                        {"status": "error", "message": "Account banned. Contact @darkboxesAdmin"},
-                        status=403
-                    )
-
-                account_id = account.get("account_id")
-                credits = account.get("searches_remaining", 0)
-                sub = account.get("subscription") or None
-                sub_expiry = account.get("subscription_expiry") or None
-
-                # If account has no subscription, check linked TG user subscription
-                if not sub:
-                    linked_ids = account.get("linked_tg_ids", [])
-                    if linked_ids:
-                        tg_doc_login = await loop.run_in_executor(
-                            None, lambda: db_manager.db.users.find_one({"user_id": linked_ids[0]})
-                        )
-                        if tg_doc_login and tg_doc_login.get("subscription"):
-                            try:
-                                exp = datetime.fromisoformat(tg_doc_login.get("subscription_expiry", ""))
-                                if exp > datetime.now(timezone.utc):
-                                    sub = tg_doc_login.get("subscription")
-                                    sub_expiry = tg_doc_login.get("subscription_expiry")
-                                    # Also add TG user credits to display
-                                    credits = max(credits, tg_doc_login.get("searches_remaining", 0))
-                            except Exception:
-                                pass
-
-                sub_display = sub or "None"
-
-                # Generate or retrieve API key for this account
-                existing_key = await loop.run_in_executor(
-                    None, lambda: db_manager.db.api_keys.find_one(
-                        {"account_id": account_id, "is_active": True}
-                    )
-                )
-
-                if existing_key:
-                    api_key = existing_key.get("api_key")
-                    # Ensure existing key has requests_remaining (old keys may lack it)
-                    if existing_key.get("requests_remaining") is None and not existing_key.get("unlimited", False):
-                        await loop.run_in_executor(
-                            None, lambda: db_manager.db.api_keys.update_one(
-                                {"api_key": api_key},
-                                {"$set": {"requests_remaining": 99999, "unlimited": True}}
-                            )
-                        )
-                else:
-                    # Create a session API key — unlimited so requests_remaining check never blocks it
-                    api_key = APIKeyManager.generate_api_key(0, f"client_{account_id}")
-                    client_token = APIKeyManager.generate_client_token(api_key)
-                    expiry = datetime.now(timezone.utc) + timedelta(days=365)
-                    key_doc = {
-                        "api_key":            api_key,
-                        "client_token":       client_token,
-                        "account_id":         account_id,
-                        "user_id":            0,
-                        "plan_id":            "client",
-                        "created_at":         datetime.now(timezone.utc).isoformat(),
-                        "expires_at":         expiry.isoformat(),
-                        "is_active":          True,
-                        "total_requests":     0,
-                        "requests_used":      0,
-                        "requests_remaining": 99999,
-                        "unlimited":          True,
-                    }
-                    await loop.run_in_executor(
-                        None, lambda: db_manager.db.api_keys.insert_one(key_doc)
-                    )
-
-                # Update last_seen
-                await loop.run_in_executor(
-                    None, lambda: db_manager.db.accounts.update_one(
-                        {"account_id": account_id},
-                        {"$set": {"last_seen": datetime.now(timezone.utc).isoformat()}}
-                    )
-                )
-
-                return web.json_response({
-                    "status": "success",
-                    "account_id": account_id,
-                    "api_key": api_key,
-                    "credits": credits,
-                    "plan": sub_display,
-                    "message": "Login successful"
-                })
-
-            except Exception as e:
-                import traceback
-                logger.error(f"Auth login endpoint error: {e}\n{traceback.format_exc()}")
-                return web.json_response(
-                    {"status": "error", "message": f"Server error: {e}"},
-                    status=500
-                )
-
-        # ── UTR Payment endpoint ──────────────────────────────────────
-        async def utr_payment_endpoint(request):
-            """Client submits UTR after paying. Admin gets notified to approve."""
-            try:
-                if db_manager.db is None:
-                    return web.json_response({"status":"error","message":"Server starting up"}, status=503)
-
-                # Auth
-                api_key_hdr = request.headers.get("X-API-Key") or request.query.get("api_key")
-                if not api_key_hdr:
-                    return web.json_response({"status":"error","message":"API key required"}, status=401)
-                key_doc = await asyncio.get_running_loop().run_in_executor(
-                    None, lambda: db_manager.db.api_keys.find_one({"api_key": api_key_hdr, "is_active": True})
-                )
-                if not key_doc:
-                    return web.json_response({"status":"error","message":"Invalid API key"}, status=401)
-
-                data        = await request.json()
-                utr         = (data.get("utr") or "").strip()
-                plan_key    = (data.get("plan") or "").strip()
-                account_id_p = key_doc.get("account_id", "")
-
-                if not utr or len(utr) < 6:
-                    return web.json_response({"status":"error","message":"Invalid UTR number"}, status=400)
-                if not plan_key:
-                    return web.json_response({"status":"error","message":"Plan selection required"}, status=400)
-
-                # Store payment request
-                loop = asyncio.get_running_loop()
-                pay_doc = {
-                    "account_id":  account_id_p,
-                    "utr":         utr,
-                    "plan":        plan_key,
-                    "status":      "pending",
-                    "submitted_at": datetime.now(timezone.utc).isoformat(),
-                    "source":      "client_script"
-                }
-                await loop.run_in_executor(
-                    None, lambda: db_manager.db.client_payments.insert_one(pay_doc)
-                )
-
-                # Notify admin on Telegram
-                plan_labels = {
-                    "credits_1":      "🔹 Single Search — 1 search — ₹10",
-                    "credits_12":     "⚡ Starter Pack — 12 searches — ₹100",
-                    "credits_20":     "💎 Value Pack — 20 searches — ₹150",
-                }
-                plan_label = plan_labels.get(plan_key, plan_key)
-                try:
-                    await bot_client.send_message(
-                        config.ADMIN_USER_ID,
-                        f"💳 **NEW CLIENT PAYMENT**\n\n"
-                        f"🆔 Account: `{account_id_p}`\n"
-                        f"📦 Plan: {plan_label}\n"
-                        f"🔢 UTR: `{utr}`\n"
-                        f"🕐 Time: {datetime.now().strftime('%d %b %Y %H:%M')}\n\n"
-                        f"Reply `/approve_client {account_id_p} {plan_key}` to activate\n"
-                        f"or `/reject_client {account_id_p}` to reject.",
-                        parse_mode="md"
-                    )
-                except Exception as _ne:
-                    logger.error(f"Admin notify failed: {_ne}")
-
-                return web.json_response({
-                    "status":  "success",
-                    "message": "Payment submitted! Admin will verify and activate within 5–15 minutes.",
-                    "utr":     utr,
-                    "plan":    plan_label
-                })
-            except Exception as e:
-                logger.error(f"UTR payment endpoint error: {e}")
-                return web.json_response({"status":"error","message":f"Server error: {e}"}, status=500)
-
-        app.router.add_post('/api/v1/payment/utr', utr_payment_endpoint)
-        app.router.add_post('/api/v1/auth/register', register_endpoint)
-        app.router.add_post('/api/v1/auth/login', auth_login_endpoint)
 
         # Add API routes
         app.router.add_post('/api/v1/search/phone', phone_search)
