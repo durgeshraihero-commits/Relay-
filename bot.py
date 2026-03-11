@@ -249,7 +249,7 @@ class APIResponseFormatter:
 GROUP_PRIORITIES = {
     "primary": {
         "name": "⚡ Premium Database",
-        "identifier": "EncoreXgroup",
+        "identifier": "StarkSpaceX",
         "timeout": 30,
         "weight": 10,
         "enabled": True,
@@ -257,7 +257,7 @@ GROUP_PRIORITIES = {
     },
     "secondary": {
         "name": "🌐 IntelX Network",
-        "identifier": "+sOYPdIX89lg1ZDdl",
+        "identifier": -1003320004816,
         "timeout": 35,
         "weight": 7,
         "enabled": True,
@@ -265,7 +265,7 @@ GROUP_PRIORITIES = {
     },
     "tertiary": {
         "name": "🔍 Basic Database",
-        "identifier": -1003320004816,
+        "identifier": "EncoreXgroup",
         "timeout": 40,
         "weight": 5,
         "enabled": True,
