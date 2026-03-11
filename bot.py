@@ -554,33 +554,95 @@ class PremiumFormatter:
 class TextProcessor:
     @staticmethod
     def is_processing_message(text: str) -> bool:
-        """Check if message indicates processing/waiting (not a result)"""
+        """Check if a message is a placeholder/confirmation, NOT a real result.
+
+        Returns True  → ignore this message, wait for the real reply
+        Returns False → this is actual data, use it
+        """
         if not text:
             return True
-        
-        text_lower = text.lower()
 
-        # ── EARLY EXIT: ENCOREX OSINT result messages are NEVER processing ──
-        # These contain actual data — never treat them as "still processing"
+        text_lower = text.lower()
+        text_stripped = text.strip()
+
+        # ── EARLY EXIT: known result signals — never treat as processing ──────
         result_signals = [
             '"success":', '"status":', '"result":', '"results":',
             '"country":', '"number":', '"mobile":', '"name":',
             '"address":', '"aadhar":', '"msg":', '"_powered_by":',
+            '"email":', '"alt":', '"fname":', '"circle":',
             '✅ success', '║  ✅', 'encorex osint', 'encorex intelx',
             '╔═══《', '╘══《',
+            # real formatted result dividers from premium groups
+            '━━━', '═══', '▬▬▬', '◆', '●',
         ]
         if any(sig in text_lower for sig in result_signals):
             return False
 
-        # Only match standalone processing keywords (not inside JSON strings)
-        # Use word-boundary-like checks to avoid matching JSON field names
-        standalone_keywords = [
+        # Real results have JSON-like key:value pairs (3 or more)
+        if text_lower.count('": ') >= 2 or text_lower.count(': ') >= 4:
+            return False
+
+        # Real results are usually long
+        if len(text_stripped) > 300:
+            return False
+
+        # ── SHORT messages that look like real data rows ───────────────────────
+        # e.g. "Name: John
+Phone: 99393..." — these are results, not placeholders
+        real_data_patterns = [
+            'name:', 'mobile:', 'phone:', 'address:', 'father:', 'dob:',
+            'operator:', 'circle:', 'state:', 'district:', 'email:',
+            'owner:', 'vehicle:', 'company:', 'gst:', 'ifsc:', 'bank:',
+        ]
+        if any(p in text_lower for p in real_data_patterns):
+            return False
+
+        # ── PLACEHOLDER / CONFIRMATION keywords ───────────────────────────────
+        # These are messages the group bot sends BEFORE the real result arrives.
+        # The actual result comes as the NEXT message (or an edit).
+        placeholder_keywords = [
+            # Generic waiting
             'please wait', 'hold on', 'wait a moment', 'in progress',
             'gathering data', 'working on it', 'please wait while',
             'getting information', 'fetching data', 'creating report',
+            # Searching confirmations (the exact messages from your groups)
+            'searching...', 'searching mobile', '🔍 searching',
+            '🔎 searching', 'search initiated', 'looking up',
+            'processing...', 'processing your', '⏳ processing',
+            'please wait...', '⏳ please wait',
+            # Scanning / tunnel placeholders
+            'scanning...', 'scanning mobile', '🛰️', 'encorex tunnel',
+            'intelx tunnel',
+            # "Powered by" without data — these are footer-only ack messages
+            'powered by darkboxes',
+            # DarkBoxes own confirmation messages
+            '⚡ powered by darkboxes intelligence system',
+            '🔐 developed by',
+            '⚠️ confidential',
+            # Common bot ack patterns
+            'query received', 'request received', 'fetching result',
+            'fetch initiated', 'initiated search', 'initiating',
+            'standby', 'one moment', 'just a moment',
         ]
-        
-        return any(keyword in text_lower for keyword in standalone_keywords)
+        if any(kw in text_lower for kw in placeholder_keywords):
+            return True
+
+        # ── Short messages with only emoji + query text are confirmations ──────
+        # e.g. "🔍 **Searching...**
+`9939353201`"
+        # Heuristic: if the query itself appears AND the message is short AND
+        # has no colon-separated data pairs, treat as placeholder.
+        # (Caller passes query via search_info — we do a rough length check here)
+        if len(text_stripped) < 200 and text_stripped.count('\n') <= 5:
+            # If the ONLY content is a header + the query echoed back, it's a placeholder
+            lines = [l.strip() for l in text_stripped.split('\n') if l.strip()]
+            non_empty = [l for l in lines if l and not l.startswith('─') and not l.startswith('━')]
+            # 3 or fewer meaningful lines and none contain ':' data pairs → placeholder
+            if len(non_empty) <= 4 and not any(':' in l and len(l) > 10 for l in non_empty):
+                return True
+
+        return False
     
     @staticmethod
     def is_file_generated_message(text: str) -> bool:
@@ -4045,7 +4107,7 @@ class SearchEngine:
                 asyncio.create_task(self._auto_cleanup(search_id))
                 
                 # ── Scanning-aware wait loop ──────────────────────────────────
-                SCAN_EXTRA_WAIT = 20   # seconds to wait after a scanning msg
+                SCAN_EXTRA_WAIT = 30   # seconds to wait after a placeholder/scanning msg
                 POLL_INTERVAL   = 0.3  # polling granularity (seconds)
 
                 deadline = time.time() + group["timeout"]
@@ -4585,7 +4647,11 @@ class SearchEngine:
                 return
             
             if TextProcessor.is_processing_message(text):
-                logger.info(f"⏳ Processing message, waiting...")
+                logger.info(f"⏳ Placeholder/confirmation message detected — waiting for real result: {text[:80]!r}")
+                # Extend the search deadline so we don't time out while waiting
+                if not search_info.get("pending_encorex"):
+                    search_info["pending_encorex"]    = True
+                    search_info["encorex_wait_start"] = time.time()
                 return
             
             # ── No-info / result decision ─────────────────────────────────
@@ -4684,6 +4750,18 @@ class SearchEngine:
         if has_scanning and (has_service or has_node):
             logger.info("🚫 scanning + service/node pattern — scanning message")
             return True
+
+        # ── Also catch DarkBoxes own "Searching..." confirmation messages ──────
+        # e.g. "🔍 **Searching...**\n`9939353201`\n⚡ Powered by DarkBoxes..."
+        if ('searching...' in text_lower or '🔍 **searching' in text_lower
+                or '🔎 searching' in text_lower or 'powered by darkboxes' in text_lower):
+            # Only if there's no real data present
+            if not any(ind in text_lower for ind in [
+                '"success":', '"number":', '"name":', '"address":',
+                'name:', 'mobile:', 'operator:', 'circle:', '✅'
+            ]):
+                logger.info("🚫 DarkBoxes searching confirmation — placeholder message")
+                return True
 
         return False
     
