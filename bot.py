@@ -588,8 +588,8 @@ class TextProcessor:
             return False
 
         # ── SHORT messages that look like real data rows ───────────────────────
-        # e.g. "Name: John
-Phone: 99393..." — these are results, not placeholders
+        # e.g. "Name: John / Phone: 99393..." - these are results, not placeholders
+
         real_data_patterns = [
             'name:', 'mobile:', 'phone:', 'address:', 'father:', 'dob:',
             'operator:', 'circle:', 'state:', 'district:', 'email:',
@@ -629,11 +629,11 @@ Phone: 99393..." — these are results, not placeholders
             return True
 
         # ── Short messages with only emoji + query text are confirmations ──────
-        # e.g. "🔍 **Searching...**
-`9939353201`"
-        # Heuristic: if the query itself appears AND the message is short AND
+        # Short messages with only emoji + query text are confirmations
+        # e.g. searching confirmation messages - these are placeholders
+
         # has no colon-separated data pairs, treat as placeholder.
-        # (Caller passes query via search_info — we do a rough length check here)
+        # (Caller passes query via search_info - we do a rough length check here)
         if len(text_stripped) < 200 and text_stripped.count('\n') <= 5:
             # If the ONLY content is a header + the query echoed back, it's a placeholder
             lines = [l.strip() for l in text_stripped.split('\n') if l.strip()]
