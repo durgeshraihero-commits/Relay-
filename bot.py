@@ -28,6 +28,7 @@ from io import BytesIO
 try:
     from aiohttp import web
     from telethon import TelegramClient, events, Button
+    from telethon.sessions import StringSession
     from telethon.tl.types import PeerChannel, PeerUser, Channel, User, MessageMediaDocument
     from telethon.tl.functions.channels import GetParticipantRequest
     from pymongo import MongoClient
@@ -50,12 +51,14 @@ class BotConfig:
     BOT_API_HASH: str = os.getenv("API_HASH", "").strip()
     BOT_TOKEN: str = os.getenv("BOT_TOKEN", "").strip()
     BOT_SESSION_FILE: str = "bot_session.session"
+    BOT_SESSION_STRING: str = os.getenv("BOT_SESSION_STRING", "").strip()
     
     # User account (for relaying)
     USER_API_ID: int = int(os.getenv("USER_API_ID", "0"))
     USER_API_HASH: str = os.getenv("API_HASH", "").strip()
     USER_PHONE: str = os.getenv("USER_PHONE", "").strip()
     USER_SESSION_FILE: str = "relay_session.session"
+    USER_SESSION_STRING: str = os.getenv("USER_SESSION_STRING", "").strip()
     
     # Admin and mandatory channel
     ADMIN_USER_ID: int = int(os.getenv("ADMIN_USER_ID", "0"))
@@ -5449,9 +5452,12 @@ async def start_web_server():
 
 # ================== GLOBAL VARIABLES ==================
 
-bot_client = TelegramClient(config.BOT_SESSION_FILE, config.BOT_API_ID, config.BOT_API_HASH)
+# Use StringSession if env var is set (required on Render/cloud — prevents AuthKeyDuplicatedError)
+_bot_session  = StringSession(config.BOT_SESSION_STRING)  if config.BOT_SESSION_STRING  else config.BOT_SESSION_FILE
+_user_session = StringSession(config.USER_SESSION_STRING) if config.USER_SESSION_STRING else config.USER_SESSION_FILE
+bot_client = TelegramClient(_bot_session, config.BOT_API_ID, config.BOT_API_HASH)
 user_client = (
-    TelegramClient(config.USER_SESSION_FILE, config.USER_API_ID, config.USER_API_HASH)
+    TelegramClient(_user_session, config.USER_API_ID, config.USER_API_HASH)
     if USE_USER_ACCOUNT
     else bot_client
 )
