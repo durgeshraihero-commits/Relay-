@@ -354,7 +354,7 @@ SEARCH_COMMANDS = {
     "family": {
         "name": "👨‍👩‍👧‍👦 Family Network",
         "description": "🏠 **Complete Family Analysis**\n\n🔸 **Input:** 12-digit Aadhar number\n🔸 **Returns:** All family members • Names • Relations • Ages • Addresses\n🔸 **Sources:** UIDAI database • Family registration • Government records\n🔸 **Depth:** 3-level relationship mapping",
-        "commands": ["/familyinfo", "/family"],
+        "commands": ["/family", "/familyinfo"],
         "example": "123456789012",
         "validation": r"^\d{12}$",
         "cost": 1,
@@ -376,7 +376,7 @@ SEARCH_COMMANDS = {
     "vehicle": {
         "name": "🚗 Vehicle Intelligence",
         "description": "🏎️ **Complete Vehicle & Owner Analysis**\n\n🔸 **Input:** Vehicle number (Format: UP53CZ3391)\n🔸 **Returns:** Vehicle details • Owner information • Mobile number • Address • Registration history • Insurance\n🔸 **Premium Feature:** Celebrity vehicle database access\n🔸 **Real-time:** Current registration status",
-        "commands": ["/vehicle", "/vnum", "/rc"],
+        "commands": ["/vnum", "/vehicle", "/rto"],
         "example": "UP53CZ3391",
         "validation": r"^[A-Z]{2}\d{2}[A-Z]{1,2}\d{4}$",
         "cost": 2,
