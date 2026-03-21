@@ -260,7 +260,7 @@ GROUP_PRIORITIES = {
     },
     "secondary": {
         "name": "🌐 IntelX Network",
-        "identifier": -1003320004816,
+        "identifier": "LegendInfoChattingGc",
         "timeout": 35,
         "weight": 7,
         "enabled": True,
@@ -268,7 +268,7 @@ GROUP_PRIORITIES = {
     },
     "tertiary": {
         "name": "🔍 Basic Database",
-        "identifier": "EncoreXgroup",
+        "identifier": "RAJIV_THE_LOOKUP_HUB",
         "timeout": 40,
         "weight": 5,
         "enabled": True,
