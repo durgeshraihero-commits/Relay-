@@ -300,7 +300,7 @@ GROUP_PRIORITIES = {
             "phone":   "/num",
             "family":  "/family",   # <-- example: this group uses /familyinfo
             "aadhar":  "/aadhar",
-            "vehicle": "/vnum",
+            "vehicle": "/vehicle",
             "telegram": "/tg",
             "imei":    "/imei",
             "gst":     "/gstin",
@@ -5395,24 +5395,21 @@ async def start_web_server():
         return
     _WEB_SERVER_STARTED = True
 
-    # ── Wait until DB is connected AND api_handler is initialized ──
-    waited = 0
-    while db_manager.db is None or api_handler is None:
-        if waited == 0:
-            logger.info("⏳ Web server waiting for DB + api_handler...")
-        await asyncio.sleep(1)
-        waited += 1
-        if waited > 60:
-            logger.error("❌ Web server: still not ready after 60s — starting anyway")
-            break
-    if waited > 0:
-        logger.info(f"✅ Web server: ready after {waited}s wait")
+
+    # ── Bind port IMMEDIATELY so Render port-scan passes ────────────
+    # API routes that need DB are added after DB connects (background task below).
+
 
     app = web.Application()
 
     # Health check endpoint
     async def health_check(request):
-        return web.json_response({"status": "ok", "timestamp": datetime.now().isoformat()})
+        db_ok = db_manager.db is not None
+        return web.json_response({
+            "status": "ok" if db_ok else "starting",
+            "db": "connected" if db_ok else "initialising",
+            "timestamp": datetime.now().isoformat()
+        })
 
     # Basic routes
     app.router.add_get('/health', health_check)
@@ -5428,47 +5425,56 @@ async def start_web_server():
         # because we waited above.
         
         # Search endpoints — use GLOBAL api_handler (set after DB+search_engine init)
+        # Guard: return 503 if still initialising (port is bound but DB not ready yet)
+        async def _api_guard(request, search_type):
+            if api_handler is None or db_manager.db is None:
+                return web.json_response(
+                    {"status": "error", "message": "Service is starting up, retry in a few seconds."},
+                    status=503
+                )
+            return await api_handler.handle_search_request(request, search_type)
+
         async def phone_search(request):
-            return await api_handler.handle_search_request(request, "phone")
+            return await _api_guard(request, "phone")
 
         async def family_search(request):
-            return await api_handler.handle_search_request(request, "family")
+            return await _api_guard(request, "family")
 
         async def aadhar_search(request):
-            return await api_handler.handle_search_request(request, "aadhar")
+            return await _api_guard(request, "aadhar")
 
         async def vehicle_search(request):
-            return await api_handler.handle_search_request(request, "vehicle")
+            return await _api_guard(request, "vehicle")
 
         async def upi_search(request):
-            return await api_handler.handle_search_request(request, "upi")
+            return await _api_guard(request, "upi")
 
         async def email_search(request):
-            return await api_handler.handle_search_request(request, "email")
+            return await _api_guard(request, "email")
 
         async def telegram_search(request):
-            return await api_handler.handle_search_request(request, "telegram")
+            return await _api_guard(request, "telegram")
 
         async def imei_search(request):
-            return await api_handler.handle_search_request(request, "imei")
+            return await _api_guard(request, "imei")
 
         async def gst_search(request):
-            return await api_handler.handle_search_request(request, "gst")
+            return await _api_guard(request, "gst")
 
         async def instagram_search(request):
-            return await api_handler.handle_search_request(request, "insta")
+            return await _api_guard(request, "insta")
 
         async def pakistan_search(request):
-            return await api_handler.handle_search_request(request, "pak")
+            return await _api_guard(request, "pak")
 
         async def ip_search(request):
-            return await api_handler.handle_search_request(request, "ip")
+            return await _api_guard(request, "ip")
 
         async def ifsc_search(request):
-            return await api_handler.handle_search_request(request, "ifsc")
+            return await _api_guard(request, "ifsc")
 
         async def leak_search(request):
-            return await api_handler.handle_search_request(request, "leak")
+            return await _api_guard(request, "leak")
         
         # Utility endpoints
         async def batch_search(request):
