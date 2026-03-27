@@ -301,7 +301,7 @@ GROUP_PRIORITIES = {
             "family":  "/family",   # <-- example: this group uses /familyinfo
             "aadhar":  "/aadhar",
             "vehicle": "/vnum",
-            "telegram": "/tg",
+            "telegram": "/telegram",
             "imei":    "/imei",
             "gst":     "/gstin",
             "insta":   "/insta",
