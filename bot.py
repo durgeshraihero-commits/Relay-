@@ -253,35 +253,76 @@ GROUP_PRIORITIES = {
     "primary": {
         "name": "⚡ Premium Database",
         "identifier": "StarkSpaceX",
-        "timeout": 30,
+        "timeout": 25,
         "weight": 10,
         "enabled": True,
-        "entity": None
+        "entity": None,
+        # Per-group command override: maps search_type → command string.
+        # If a search_type is NOT listed here, the first entry from
+        # SEARCH_COMMANDS[type]["commands"] is used as fallback.
+        "commands": {
+            "phone":   "/num",
+            "family":  "/family",
+            "aadhar":  "/aadhar",
+            "vehicle": "/vnum",
+            "telegram": "/tg",
+            "imei":    "/imei",
+            "gst":     "/gst",
+            "insta":   "/insta",
+            "ip":      "/ip",
+            "ifsc":    "/ifsc",
+        }
     },
     "secondary": {
         "name": "🌐 IntelX Network",
-        "identifier": "LegendInfoChattingGc",
-        "timeout": 35,
+        "identifier": "EncoreXgroup",
+        "timeout": 25,
         "weight": 7,
         "enabled": True,
-        "entity": None
+        "entity": None,
+        # This group uses different command names — configure per your group's bot
+        "commands": {
+            "phone":   "/num",
+            "family":  "/familyinfo",   # <-- example: this group uses /familyinfo
+            "aadhar":  "/aadhar",
+            "vehicle": "/vehicle",
+            "telegram": "/telegram",
+            "imei":    "/device",
+            "gst":     "/gstin",
+            "insta":   "/instagram",
+            "ip":      "/location",
+            "ifsc":    "/bank",
+        }
     },
     "tertiary": {
         "name": "🔍 Basic Database",
         "identifier": "RAJIV_THE_LOOKUP_HUB",
-        "timeout": 40,
+        "timeout": 25,
         "weight": 5,
         "enabled": True,
-        "entity": None
+        "entity": None,
+        "commands": {
+            "phone":   "/num",
+            "family":  "/family",
+            "aadhar":  "/aadhar",
+            "vehicle": "/rto",
+            "telegram": "/tg",
+            "imei":    "/imei",
+            "gst":     "/gst",
+            "insta":   "/insta",
+            "ip":      "/geo",
+            "ifsc":    "/ifsc",
+        }
     },
     "advanced": {
         "name": "🚀 Advanced OSINT Engine",
         "identifier": "RAJIV_THE_LOOKUP_HUB",  # Replace with your advanced group ID
-        "timeout": 25,
+        "timeout": 20,
         "weight": 15,
         "enabled": True,
         "entity": None,
-        "leak_command": "/leak"
+        "leak_command": "/leak",
+        "commands": {}
     }
 }
 
@@ -4044,162 +4085,247 @@ class SearchEngine:
         await asyncio.sleep(180)
         self.active_searches.pop(search_id, None)
 
+    def _get_group_command(self, group: Dict, search_type: str) -> str:
+        """Get the correct command for a specific group and search type.
+        
+        Each group can define its own command map so e.g. one group accepts
+        /family and another accepts /familyinfo for the same search type.
+        Falls back to the first entry in SEARCH_COMMANDS[type]["commands"].
+        """
+        # Per-group override takes priority
+        group_cmds = group.get("commands", {})
+        if search_type in group_cmds:
+            return group_cmds[search_type]
+        # Fallback: use the global SEARCH_COMMANDS list (index by weight rank)
+        cmd_list = SEARCH_COMMANDS.get(search_type, {}).get("commands", ["/search"])
+        return cmd_list[0] if cmd_list else "/search"
+
+    async def _search_single_group(
+        self,
+        group: Dict,
+        search_type: str,
+        query: str,
+        user_id: int,
+        is_multi_collect: bool,
+        multi_collect_window: float,
+    ) -> Dict:
+        """Send a search command to ONE group and wait for its reply.
+
+        Returns a result dict with at least {"success": bool}.
+        This coroutine is meant to be run in parallel with other groups via
+        asyncio.gather / asyncio.wait so all groups are queried simultaneously.
+        """
+        SCAN_EXTRA_WAIT = 20   # seconds grace after a scanning placeholder
+        POLL_INTERVAL   = 0.25
+
+        command = self._get_group_command(group, search_type)
+
+        try:
+            sent_msg = await user_client.send_message(group["entity"], f"{command} {query}")
+        except Exception as e:
+            logger.error(f"❌ Could not send to {group['name']}: {e}")
+            self._update_group_performance(group["name"], False)
+            return {"success": False}
+
+        search_id = f"{user_id}_{int(time.time() * 1000)}_{group['name']}"
+        future = asyncio.get_running_loop().create_future()
+        collect_until = time.time() + multi_collect_window if is_multi_collect else None
+
+        self.active_searches[search_id] = {
+            "user_id":       user_id,
+            "future":        future,
+            "start_time":    time.time(),
+            "group":         group,
+            "message_id":    sent_msg.id,
+            "search_type":   search_type,
+            "query":         query,
+            "chat_id":       group["entity"].id if hasattr(group["entity"], "id") else str(group["entity"]),
+            "expecting_file": False,
+            "file_wait_start": None,
+            "priority":      group["weight"],
+            "multi_collect": is_multi_collect,
+            "candidates":    [],
+            "collect_until": collect_until,
+        }
+        # Safety net: always remove this entry after 120s regardless
+        asyncio.create_task(self._auto_cleanup(search_id))
+
+        deadline  = time.time() + group["timeout"]
+        result    = None
+        timed_out = False
+
+        while True:
+            now = time.time()
+
+            # ── Multi-collect: once window closes, pick best candidate ────────
+            if is_multi_collect:
+                search_ref = self.active_searches.get(search_id, {})
+                collect_end = search_ref.get("collect_until", 0)
+                if collect_end and now >= collect_end:
+                    candidates = search_ref.get("candidates", [])
+                    if candidates:
+                        candidates.sort(key=lambda x: x[0], reverse=True)
+                        best_score, best_result = candidates[0]
+                        logger.info(
+                            f"🏆 [{group['name']}] Multi-collect: best of "
+                            f"{len(candidates)} (score={best_score})"
+                        )
+                        result = best_result
+                    else:
+                        timed_out = True
+                    break
+
+            # ── Normal: future resolved by handle_incoming_message ────────────
+            if future.done():
+                try:
+                    result = future.result()
+                except Exception:
+                    result = {"success": False}
+                break
+
+            # ── Extend deadline when a scanning placeholder was seen ──────────
+            search_ref = self.active_searches.get(search_id, {})
+            if search_ref.get("pending_encorex"):
+                scan_start = search_ref.get("encorex_wait_start", now)
+                extended   = scan_start + SCAN_EXTRA_WAIT
+                if extended > deadline:
+                    logger.info(f"⏳ [{group['name']}] Scanning — extending deadline by {SCAN_EXTRA_WAIT}s")
+                    deadline = extended
+
+            if now >= deadline:
+                timed_out = True
+                break
+
+            await asyncio.sleep(POLL_INTERVAL)
+
+        # Cleanup this slot
+        entry = self.active_searches.pop(search_id, None)
+        if entry and not future.done():
+            future.cancel()
+
+        if timed_out or result is None:
+            self._update_group_performance(group["name"], False)
+            logger.info(f"⏱️ [{group['name']}] Timed out")
+            return {"success": False}
+
+        if result.get("success"):
+            self._update_group_performance(group["name"], True)
+            logger.info(f"✅ [{group['name']}] Valid result")
+        else:
+            self._update_group_performance(group["name"], False)
+            logger.info(f"⚠️ [{group['name']}] No data found")
+
+        return result
+
     async def perform_search(self, search_type: str, query: str, user_id: int) -> Dict:
-        """Perform cascading search with priority management"""
+        """Perform PARALLEL search across all groups simultaneously.
+
+        All enabled groups receive the query at the same time.
+        • For normal search types: first group to return a valid result wins;
+          remaining group tasks are cancelled immediately.
+        • For multi-collect types: all groups collect for MULTI_COLLECT_WINDOW
+          seconds, then the richest result across all groups is returned.
+        """
         # Guard against runaway memory growth
         if len(self.active_searches) > 200:
-            logger.warning("⚠️ active_searches exceeded 200 — clearing to prevent memory leak")
+            logger.warning("⚠️ active_searches > 200 — clearing to prevent memory leak")
             self.active_searches.clear()
 
-        logger.info(f"🚀 Starting {search_type} search: {query} (User: {user_id})")
-        
-        # Check for leak search
+        logger.info(f"🚀 Parallel {search_type} search: {query!r} (user={user_id})")
+
         if search_type == "leak":
             return await self.perform_leak_search(query, user_id)
 
-        # Determine if this type should use multi-collect (wait 8s, pick best result)
         is_multi_collect = search_type in MULTI_COLLECT_TYPES
-        
-        # Get command priority
-        cmd = SEARCH_COMMANDS.get(search_type, {})
+        cmd              = SEARCH_COMMANDS.get(search_type, {})
         preferred_priority = cmd.get("priority", "primary")
-        
-        # Sort groups based on command priority and performance
-        sorted_groups = self._get_priority_groups(preferred_priority)
-        
-        for group in sorted_groups:
-            if not group.get("entity"):
-                logger.warning(f"⚠️ Group {group['name']} not resolved")
-                continue
-            
-            # Get appropriate command for this group
-            command_list = cmd["commands"]
-            primary_command = command_list[0]
-            
-            logger.info(f"📤 Trying {group['name']}: {primary_command} {query}")
-            
-            try:
-                # Send message to group
-                sent_msg = await user_client.send_message(group["entity"], f"{primary_command} {query}")
-                
-                # Create search tracking
-                search_id = f"{user_id}_{int(time.time())}_{group['name']}"
-                future = asyncio.get_running_loop().create_future()
 
-                # ── Multi-collect fields ──────────────────────────────────────
-                collect_until = time.time() + MULTI_COLLECT_WINDOW if is_multi_collect else None
-                
-                self.active_searches[search_id] = {
-                    "user_id": user_id,
-                    "future": future,
-                    "start_time": time.time(),
-                    "group": group,
-                    "message_id": sent_msg.id,
-                    "search_type": search_type,
-                    "query": query,
-                    "chat_id": group["entity"].id if hasattr(group["entity"], 'id') else str(group["entity"]),
-                    "expecting_file": False,
-                    "file_wait_start": None,
-                    "priority": group["weight"],
-                    # ── multi-collect fields ──────────────────────────────────
-                    "multi_collect": is_multi_collect,
-                    "candidates": [],           # list of (score, result_dict) tuples
-                    "collect_until": collect_until,
-                }
-                # Auto-cleanup this search after 180 seconds to prevent memory leaks
-                asyncio.create_task(self._auto_cleanup(search_id))
-                
-                # ── Scanning-aware wait loop ──────────────────────────────────
-                SCAN_EXTRA_WAIT = 30   # seconds to wait after a placeholder/scanning msg
-                POLL_INTERVAL   = 0.3  # polling granularity (seconds)
+        # Collect all valid (unique) groups
+        groups = self._get_priority_groups(preferred_priority)
+        if not groups:
+            logger.error("❌ No groups available for search")
+            return {
+                "success": False,
+                "error": "❌ No search networks are currently available. Please try again later."
+            }
 
-                deadline = time.time() + group["timeout"]
-                result   = None
-                timed_out = False
+        logger.info(f"📡 Querying {len(groups)} group(s) in parallel: {[g['name'] for g in groups]}")
 
-                while True:
-                    now = time.time()
+        # ── PARALLEL execution ────────────────────────────────────────────────
+        if is_multi_collect:
+            # Multi-collect: run all groups for the full window, then pick best
+            tasks = [
+                asyncio.create_task(
+                    self._search_single_group(
+                        group, search_type, query, user_id,
+                        is_multi_collect=True,
+                        multi_collect_window=MULTI_COLLECT_WINDOW,
+                    )
+                )
+                for group in groups
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
 
-                    # ── Multi-collect: check if collection window has closed ───
-                    if is_multi_collect:
-                        search_ref = self.active_searches.get(search_id, {})
-                        candidates = search_ref.get("candidates", [])
-                        collect_end = search_ref.get("collect_until", 0)
-
-                        if collect_end and now >= collect_end:
-                            # Window closed — pick best candidate
-                            if candidates:
-                                # Sort descending by score, pick richest
-                                candidates.sort(key=lambda x: x[0], reverse=True)
-                                best_score, best_result = candidates[0]
-                                logger.info(
-                                    f"🏆 Multi-collect: picked best of {len(candidates)} "
-                                    f"candidates (score={best_score}) for {search_type}/{query}"
-                                )
-                                result = best_result
-                            else:
-                                # No candidates came in — fall through to timeout / next group
-                                timed_out = True
-                            break
-
-                    # Check if future resolved (set by _process_search_response for non-multi-collect)
-                    if future.done():
-                        try:
-                            result = future.result()
-                        except Exception:
-                            result = {"success": False}
-                        break
-
-                    # Dynamically extend deadline when scanning placeholder seen
-                    search_ref = self.active_searches.get(search_id, {})
-                    if search_ref.get("pending_encorex"):
-                        scan_start = search_ref.get("encorex_wait_start", now)
-                        extended   = scan_start + SCAN_EXTRA_WAIT
-                        if extended > deadline:
-                            logger.info(
-                                f"⏳ Scanning detected in {group['name']} — "
-                                f"extending deadline {SCAN_EXTRA_WAIT}s from scan start"
-                            )
-                            deadline = extended
-
-                    if now >= deadline:
-                        timed_out = True
-                        break
-
-                    await asyncio.sleep(POLL_INTERVAL)
-
-                # Clean up if still registered
-                if search_id in self.active_searches:
-                    if not future.done():
-                        future.cancel()
-                    self.active_searches.pop(search_id, None)
-
-                if timed_out or result is None:
-                    self._update_group_performance(group["name"], False)
-                    logger.info(f"⏱️ Timeout from {group['name']}")
+            # Collect valid results and pick the richest one
+            all_candidates: List[Tuple[int, Dict]] = []
+            for r in results:
+                if isinstance(r, Exception) or not isinstance(r, dict):
                     continue
+                if r.get("success"):
+                    text = r.get("result") or r.get("content") or ""
+                    score = _score_result_richness(text)
+                    all_candidates.append((score, r))
 
-                if result["success"]:
-                    self._update_group_performance(group["name"], True)
-                    logger.info(f"✅ Success from {group['name']}")
-                    return result
-                else:
-                    self._update_group_performance(group["name"], False)
-                    logger.info(f"⚠️ No result from {group['name']}, trying next...")
-                    continue
-                    
-            except Exception as e:
-                logger.error(f"❌ Error sending to {group['name']}: {e}")
-                self._update_group_performance(group["name"], False)
-                continue
-        
-        # All groups failed - notify admin and return user-friendly message
-        logger.warning(f"⚠️ All groups failed for query: {query} (User: {user_id})")
+            if all_candidates:
+                all_candidates.sort(key=lambda x: x[0], reverse=True)
+                best_score, best = all_candidates[0]
+                logger.info(f"🏆 Multi-collect winner: score={best_score} from {len(all_candidates)} valid result(s)")
+                return best
+
+        else:
+            # Normal search: race all groups — first valid result wins
+            tasks = {
+                asyncio.create_task(
+                    self._search_single_group(
+                        group, search_type, query, user_id,
+                        is_multi_collect=False,
+                        multi_collect_window=0,
+                    )
+                ): group
+                for group in groups
+            }
+
+            pending = set(tasks.keys())
+            while pending:
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    try:
+                        result = task.result()
+                    except Exception as e:
+                        logger.error(f"❌ Task error: {e}")
+                        continue
+                    if result.get("success"):
+                        # Cancel remaining group tasks — we have our answer
+                        for p in pending:
+                            p.cancel()
+                        logger.info(f"🎯 Got valid result, cancelled {len(pending)} remaining task(s)")
+                        return result
+
+        # All groups returned no data
+        logger.warning(f"⚠️ All groups returned no data for {search_type}:{query} (user={user_id})")
         await self._notify_admin(user_id, search_type, query)
-        
+
         return {
             "success": False,
-            "error": f"🔍 **NO RESULTS FOUND**\n\nQuery: `{query}`\n\n⚠️ **Your query has been logged and escalated to our admin team.**\n\n📝 **What happens next:**\n• Admin will manually review your query\n• If data is available, you'll receive results within 24 hours\n• Check back or wait for admin response\n\n💎 **For faster results, try:**\n• Ensure correct format (e.g., phone with country code: 917204764637)\n• Use different search types\n• Upgrade to Premium for priority processing\n\nContact {config.ADMIN_CONTACT} for assistance."
+            "error": (
+                f"🔍 **NO RESULTS FOUND**\n\nQuery: `{query}`\n\n"
+                f"⚠️ Your query has been escalated to the admin team.\n\n"
+                f"📝 **Next steps:**\n"
+                f"• Admin will manually review your query\n"
+                f"• If data is available you'll receive it within 24 hours\n\n"
+                f"💎 **Tips:** Verify the query format • Try a different search type\n\n"
+                f"Contact {config.ADMIN_CONTACT} for assistance."
+            )
         }
     
     async def perform_leak_search(self, query: str, user_id: int) -> Dict:
@@ -9372,979 +9498,4 @@ async def submit_api_payment_callback(event):
 
 async def cleanup_expired_searches():
     """Clean up expired searches"""
-    while True:
-        try:
-            await asyncio.sleep(30)
-            
-            current_time = time.time()
-            expired = []
-            
-            for search_id, search_info in list(search_engine.active_searches.items()):
-                timeout = search_info["group"]["timeout"]
-                
-                if search_info.get("expecting_file") and search_info.get("file_wait_start"):
-                    file_wait_time = current_time - search_info["file_wait_start"]
-                    if file_wait_time < 20:
-                        continue
-                    else:
-                        logger.info(f"⏱️ File wait timeout in {search_info['group']['name']}")
-                
-                if current_time - search_info["start_time"] > timeout:
-                    expired.append(search_id)
-            
-            for search_id in expired:
-                search_info = search_engine.active_searches.pop(search_id, None)
-                if search_info:
-                    future = search_info["future"]
-                    if not future.done():
-                        try:
-                            future.set_result({"success": False})
-                        except:
-                            pass
-                    logger.info(f"🧹 Cleaned expired search: {search_id}")
-            
-            if expired:
-                logger.info(f"🧹 Cleaned {len(expired)} expired searches")
-                
-        except Exception as e:
-            logger.error(f"❌ Error in cleanup: {e}")
-
-
-# ================== ACCOUNT SYSTEM — LOGIN & LINKING ==================
-
-def generate_password(length: int = 10) -> str:
-    """Generate a random alphanumeric password"""
-    import string
-    alphabet = string.ascii_letters + string.digits
-    return ''.join(secrets.choice(alphabet) for _ in range(length))
-
-
-async def get_or_create_db_account(user_id: int, username: str, first_name: str) -> dict:
-    """Return existing DB account or create a fresh one with credentials"""
-    account = await asyncio.get_running_loop().run_in_executor(
-        None, lambda: db_manager.db.accounts.find_one({"linked_tg_ids": user_id})
-    )
-    if account:
-        return account
-
-    # Create new account
-    account_id = f"DB{secrets.token_hex(4).upper()}"
-    password = generate_password(10)
-    pwd_hash = hashlib.sha256(password.encode()).hexdigest()
-
-    new_account = {
-        "account_id": account_id,
-        "password_hash": pwd_hash,
-        "plain_password_shown_once": password,   # cleared after first show
-        "linked_tg_ids": [user_id],
-        "linked_usernames": [username or ""],
-        "first_name": first_name,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "searches_remaining": 0,
-        "subscription": None,
-        "subscription_expiry": None,
-        "subscription_daily_limit": 0,
-        "subscription_used_today": 0,
-        "subscription_reset_date": "",
-        "is_banned": False,
-        "total_searches": 0
-    }
-
-    await asyncio.get_running_loop().run_in_executor(
-        None, lambda: db_manager.db.accounts.insert_one(new_account)
-    )
-
-    # Also link user doc
-    await asyncio.get_running_loop().run_in_executor(
-        None, lambda: db_manager.db.users.update_one(
-            {"user_id": user_id},
-            {"$set": {"account_id": account_id}},
-            upsert=False
-        )
-    )
-    return new_account
-
-
-@bot_client.on(events.CallbackQuery(pattern=r'^login_account$'))
-async def login_account_callback(event):
-    """Show login options"""
-    try:
-        user_id = event.sender_id
-        # Check if already linked
-        account = await asyncio.get_running_loop().run_in_executor(
-            None, lambda: db_manager.db.accounts.find_one({"linked_tg_ids": user_id})
-        )
-
-        if account:
-            acc_id = account.get("account_id", "N/A")
-            sub = account.get("subscription") or "None"
-            credits = account.get("searches_remaining", 0)
-            await event.edit(
-                f"🔐 **ACCOUNT LINKED**\n\n"
-                f"Your Telegram account is already connected to:\n"
-                f"🆔 Account ID: `{acc_id}`\n"
-                f"💰 Credits: {credits}\n"
-                f"📦 Plan: {sub}\n\n"
-                f"Use this **Account ID** and your **password** in the terminal client.\n"
-                f"If you forgot your password, contact @darkboxesAdmin.",
-                buttons=[
-                    [Button.inline("🔑 Show My Account ID", "show_account_id")],
-                    [Button.inline("« Main Menu", "main_menu")]
-                ],
-                parse_mode="md"
-            )
-        else:
-            await event.edit(
-                "🔐 **ACCOUNT SYSTEM**\n\n"
-                "Link your Telegram account with a DarkBoxes account to:\n"
-                "• Use the terminal client with the same credits\n"
-                "• Access the API with shared balance\n"
-                "• Log in from multiple devices\n\n"
-                "Choose an option:",
-                buttons=[
-                    [Button.inline("🆕 Create New Account", "create_account")],
-                    [Button.inline("🔑 Login with Existing Account", "login_existing")],
-                    [Button.inline("« Main Menu", "main_menu")]
-                ],
-                parse_mode="md"
-            )
-    except Exception as e:
-        logger.error(f"❌ login_account_callback: {e}")
-        await event.answer("❌ Error", alert=True)
-
-
-@bot_client.on(events.CallbackQuery(pattern=r'^show_account_id$'))
-async def show_account_id_callback(event):
-    """Show user's account ID"""
-    try:
-        user_id = event.sender_id
-        account = await asyncio.get_running_loop().run_in_executor(
-            None, lambda: db_manager.db.accounts.find_one({"linked_tg_ids": user_id})
-        )
-        if account:
-            acc_id = account.get("account_id", "N/A")
-            await event.answer(f"Your Account ID: {acc_id}", alert=True)
-        else:
-            await event.answer("No account linked yet.", alert=True)
-    except Exception as e:
-        logger.error(f"❌ show_account_id: {e}")
-
-
-@bot_client.on(events.CallbackQuery(pattern=r'^create_account$'))
-async def create_account_callback(event):
-    """Create a new DarkBoxes account and link Telegram"""
-    try:
-        user_id = event.sender_id
-        user = await event.get_sender()
-
-        # Check if already exists
-        existing = await asyncio.get_running_loop().run_in_executor(
-            None, lambda: db_manager.db.accounts.find_one({"linked_tg_ids": user_id})
-        )
-        if existing:
-            await event.answer("✅ Account already exists!", alert=True)
-            await login_account_callback(event)
-            return
-
-        account = await get_or_create_db_account(user_id, user.username or "", user.first_name or "User")
-        acc_id = account.get("account_id")
-        raw_pw = account.get("plain_password_shown_once", "")
-
-        # Clear the plain password from DB now that we're showing it
-        await asyncio.get_running_loop().run_in_executor(
-            None, lambda: db_manager.db.accounts.update_one(
-                {"account_id": acc_id},
-                {"$unset": {"plain_password_shown_once": ""}}
-            )
-        )
-
-        await event.edit(
-            f"✅ **ACCOUNT CREATED!**\n\n"
-            f"Save these credentials — they will **not** be shown again:\n\n"
-            f"🆔 **Account ID:** `{acc_id}`\n"
-            f"🔑 **Password:** `{raw_pw}`\n\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"📱 **Use in Bot:** Tap Login → Login with Existing Account\n"
-            f"💻 **Use in Client:** Enter Account ID + Password at login\n"
-            f"🔗 Your Telegram is already linked to this account.\n\n"
-            f"Credits & subscriptions are shared across all linked accounts.\n"
-            f"❓ Help: @darkboxesAdmin",
-            buttons=[[Button.inline("« Main Menu", "main_menu")]],
-            parse_mode="md"
-        )
-
-    except Exception as e:
-        logger.error(f"❌ create_account_callback: {e}")
-        await event.answer("❌ Error creating account", alert=True)
-
-
-@bot_client.on(events.CallbackQuery(pattern=r'^login_existing$'))
-async def login_existing_callback(event):
-    """Ask user to enter account credentials to link"""
-    try:
-        user_id = event.sender_id
-        user_states[user_id] = {"action": "enter_account_credentials"}
-        await event.edit(
-            "🔑 **LOGIN TO EXISTING ACCOUNT**\n\n"
-            "Enter your Account ID and password:\n"
-            "Format: `ACCOUNT_ID PASSWORD`\n\n"
-            "Example: `DB1A2B3C4D myPassword123`\n\n"
-            "Don't have an account yet? Go back and create one.\n"
-            "Forgot credentials? Contact @darkboxesAdmin",
-            buttons=[[Button.inline("❌ Cancel", "main_menu")]],
-            parse_mode="md"
-        )
-    except Exception as e:
-        logger.error(f"❌ login_existing_callback: {e}")
-        await event.answer("❌ Error", alert=True)
-
-
-async def handle_account_login(event):
-    """Handle account ID + password login from user text"""
-    try:
-        user_id = event.sender_id
-        text = (event.text or "").strip()
-        parts = text.split(maxsplit=1)
-
-        if len(parts) != 2:
-            await event.respond(
-                "❌ Invalid format. Use: `ACCOUNT_ID PASSWORD`\n"
-                "Example: `DB1A2B3C4D myPassword123`",
-                parse_mode="md"
-            )
-            return
-
-        acc_id, password = parts[0].strip(), parts[1].strip()
-        pwd_hash = hashlib.sha256(password.encode()).hexdigest()
-
-        account = await asyncio.get_running_loop().run_in_executor(
-            None, lambda: db_manager.db.accounts.find_one({"account_id": acc_id})
-        )
-
-        if not account:
-            await event.respond("❌ Account ID not found. Check and try again.")
-            return
-
-        if account.get("password_hash") != pwd_hash:
-            await event.respond("❌ Incorrect password. Contact @darkboxesAdmin if you forgot it.")
-            return
-
-        # Link this Telegram ID to the account
-        linked_ids = account.get("linked_tg_ids", [])
-        if user_id not in linked_ids:
-            linked_ids.append(user_id)
-            await asyncio.get_running_loop().run_in_executor(
-                None, lambda: db_manager.db.accounts.update_one(
-                    {"account_id": acc_id},
-                    {"$addToSet": {"linked_tg_ids": user_id}}
-                )
-            )
-            # Also link account_id on user doc
-            await asyncio.get_running_loop().run_in_executor(
-                None, lambda: db_manager.db.users.update_one(
-                    {"user_id": user_id},
-                    {"$set": {"account_id": acc_id}}
-                )
-            )
-
-        user_states.pop(user_id, None)
-
-        sub = account.get("subscription") or "None"
-        credits = account.get("searches_remaining", 0)
-
-        await event.respond(
-            f"✅ **LOGGED IN SUCCESSFULLY!**\n\n"
-            f"🔗 Your Telegram is now linked to account `{acc_id}`\n"
-            f"💰 Credits: {credits}\n"
-            f"📦 Plan: {sub}\n\n"
-            f"Credits and subscriptions are now shared with this account.\n"
-            f"Use /start to begin searching.",
-            parse_mode="md"
-        )
-
-    except Exception as e:
-        logger.error(f"❌ handle_account_login: {e}")
-        await event.respond("❌ Error during login. Contact @darkboxesAdmin.")
-
-
-# ================== DOWNLOAD CLIENT & CREDENTIALS CALLBACKS ==================
-
-# ================== EMBEDDED CLIENT FILES ==================
-# Client script and instructions are embedded as base64 so they
-# can be sent to users without needing any file on disk.
-
-import base64 as _b64
-from io import BytesIO as _BytesIO
-
-_CLIENT_SCRIPT_B64 = (
-    "IyEvdXNyL2Jpbi9lbnYgcHl0aG9uMwojIC0qLSBjb2Rpbmc6IHV0Zi04IC0qLQoiIiIK4pWU4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWXCuKVkSAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIOKVkQrilZEgICAgICAgICAgREFSS0JPWEVTIElOVEVMTElHRU5DRSBTWVNURU0gICAgICAgICAgICAgICAgICAgICAgICAgICDilZEK4pWRICAgICAgICAgIFByb2Zlc3Npb25hbCBUZXJtaW5hbCBDbGllbnQgdjMuMCAgICAgICAgICAgICAgICAgICAgICAg4pWRCuKVkSAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIOKVkQrilZEgICAgICAgICAgRm9yIGF1dGhvcml6ZWQgdXNlIG9ubHkuICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICDilZEK4pWRICAgICAgICAgIMKpIDIwMjUgRGFya0JveGVzIEludGVsbGlnZW5jZS4gQWxsIHJpZ2h0cyByZXNlcnZlZC4gICAg4pWRCuKVkSAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIOKVkQrilZrilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZ0KCkNvbnRhY3QgIDogQGRhcmtib3hlc0FkbWluIChUZWxlZ3JhbSkKRW1haWwgICAgOiB5YWRpaWZ5QGdtYWlsLmNvbQpDaGFubmVsICA6IEBkYXJrYm94ZXN2MQoiIiIKCmltcG9ydCBvcwppbXBvcnQgc3lzCmltcG9ydCBqc29uCmltcG9ydCB0aW1lCmltcG9ydCBoYXNobGliCmltcG9ydCBnZXRwYXNzCmltcG9ydCB0ZXh0d3JhcAppbXBvcnQgcmUKaW1wb3J0IHBsYXRmb3JtCmZyb20gZGF0ZXRpbWUgaW1wb3J0IGRhdGV0aW1lCmZyb20gdHlwaW5nIGltcG9ydCBEaWN0LCBPcHRpb25hbCwgQW55CgojIOKUgOKUgCBEZXBlbmRlbmN5IGNoZWNrIOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgAp0cnk6CiAgICBpbXBvcnQgcmVxdWVzdHMKZXhjZXB0IEltcG9ydEVycm9yOgogICAgcHJpbnQoIlxuWyFdIE1pc3NpbmcgZGVwZW5kZW5jeTogcmVxdWVzdHMiKQogICAgcHJpbnQoIiAgICBJbnN0YWxsIHdpdGg6ICBwaXAgaW5zdGFsbCByZXF1ZXN0cyIpCiAgICBwcmludCgiICAgIE9uIFRlcm11eDogICAgIHBpcCBpbnN0YWxsIHJlcXVlc3RzIikKICAgIHN5cy5leGl0KDEpCgojIOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkAojIENPTkZJR1VSQVRJT04KIyDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZAKCkFQSV9CQVNFX1VSTCA9IG9zLmdldGVudigiREFSS0JPWEVTX0FQSV9VUkwiLCAiaHR0cHM6Ly9yZWxheS13emx6Lm9ucmVuZGVyLmNvbSIpClJFUVVFU1RfVElNRU9VVCA9IDkwClNFU1NJT05fRklMRSAgICA9IG9zLnBhdGguZXhwYW5kdXNlcigifi8uZGFya2JveGVzX3Nlc3Npb24uanNvbiIpClJFU1VMVFNfRElSICAgICA9IG9zLnBhdGguZXhwYW5kdXNlcigifi9kYXJrYm94ZXNfcmVzdWx0cyIpCgpWRVJTSU9OICAgICAgICAgPSAiMy4wIgpCVUlMRF9EQVRFICAgICAgPSAiMjAyNSIKRlVMTF9OQU1FICAgICAgID0gIkRBUktCT1hFUyBJTlRFTExJR0VOQ0UgU1lTVEVNIgpTVVBQT1JUX1RHICAgICAgPSAiQGRhcmtib3hlc0FkbWluIgpTVVBQT1JUX0VNQUlMICAgPSAieWFkaWlmeUBnbWFpbC5jb20iCkNIQU5ORUwgICAgICAgICA9ICJAZGFya2JveGVzdjEiCgojIOKUgOKUgCBEZXRlY3QgbmFycm93IHRlcm1pbmFsIChUZXJtdXgtZnJpZW5kbHkpIOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgAp0cnk6CiAgICBURVJNX1dJRFRIID0gb3MuZ2V0X3Rlcm1pbmFsX3NpemUoKS5jb2x1bW5zCmV4Y2VwdCBFeGNlcHRpb246CiAgICBURVJNX1dJRFRIID0gNjAgICAgIyBzYWZlIGRlZmF1bHQgZm9yIFRlcm11eAoKTkFSUk9XID0gVEVSTV9XSURUSCA8IDcyICAgIyB1c2UgMi1saW5lIG1vZGUgd2hlbiB0ZXJtaW5hbCBpcyBuYXJyb3cKCiMg4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQCiMgQ09MT1JTCiMg4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQCgpkZWYgX3N1cHBvcnRzX2NvbG9yKCkgLT4gYm9vbDoKICAgICIiIkNoZWNrIGlmIHRlcm1pbmFsIHN1cHBvcnRzIEFOU0kgY29sb3IgY29kZXMuIiIiCiAgICBpZiBvcy5nZXRlbnYoIk5PX0NPTE9SIik6CiAgICAgICAgcmV0dXJuIEZhbHNlCiAgICBpZiBwbGF0Zm9ybS5zeXN0ZW0oKSA9PSAiV2luZG93cyI6CiAgICAgICAgcmV0dXJuIG9zLmdldGVudigiQU5TSUNPTiIpIGlzIG5vdCBOb25lCiAgICByZXR1cm4gaGFzYXR0cihzeXMuc3Rkb3V0LCAiaXNhdHR5IikgYW5kIHN5cy5zdGRvdXQuaXNhdHR5KCkKCl9VU0VfQ09MT1IgPSBfc3VwcG9ydHNfY29sb3IoKQoKY2xhc3MgQzoKICAgICIiIkNvbG9yIGNvbnN0YW50cyDigJQgYXV0by1kaXNhYmxlZCBvbiBwbGFpbiB0ZXJtaW5hbHMuIiIiCiAgICBpZiBfVVNFX0NPTE9SOgogICAgICAgIFIgICA9ICdcMDMzWzBtJyAgICAgICMgcmVzZXQKICAgICAgICBCICAgPSAnXDAzM1sxbScgICAgICAjIGJvbGQKICAgICAgICBESU0gPSAnXDAzM1sybScKICAgICAgICBVTCAgPSAnXDAzM1s0bScKCiAgICAgICAgQkxLID0gJ1wwMzNbMzg7NTsyNDBtJyAgICMgZGFyayBncmF5CiAgICAgICAgR1JOID0gJ1wwMzNbMzg7NTs0Nm0nICAgICMgYnJpZ2h0IGdyZWVuCiAgICAgICAgQ1lOID0gJ1wwMzNbMzg7NTs1MW0nICAgICMgYnJpZ2h0IGN5YW4KICAgICAgICBZTFcgPSAnXDAzM1szODs1OzIyNm0nICAgIyBicmlnaHQgeWVsbG93CiAgICAgICAgUkVEID0gJ1wwMzNbMzg7NTsxOTZtJyAgICMgYnJpZ2h0IHJlZAogICAgICAgIFdIVCA9ICdcMDMzWzk3bScKICAgICAgICBNQUcgPSAnXDAzM1szODs1OzIxM20nICAgIyBtYWdlbnRhL3BpbmsKICAgICAgICBCTFUgPSAnXDAzM1szODs1Ozc1bScgICAgIyBibHVlCgogICAgICAgIE9LICA9ICdcMDMzWzkybScKICAgICAgICBJTkYgPSAnXDAzM1s5Nm0nCiAgICAgICAgV1JOID0gJ1wwMzNbOTNtJwogICAgICAgIEVSUiA9ICdcMDMzWzkxbScKICAgIGVsc2U6CiAgICAgICAgUj1CPURJTT1VTD1CTEs9R1JOPUNZTj1ZTFc9UkVEPVdIVD1NQUc9QkxVPU9LPUlORj1XUk49RVJSID0gJycKCgojIOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkAojIERJU1BMQVkgSEVMUEVSUwojIOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkAoKZGVmIF9saW5lKGNoYXI6IHN0ciA9ICfilIAnLCB3aWR0aDogaW50ID0gTm9uZSkgLT4gc3RyOgogICAgdyA9IHdpZHRoIG9yIG1pbihURVJNX1dJRFRILCA3MCkKICAgIHJldHVybiBjaGFyICogdwoKZGVmIF9jZW50ZXIodGV4dDogc3RyLCB3aWR0aDogaW50ID0gTm9uZSkgLT4gc3RyOgogICAgdyA9IHdpZHRoIG9yIG1pbihURVJNX1dJRFRILCA3MCkKICAgIHJldHVybiB0ZXh0LmNlbnRlcih3KQoKZGVmIF9ib3hfbGluZSh0ZXh0OiBzdHIsIGNoYXI6IHN0ciA9ICfilZEnLCB3aWR0aDogaW50ID0gTm9uZSkgLT4gc3RyOgogICAgIiIiUHJpbnQgYSB0ZXh0IGluc2lkZSBhIGJveCByb3csIGZpdHRpbmcgdGhlIHRlcm1pbmFsLiIiIgogICAgdyA9ICh3aWR0aCBvciBtaW4oVEVSTV9XSURUSCwgNzApKSAtIDQKICAgIHJldHVybiBmIntjaGFyfSB7dGV4dDo8e3d9fSB7Y2hhcn0iCgpkZWYgcHJpbnRfYmFubmVyKCk6CiAgICAiIiJQcmludCB0aGUgRGFya0JveGVzIGJhbm5lciDigJQgYXV0by1hZGFwdHMgdG8gdGVybWluYWwgd2lkdGguIiIiCiAgICB3ID0gbWluKFRFUk1fV0lEVEgsIDcwKQogICAgcHJpbnQoKQoKICAgIGlmIE5BUlJPVzoKICAgICAgICAjIENvbXBhY3QgMi1saW5lIGJhbm5lciBmb3Igc21hbGwgdGVybWluYWxzIChUZXJtdXgpCiAgICAgICAgcHJpbnQoZiJ7Qy5HUk59e0MuQn0iICsgIj0iICogdyArIEMuUikKICAgICAgICBwcmludChmIntDLkdSTn17Qy5CfSIgKyBfY2VudGVyKCIgREFSS0JPWEVTICIsIHcpLnJlcGxhY2UoIiAiLCAi4pWQIiwgMSkgKyBDLlIpCiAgICAgICAgcHJpbnQoZiJ7Qy5HUk59IiArIF9jZW50ZXIoIklOVEVMTElHRU5DRSBTWVNURU0iLCB3KSArIEMuUikKICAgICAgICBwcmludChmIntDLllMV30iICsgX2NlbnRlcihmIlRlcm1pbmFsIENsaWVudCB2e1ZFUlNJT059IiwgdykgKyBDLlIpCiAgICAgICAgcHJpbnQoZiJ7Qy5HUk59IiArICI9IiAqIHcgKyBDLlIpCiAgICBlbHNlOgogICAgICAgIGJvcmRlciA9ICLilZQiICsgIuKVkCIgKiAodyAtIDIpICsgIuKVlyIKICAgICAgICBib3JkZXJfYiA9ICLilZoiICsgIuKVkCIgKiAodyAtIDIpICsgIuKVnSIKICAgICAgICByb3dfYmxhbmsgPSAi4pWRIiArICIgIiAqICh3IC0gMikgKyAi4pWRIgogICAgICAgIHByaW50KGYie0MuR1JOfXtDLkJ9e2JvcmRlcn17Qy5SfSIpCiAgICAgICAgcHJpbnQoZiJ7Qy5HUk59e3Jvd19ibGFua317Qy5SfSIpCgogICAgICAgIHRpdGxlID0gIiBEQVJLQk9YRVMgSU5URUxMSUdFTkNFIFNZU1RFTSAiCiAgICAgICAgcHJpbnQoZiJ7Qy5HUk594pWRe0MuWUxXfXtDLkJ9e3RpdGxlLmNlbnRlcih3LTIpfXtDLlJ9e0MuR1JOfeKVkXtDLlJ9IikKCiAgICAgICAgc3ViID0gZiIgUHJvZmVzc2lvbmFsIFRlcm1pbmFsIENsaWVudCAgdntWRVJTSU9OfSAiCiAgICAgICAgcHJpbnQoZiJ7Qy5HUk594pWRe0MuQ1lOfXtzdWIuY2VudGVyKHctMil9e0MuUn17Qy5HUk594pWRe0MuUn0iKQogICAgICAgIHByaW50KGYie0MuR1JOfeKVkXtDLkJMS317JyBGb3IgYXV0aG9yaXplZCB1c2Ugb25seSAnLmNlbnRlcih3LTIpfXtDLlJ9e0MuR1JOfeKVkXtDLlJ9IikKICAgICAgICBwcmludChmIntDLkdSTn17cm93X2JsYW5rfXtDLlJ9IikKICAgICAgICBwcmludChmIntDLkdSTn17Ym9yZGVyX2J9e0MuUn0iKQoKICAgIHByaW50KGYie0MuQkxLfXtfbGluZSgpfXtDLlJ9IikKICAgIHRzID0gZGF0ZXRpbWUubm93KCkuc3RyZnRpbWUoIiVZLSVtLSVkICAlSDolTTolUyIpCiAgICBzdGF0dXNfbGluZSA9IGYiICBTdGF0dXM6IHtDLkdSTn1PTkxJTkV7Qy5SfSAgIFRpbWU6IHtDLkNZTn17dHN9e0MuUn0iCiAgICBwcmludChzdGF0dXNfbGluZSkKICAgIHByaW50KGYie0MuQkxLfXtfbGluZSgpfXtDLlJ9IikKICAgIHByaW50KCkKCgpkZWYgc2VjdGlvbih0aXRsZTogc3RyKToKICAgICIiIlByaW50IGEgc2VjdGlvbiBoZWFkaW5nLiIiIgogICAgdyA9IG1pbihURVJNX1dJRFRILCA3MCkKICAgIHByaW50KCkKICAgIHByaW50KGYie0MuQ1lOfXtfbGluZSgn4pWQJywgdyl9e0MuUn0iKQogICAgcHJpbnQoZiJ7Qy5DWU59e0MuQn0gIHt0aXRsZS51cHBlcigpfXtDLlJ9IikKICAgIHByaW50KGYie0MuQ1lOfXtfbGluZSgn4pWQJywgdyl9e0MuUn0iKQogICAgcHJpbnQoKQoKCmRlZiBzdWJzZWN0aW9uKHRpdGxlOiBzdHIpOgogICAgIiIiUHJpbnQgYSBzdWItaGVhZGluZy4iIiIKICAgIHByaW50KGYiXG57Qy5CTFV9ICDilIDilIDilIAge3RpdGxlfSB7J+KUgCcgKiBtYXgoMSwgbWluKFRFUk1fV0lEVEgsNzApIC0gbGVuKHRpdGxlKSAtIDgpfXtDLlJ9IikKCgpkZWYgb2sobXNnOiBzdHIpOgogICAgcHJpbnQoZiIgIHtDLk9LfVvinJNde0MuUn0ge21zZ30iKQoKZGVmIGluZm8obXNnOiBzdHIpOgogICAgcHJpbnQoZiIgIHtDLklORn1baV17Qy5SfSB7bXNnfSIpCgpkZWYgd2Fybihtc2c6IHN0cik6CiAgICBwcmludChmIiAge0MuV1JOfVshXXtDLlJ9IHttc2d9IikKCmRlZiBlcnIobXNnOiBzdHIpOgogICAgcHJpbnQoZiIgIHtDLkVSUn1b4pyXXXtDLlJ9IHttc2d9IikKCmRlZiBmaWVsZChrZXk6IHN0ciwgdmFsdWU6IHN0cik6CiAgICAiIiJQcmludCBhIGtleS12YWx1ZSByZXN1bHQgZmllbGQuIiIiCiAgICBpZiBOQVJST1c6CiAgICAgICAgIyBUd28gbGluZXMgb24gbmFycm93IHRlcm1pbmFscwogICAgICAgIHByaW50KGYiICB7Qy5CTEt94pSMe0MuUn0ge0MuQn17a2V5fXtDLlJ9IikKICAgICAgICBwcmludChmIiAge0MuQkxLfeKUlOKUgHtDLlJ9IHtDLkdSTn17dmFsdWV9e0MuUn0iKQogICAgZWxzZToKICAgICAgICBwYWQgPSBtYXgoMSwgMjIgLSBsZW4oa2V5KSkKICAgICAgICBwcmludChmIiAge0MuQkxLfeKUgntDLlJ9IHtDLkJ9e2tleX17Qy5SfXsnICcgKiBwYWR9e0MuR1JOfXt2YWx1ZX17Qy5SfSIpCgpkZWYgc2VwYXJhdG9yKCk6CiAgICBwcmludChmIiAge0MuQkxLfXtfbGluZSgnwrcnLCBtaW4oVEVSTV9XSURUSC00LCA2NikpfXtDLlJ9IikKCmRlZiBwcm9tcHQobGFiZWw6IHN0ciwgZGVmYXVsdDogc3RyID0gIiIpIC0+IHN0cjoKICAgICIiIlN0eWxlZCBpbnB1dCBwcm9tcHQg4oCUIGFsd2F5cyBvbiBpdHMgb3duIGxpbmUuIiIiCiAgICBpZiBOQVJST1c6CiAgICAgICAgcHJpbnQoZiJcbiAge0MuQ1lOfeKWtiAge2xhYmVsfXtDLlJ9IikKICAgICAgICByZXNwID0gaW5wdXQoZiIgIHtDLllMV33ihpIgIHtDLlJ9Iikuc3RyaXAoKQogICAgZWxzZToKICAgICAgICByZXNwID0gaW5wdXQoZiJcbiAge0MuQ1lOfeKWtiAge2xhYmVsfToge0MuWUxXfSIpLnN0cmlwKCkKICAgICAgICBwcmludChDLlIsIGVuZD0iIikKICAgIHJldHVybiByZXNwIGlmIHJlc3AgZWxzZSBkZWZhdWx0CgpkZWYgcHJvbXB0X3Bhc3N3b3JkKGxhYmVsOiBzdHIpIC0+IHN0cjoKICAgICIiIlBhc3N3b3JkIHByb21wdCAoaGlkZGVuIGlucHV0KS4iIiIKICAgIGlmIE5BUlJPVzoKICAgICAgICBwcmludChmIlxuICB7Qy5DWU594pa2ICB7bGFiZWx9e0MuUn0iKQogICAgZWxzZToKICAgICAgICBwcmludChmIlxuICB7Qy5DWU594pa2ICB7bGFiZWx9OiB7Qy5SfSIsIGVuZD0iIiwgZmx1c2g9VHJ1ZSkKICAgIHRyeToKICAgICAgICBwdyA9IGdldHBhc3MuZ2V0cGFzcygiIikKICAgIGV4Y2VwdCBFeGNlcHRpb246CiAgICAgICAgcHcgPSBpbnB1dCgiICAiKS5zdHJpcCgpCiAgICByZXR1cm4gcHcKCmRlZiBsb2FkaW5nKG1zZzogc3RyKToKICAgIHByaW50KGYiICB7Qy5ZTFd9W+Kfs117Qy5SfSB7bXNnfSIsIGVuZD0iIiwgZmx1c2g9VHJ1ZSkKCmRlZiBjbGVhcl9sb2FkaW5nKCk6CiAgICBwcmludChmIlxyeycgJyAqIG1pbihURVJNX1dJRFRILCA3MCl9XHIiLCBlbmQ9IiIsIGZsdXNoPVRydWUpCgoKIyDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZAKIyBTRVNTSU9OIE1BTkFHRU1FTlQKIyDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZAKCmNsYXNzIFNlc3Npb246CiAgICAiIiJQZXJzaXN0IGxvZ2luIHN0YXRlIGJldHdlZW4gcnVucy4iIiIKCiAgICBkZWYgX19pbml0X18oc2VsZik6CiAgICAgICAgc2VsZi5hY2NvdW50X2lkOiBzdHIgID0gIiIKICAgICAgICBzZWxmLmFwaV9rZXk6IHN0ciAgICAgPSAiIgogICAgICAgIHNlbGYudXNlcm5hbWU6IHN0ciAgICA9ICIiCiAgICAgICAgc2VsZi5jcmVkaXRzOiBpbnQgICAgID0gMAogICAgICAgIHNlbGYucGxhbjogc3RyICAgICAgICA9ICJOb25lIgogICAgICAgIHNlbGYuX2xvYWRlZCAgICAgICAgICA9IEZhbHNlCgogICAgZGVmIGxvYWQoc2VsZikgLT4gYm9vbDoKICAgICAgICB0cnk6CiAgICAgICAgICAgIGlmIG9zLnBhdGguZXhpc3RzKFNFU1NJT05fRklMRSk6CiAgICAgICAgICAgICAgICB3aXRoIG9wZW4oU0VTU0lPTl9GSUxFLCAiciIpIGFzIGY6CiAgICAgICAgICAgICAgICAgICAgZCA9IGpzb24ubG9hZChmKQogICAgICAgICAgICAgICAgc2VsZi5hY2NvdW50X2lkID0gZC5nZXQoImFjY291bnRfaWQiLCAiIikKICAgICAgICAgICAgICAgIHNlbGYuYXBpX2tleSAgICA9IGQuZ2V0KCJhcGlfa2V5IiwgIiIpCiAgICAgICAgICAgICAgICBzZWxmLnVzZXJuYW1lICAgPSBkLmdldCgidXNlcm5hbWUiLCAiIikKICAgICAgICAgICAgICAgIHNlbGYuY3JlZGl0cyAgICA9IGQuZ2V0KCJjcmVkaXRzIiwgMCkKICAgICAgICAgICAgICAgIHNlbGYucGxhbiAgICAgICA9IGQuZ2V0KCJwbGFuIiwgIk5vbmUiKQogICAgICAgICAgICAgICAgaWYgc2VsZi5hY2NvdW50X2lkIGFuZCBzZWxmLmFwaV9rZXk6CiAgICAgICAgICAgICAgICAgICAgc2VsZi5fbG9hZGVkID0gVHJ1ZQogICAgICAgICAgICAgICAgICAgIHJldHVybiBUcnVlCiAgICAgICAgZXhjZXB0IEV4Y2VwdGlvbjoKICAgICAgICAgICAgcGFzcwogICAgICAgIHJldHVybiBGYWxzZQoKICAgIGRlZiBzYXZlKHNlbGYpOgogICAgICAgIHRyeToKICAgICAgICAgICAgb3MubWFrZWRpcnMob3MucGF0aC5kaXJuYW1lKFNFU1NJT05fRklMRSksIGV4aXN0X29rPVRydWUpCiAgICAgICAgICAgIHdpdGggb3BlbihTRVNTSU9OX0ZJTEUsICJ3IikgYXMgZjoKICAgICAgICAgICAgICAgIGpzb24uZHVtcCh7CiAgICAgICAgICAgICAgICAgICAgImFjY291bnRfaWQiOiBzZWxmLmFjY291bnRfaWQsCiAgICAgICAgICAgICAgICAgICAgImFwaV9rZXkiOiAgICBzZWxmLmFwaV9rZXksCiAgICAgICAgICAgICAgICAgICAgInVzZXJuYW1lIjogICBzZWxmLnVzZXJuYW1lLAogICAgICAgICAgICAgICAgICAgICJjcmVkaXRzIjogICAgc2VsZi5jcmVkaXRzLAogICAgICAgICAgICAgICAgICAgICJwbGFuIjogICAgICAgc2VsZi5wbGFuLAogICAgICAgICAgICAgICAgICAgICJzYXZlZF9hdCI6ICAgZGF0ZXRpbWUubm93KCkuaXNvZm9ybWF0KCkKICAgICAgICAgICAgICAgIH0sIGYsIGluZGVudD0yKQogICAgICAgIGV4Y2VwdCBFeGNlcHRpb246CiAgICAgICAgICAgIHBhc3MKCiAgICBkZWYgY2xlYXIoc2VsZik6CiAgICAgICAgdHJ5OgogICAgICAgICAgICBpZiBvcy5wYXRoLmV4aXN0cyhTRVNTSU9OX0ZJTEUpOgogICAgICAgICAgICAgICAgb3MucmVtb3ZlKFNFU1NJT05fRklMRSkKICAgICAgICBleGNlcHQgRXhjZXB0aW9uOgogICAgICAgICAgICBwYXNzCiAgICAgICAgc2VsZi5hY2NvdW50X2lkID0gIiIKICAgICAgICBzZWxmLmFwaV9rZXkgICAgPSAiIgogICAgICAgIHNlbGYudXNlcm5hbWUgICA9ICIiCiAgICAgICAgc2VsZi5jcmVkaXRzICAgID0gMAogICAgICAgIHNlbGYucGxhbiAgICAgICA9ICJOb25lIgoKICAgIEBwcm9wZXJ0eQogICAgZGVmIGlzX3ZhbGlkKHNlbGYpIC0+IGJvb2w6CiAgICAgICAgcmV0dXJuIGJvb2woc2VsZi5hY2NvdW50X2lkIGFuZCBzZWxmLmFwaV9rZXkpCgoKc2Vzc2lvbiA9IFNlc3Npb24oKQoKCiMg4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQCiMgQVBJIENMSUVOVAojIOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkAoKY2xhc3MgRGFya0JveGVzQVBJOgogICAgIiIiSFRUUCBjbGllbnQgZm9yIHRoZSBEYXJrQm94ZXMgYmFja2VuZC4iIiIKCiAgICBkZWYgX19pbml0X18oc2VsZik6CiAgICAgICAgc2VsZi5fc2Vzc2lvbiA9IHJlcXVlc3RzLlNlc3Npb24oKQogICAgICAgIHNlbGYuX3Nlc3Npb24uaGVhZGVycy51cGRhdGUoewogICAgICAgICAgICAiQ29udGVudC1UeXBlIjogICJhcHBsaWNhdGlvbi9qc29uIiwKICAgICAgICAgICAgIlVzZXItQWdlbnQiOiAgICBmIkRhcmtCb3hlcy1DbGllbnQve1ZFUlNJT059IFB5dGhvbi97c3lzLnZlcnNpb24uc3BsaXQoKVswXX0iLAogICAgICAgICAgICAiQWNjZXB0IjogICAgICAgICJhcHBsaWNhdGlvbi9qc29uIgogICAgICAgIH0pCgogICAgZGVmIF9zZXRfYXV0aChzZWxmLCBhcGlfa2V5OiBzdHIpOgogICAgICAgIHNlbGYuX3Nlc3Npb24uaGVhZGVyc1siWC1BUEktS2V5Il0gPSBhcGlfa2V5CgogICAgZGVmIF9yZXF1ZXN0KHNlbGYsIG1ldGhvZDogc3RyLCBlbmRwb2ludDogc3RyLAogICAgICAgICAgICAgICAgIGRhdGE6IERpY3QgPSBOb25lLCBub19hdXRoOiBib29sID0gRmFsc2UpIC0+IERpY3Q6CiAgICAgICAgdXJsID0gZiJ7QVBJX0JBU0VfVVJMfXtlbmRwb2ludH0iCiAgICAgICAgaWYgbm90IG5vX2F1dGggYW5kIHNlc3Npb24uYXBpX2tleToKICAgICAgICAgICAgc2VsZi5fc2V0X2F1dGgoc2Vzc2lvbi5hcGlfa2V5KQoKICAgICAgICB0cnk6CiAgICAgICAgICAgIGlmIG1ldGhvZCA9PSAiR0VUIjoKICAgICAgICAgICAgICAgIHJlc3AgPSBzZWxmLl9zZXNzaW9uLmdldCh1cmwsIHRpbWVvdXQ9UkVRVUVTVF9USU1FT1VUKQogICAgICAgICAgICBlbHNlOgogICAgICAgICAgICAgICAgcmVzcCA9IHNlbGYuX3Nlc3Npb24ucG9zdCh1cmwsIGpzb249ZGF0YSBvciB7fSwgdGltZW91dD1SRVFVRVNUX1RJTUVPVVQpCgogICAgICAgICAgICBpZiByZXNwLnN0YXR1c19jb2RlID09IDIwMDoKICAgICAgICAgICAgICAgIHJldHVybiByZXNwLmpzb24oKQogICAgICAgICAgICBlbGlmIHJlc3Auc3RhdHVzX2NvZGUgPT0gNDAxOgogICAgICAgICAgICAgICAgcmV0dXJuIHsic3RhdHVzIjogImVycm9yIiwgImNvZGUiOiAiVU5BVVRIT1JJWkVEIiwKICAgICAgICAgICAgICAgICAgICAgICAgIm1lc3NhZ2UiOiAiSW52YWxpZCBvciBleHBpcmVkIGNyZWRlbnRpYWxzLiBQbGVhc2UgbG9nIGluIGFnYWluLiJ9CiAgICAgICAgICAgIGVsaWYgcmVzcC5zdGF0dXNfY29kZSA9PSA0MDM6CiAgICAgICAgICAgICAgICByZXR1cm4geyJzdGF0dXMiOiAiZXJyb3IiLCAiY29kZSI6ICJGT1JCSURERU4iLAogICAgICAgICAgICAgICAgICAgICAgICAibWVzc2FnZSI6ICJJbnN1ZmZpY2llbnQgY3JlZGl0cyBvciBhY2NvdW50IGJhbm5lZC4ifQogICAgICAgICAgICBlbGlmIHJlc3Auc3RhdHVzX2NvZGUgPT0gNDI5OgogICAgICAgICAgICAgICAgcmV0dXJuIHsic3RhdHVzIjogImVycm9yIiwgImNvZGUiOiAiUkFURV9MSU1JVCIsCiAgICAgICAgICAgICAgICAgICAgICAgICJtZXNzYWdlIjogIlRvbyBtYW55IHJlcXVlc3RzLiBQbGVhc2Ugd2FpdCBhIG1vbWVudC4ifQogICAgICAgICAgICBlbGlmIHJlc3Auc3RhdHVzX2NvZGUgPT0gNDA0OgogICAgICAgICAgICAgICAgcmV0dXJuIHsic3RhdHVzIjogImVycm9yIiwgImNvZGUiOiAiTk9UX0ZPVU5EIiwKICAgICAgICAgICAgICAgICAgICAgICAgIm1lc3NhZ2UiOiAiRW5kcG9pbnQgbm90IGZvdW5kLiJ9CiAgICAgICAgICAgIGVsaWYgcmVzcC5zdGF0dXNfY29kZSA+PSA1MDA6CiAgICAgICAgICAgICAgICB0cnk6CiAgICAgICAgICAgICAgICAgICAgZXJyX2JvZHkgPSByZXNwLmpzb24oKQogICAgICAgICAgICAgICAgICAgIGVycl9tc2cgPSBlcnJfYm9keS5nZXQoIm1lc3NhZ2UiLCBmIlNlcnZlciBlcnJvciAoe3Jlc3Auc3RhdHVzX2NvZGV9KSIpCiAgICAgICAgICAgICAgICBleGNlcHQgRXhjZXB0aW9uOgogICAgICAgICAgICAgICAgICAgIGVycl9tc2cgPSBmIlNlcnZlciBlcnJvciAoe3Jlc3Auc3RhdHVzX2NvZGV9KSIKICAgICAgICAgICAgICAgIHJldHVybiB7InN0YXR1cyI6ICJlcnJvciIsICJjb2RlIjogIlNFUlZFUl9FUlJPUiIsICJtZXNzYWdlIjogZXJyX21zZ30KICAgICAgICAgICAgZWxzZToKICAgICAgICAgICAgICAgIHRyeToKICAgICAgICAgICAgICAgICAgICByZXR1cm4gcmVzcC5qc29uKCkKICAgICAgICAgICAgICAgIGV4Y2VwdCBFeGNlcHRpb246CiAgICAgICAgICAgICAgICAgICAgcmV0dXJuIHsic3RhdHVzIjogImVycm9yIiwgImNvZGUiOiAiSFRUUF9FUlJPUiIsCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAibWVzc2FnZSI6IGYiSFRUUCB7cmVzcC5zdGF0dXNfY29kZX0ifQoKICAgICAgICBleGNlcHQgcmVxdWVzdHMuVGltZW91dDoKICAgICAgICAgICAgcmV0dXJuIHsic3RhdHVzIjogImVycm9yIiwgImNvZGUiOiAiVElNRU9VVCIsCiAgICAgICAgICAgICAgICAgICAgIm1lc3NhZ2UiOiAiUmVxdWVzdCB0aW1lZCBvdXQuIFNlcnZlciBtYXkgYmUgYnVzeSDigJQgdHJ5IGFnYWluLiJ9CiAgICAgICAgZXhjZXB0IHJlcXVlc3RzLkNvbm5lY3Rpb25FcnJvcjoKICAgICAgICAgICAgcmV0dXJuIHsic3RhdHVzIjogImVycm9yIiwgImNvZGUiOiAiQ09OTkVDVElPTl9FUlJPUiIsCiAgICAgICAgICAgICAgICAgICAgIm1lc3NhZ2UiOiAiQ2Fubm90IHJlYWNoIHNlcnZlci4gQ2hlY2sgeW91ciBpbnRlcm5ldCBjb25uZWN0aW9uLiJ9CiAgICAgICAgZXhjZXB0IEV4Y2VwdGlvbiBhcyBlOgogICAgICAgICAgICByZXR1cm4geyJzdGF0dXMiOiAiZXJyb3IiLCAiY29kZSI6ICJDTElFTlRfRVJST1IiLCAibWVzc2FnZSI6IHN0cihlKX0KCiAgICAjIOKUgOKUgCBBdXRoIGVuZHBvaW50cyDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAKCiAgICBkZWYgcmVnaXN0ZXIoc2VsZiwgdXNlcm5hbWU6IHN0ciwgcGFzc3dvcmQ6IHN0cikgLT4gRGljdDoKICAgICAgICByZXR1cm4gc2VsZi5fcmVxdWVzdCgiUE9TVCIsICIvYXBpL3YxL2F1dGgvcmVnaXN0ZXIiLAogICAgICAgICAgICAgICAgICAgICAgICAgICAgIHsidXNlcm5hbWUiOiB1c2VybmFtZSwgInBhc3N3b3JkIjogcGFzc3dvcmR9LCBub19hdXRoPVRydWUpCgogICAgZGVmIGxvZ2luKHNlbGYsIGFjY291bnRfaWRfb3JfdXNlcm5hbWU6IHN0ciwgcGFzc3dvcmQ6IHN0cikgLT4gRGljdDoKICAgICAgICByZXR1cm4gc2VsZi5fcmVxdWVzdCgiUE9TVCIsICIvYXBpL3YxL2F1dGgvbG9naW4iLAogICAgICAgICAgICAgICAgICAgICAgICAgICAgIHsiYWNjb3VudF9pZCI6IGFjY291bnRfaWRfb3JfdXNlcm5hbWUsCiAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICJwYXNzd29yZCI6ICAgcGFzc3dvcmR9LCBub19hdXRoPVRydWUpCgogICAgIyDilIDilIAgVXRpbGl0eSBlbmRwb2ludHMg4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSACgogICAgZGVmIHN0YXR1cyhzZWxmKSAgLT4gRGljdDogcmV0dXJuIHNlbGYuX3JlcXVlc3QoIkdFVCIsICAiL2FwaS92MS9zdGF0dXMiKQogICAgZGVmIGJhbGFuY2Uoc2VsZikgLT4gRGljdDogcmV0dXJuIHNlbGYuX3JlcXVlc3QoIkdFVCIsICAiL2FwaS92MS9iYWxhbmNlIikKICAgIGRlZiB1c2FnZShzZWxmKSAgIC0+IERpY3Q6IHJldHVybiBzZWxmLl9yZXF1ZXN0KCJHRVQiLCAgIi9hcGkvdjEvdXNhZ2UiKQogICAgZGVmIGRvY3Moc2VsZikgICAgLT4gRGljdDogcmV0dXJuIHNlbGYuX3JlcXVlc3QoIkdFVCIsICAiL2FwaS92MS9kb2NzIikKCiAgICAjIOKUgOKUgCBTZWFyY2ggZW5kcG9pbnRzIOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgAoKICAgIGRlZiBzZWFyY2goc2VsZiwgc2VhcmNoX3R5cGU6IHN0ciwgcXVlcnk6IHN0cikgLT4gRGljdDoKICAgICAgICBlbmRwb2ludF9tYXAgPSB7CiAgICAgICAgICAgICJwaG9uZSI6ICAgICIvYXBpL3YxL3NlYXJjaC9waG9uZSIsCiAgICAgICAgICAgICJmYW1pbHkiOiAgICIvYXBpL3YxL3NlYXJjaC9mYW1pbHkiLAogICAgICAgICAgICAiYWFkaGFyIjogICAiL2FwaS92MS9zZWFyY2gvYWFkaGFyIiwKICAgICAgICAgICAgInZlaGljbGUiOiAgIi9hcGkvdjEvc2VhcmNoL3ZlaGljbGUiLAogICAgICAgICAgICAidXBpIjogICAgICAiL2FwaS92MS9zZWFyY2gvdXBpIiwKICAgICAgICAgICAgImVtYWlsIjogICAgIi9hcGkvdjEvc2VhcmNoL2VtYWlsIiwKICAgICAgICAgICAgInRlbGVncmFtIjogIi9hcGkvdjEvc2VhcmNoL3RlbGVncmFtIiwKICAgICAgICAgICAgImltZWkiOiAgICAgIi9hcGkvdjEvc2VhcmNoL2ltZWkiLAogICAgICAgICAgICAiZ3N0IjogICAgICAiL2FwaS92MS9zZWFyY2gvZ3N0IiwKICAgICAgICAgICAgImluc3RhIjogICAgIi9hcGkvdjEvc2VhcmNoL2luc3RhZ3JhbSIsCiAgICAgICAgICAgICJpbnN0YWdyYW0iOiIvYXBpL3YxL3NlYXJjaC9pbnN0YWdyYW0iLAogICAgICAgICAgICAicGFrIjogICAgICAiL2FwaS92MS9zZWFyY2gvcGFraXN0YW4iLAogICAgICAgICAgICAiaXAiOiAgICAgICAiL2FwaS92MS9zZWFyY2gvaXAiLAogICAgICAgICAgICAiaWZzYyI6ICAgICAiL2FwaS92MS9zZWFyY2gvaWZzYyIsCiAgICAgICAgICAgICJsZWFrIjogICAgICIvYXBpL3YxL3NlYXJjaC9sZWFrIiwKICAgICAgICB9CiAgICAgICAgZW5kcG9pbnQgPSBlbmRwb2ludF9tYXAuZ2V0KHNlYXJjaF90eXBlLmxvd2VyKCkpCiAgICAgICAgaWYgbm90IGVuZHBvaW50OgogICAgICAgICAgICByZXR1cm4geyJzdGF0dXMiOiAiZXJyb3IiLCAibWVzc2FnZSI6IGYiVW5rbm93biBzZWFyY2ggdHlwZToge3NlYXJjaF90eXBlfSJ9CiAgICAgICAgcmV0dXJuIHNlbGYuX3JlcXVlc3QoIlBPU1QiLCBlbmRwb2ludCwgeyJxdWVyeSI6IHF1ZXJ5fSkKCiAgICBkZWYgYmF0Y2hfc2VhcmNoKHNlbGYsIHNlYXJjaGVzOiBsaXN0KSAtPiBEaWN0OgogICAgICAgIHJldHVybiBzZWxmLl9yZXF1ZXN0KCJQT1NUIiwgIi9hcGkvdjEvc2VhcmNoL2JhdGNoIiwgeyJzZWFyY2hlcyI6IHNlYXJjaGVzfSkKCiAgICBkZWYgc3VibWl0X3V0cihzZWxmLCB1dHI6IHN0ciwgcGxhbjogc3RyKSAtPiBEaWN0OgogICAgICAgIHJldHVybiBzZWxmLl9yZXF1ZXN0KCJQT1NUIiwgIi9hcGkvdjEvcGF5bWVudC91dHIiLCB7InV0ciI6IHV0ciwgInBsYW4iOiBwbGFufSkKCgphcGkgPSBEYXJrQm94ZXNBUEkoKQoKCiMg4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQCiMgUkVTVUxUIERJU1BMQVkKIyDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZAKCmRlZiBkaXNwbGF5X3Jlc3VsdChyZXN1bHQ6IERpY3QsIHNlYXJjaF90eXBlOiBzdHIgPSAiIiwgcXVlcnk6IHN0ciA9ICIiKToKICAgICIiIlJlbmRlciBhIHNlYXJjaCByZXN1bHQgaW4gYSBwcm9mZXNzaW9uYWwgc3R5bGVkIGJsb2NrLiIiIgogICAgaWYgcmVzdWx0LmdldCgic3RhdHVzIikgIT0gInN1Y2Nlc3MiOgogICAgICAgIGVycihyZXN1bHQuZ2V0KCJtZXNzYWdlIiwgIlVua25vd24gZXJyb3IiKSkKICAgICAgICBjb2RlID0gcmVzdWx0LmdldCgiY29kZSIsICIiKQogICAgICAgIGlmIGNvZGUgPT0gIlVOQVVUSE9SSVpFRCI6CiAgICAgICAgICAgIHdhcm4oIlNlc3Npb24gZXhwaXJlZCBvciBpbnZhbGlkLiBVc2Ugb3B0aW9uIDMgdG8gTG9nIE91dCwgdGhlbiBvcHRpb24gMiB0byBMb2cgSW4gYWdhaW4uIikKICAgICAgICBlbGlmIGNvZGUgaW4gKCJGT1JCSURERU4iLCAiSU5TVUZGSUNJRU5UX0NSRURJVFMiKToKICAgICAgICAgICAgd2FybigiTm8gY3JlZGl0cyByZW1haW5pbmcuIENvbnRhY3QgQGRhcmtib3hlc0FkbWluIHRvIGJ1eSBtb3JlIGNyZWRpdHMgb3IgYSBwbGFuLiIpCiAgICAgICAgcmV0dXJuCgogICAgZGF0YSA9IHJlc3VsdC5nZXQoImRhdGEiLCB7fSkKICAgIHJhdyAgPSByZXN1bHQuZ2V0KCJyYXdfdGV4dCIpIG9yIGRhdGEuZ2V0KCJyYXdfdGV4dCIsICIiKQoKICAgIHN1YnNlY3Rpb24oZiJSRVNVTFQg4oCUIHtzZWFyY2hfdHlwZS51cHBlcigpfSDigLoge3F1ZXJ5fSIpCgogICAgIyBEaXNwbGF5IHBhcnNlZCBmaWVsZHMgaWYgYXZhaWxhYmxlCiAgICBwYXJzZWQgPSBkYXRhLmdldCgicGFyc2VkX2RhdGEiLCB7fSkgaWYgaXNpbnN0YW5jZShkYXRhLCBkaWN0KSBlbHNlIHt9CiAgICBpZiBwYXJzZWQ6CiAgICAgICAgZm9yIGssIHYgaW4gcGFyc2VkLml0ZW1zKCk6CiAgICAgICAgICAgIGlmIGsgYW5kIHY6CiAgICAgICAgICAgICAgICBmaWVsZChzdHIoayksIHN0cih2KSkKICAgIGVsaWYgaXNpbnN0YW5jZShkYXRhLCBkaWN0KSBhbmQgZGF0YToKICAgICAgICBmb3IgaywgdiBpbiBkYXRhLml0ZW1zKCk6CiAgICAgICAgICAgIGlmIGsgbm90IGluICgicmF3X3RleHQiLCAicGFyc2VkX2RhdGEiLCAic291cmNlIiwgInRpbWVzdGFtcCIsICJ0eXBlIiwKICAgICAgICAgICAgICAgICAgICAgICAgICJuYW1lIiwgInF1ZXJ5IikgYW5kIHY6CiAgICAgICAgICAgICAgICBpZiBpc2luc3RhbmNlKHYsIChzdHIsIGludCwgZmxvYXQpKToKICAgICAgICAgICAgICAgICAgICBmaWVsZChzdHIoaykucmVwbGFjZSgiXyIsICIgIikudGl0bGUoKSwgc3RyKHYpKQoKICAgICMgQWx3YXlzIHNob3cgcmF3IHRleHQgYXMgZmFsbGJhY2sKICAgIGlmIHJhdyBhbmQgcmF3LnN0cmlwKCk6CiAgICAgICAgaWYgbm90IHBhcnNlZDoKICAgICAgICAgICAgc3Vic2VjdGlvbigiUmF3IEludGVsbGlnZW5jZSIpCiAgICAgICAgICAgIGxpbmVzID0gcmF3LnN0cmlwKCkuc3BsaXQoIlxuIikKICAgICAgICAgICAgZm9yIGxpbmUgaW4gbGluZXM6CiAgICAgICAgICAgICAgICBsaW5lID0gbGluZS5zdHJpcCgpCiAgICAgICAgICAgICAgICBpZiBsaW5lOgogICAgICAgICAgICAgICAgICAgIHByaW50KGYiICB7Qy5CTEt94pSCe0MuUn0ge2xpbmV9IikKCiAgICBzb3VyY2UgPSBkYXRhLmdldCgic291cmNlIiwgIkRhcmtCb3hlcyBOZXR3b3JrIikgaWYgaXNpbnN0YW5jZShkYXRhLCBkaWN0KSBlbHNlICIiCiAgICB0cyAgICAgPSBkYXRhLmdldCgidGltZXN0YW1wIiwgIiIpWzoxNl0ucmVwbGFjZSgiVCIsICIgIikgaWYgaXNpbnN0YW5jZShkYXRhLCBkaWN0KSBlbHNlICIiCgogICAgcHJpbnQoKQogICAgc2VwYXJhdG9yKCkKICAgIGlmIHNvdXJjZToKICAgICAgICBpbmZvKGYiU291cmNlOiB7c291cmNlfSIpCiAgICBpZiB0czoKICAgICAgICBpbmZvKGYiVGltZSAgOiB7dHN9IikKCiAgICAjIFNhdmUgcmVzdWx0CiAgICBfc2F2ZV9yZXN1bHQocmVzdWx0LCBzZWFyY2hfdHlwZSwgcXVlcnkpCgoKZGVmIF9zYXZlX3Jlc3VsdChyZXN1bHQ6IERpY3QsIHNlYXJjaF90eXBlOiBzdHIsIHF1ZXJ5OiBzdHIpOgogICAgIiIiQXV0by1zYXZlIHJlc3VsdCB0byBmaWxlLiIiIgogICAgdHJ5OgogICAgICAgIG9zLm1ha2VkaXJzKFJFU1VMVFNfRElSLCBleGlzdF9vaz1UcnVlKQogICAgICAgIHRzICAgPSBkYXRldGltZS5ub3coKS5zdHJmdGltZSgiJVklbSVkXyVIJU0lUyIpCiAgICAgICAgc2FmZSA9IHJlLnN1YihyJ1teYS16QS1aMC05X1wtXScsICdfJywgcXVlcnkpWzoyMF0KICAgICAgICBmbmFtZSA9IGYie1JFU1VMVFNfRElSfS97c2VhcmNoX3R5cGV9X3tzYWZlfV97dHN9Lmpzb24iCiAgICAgICAgd2l0aCBvcGVuKGZuYW1lLCAidyIsIGVuY29kaW5nPSJ1dGYtOCIpIGFzIGY6CiAgICAgICAgICAgIGpzb24uZHVtcCh7CiAgICAgICAgICAgICAgICAic2VhcmNoX3R5cGUiOiBzZWFyY2hfdHlwZSwKICAgICAgICAgICAgICAgICJxdWVyeSI6IHF1ZXJ5LAogICAgICAgICAgICAgICAgInRpbWVzdGFtcCI6IGRhdGV0aW1lLm5vdygpLmlzb2Zvcm1hdCgpLAogICAgICAgICAgICAgICAgInJlc3VsdCI6IHJlc3VsdAogICAgICAgICAgICB9LCBmLCBpbmRlbnQ9MiwgZW5zdXJlX2FzY2lpPUZhbHNlKQogICAgICAgIGluZm8oZiJTYXZlZCDihpIge2ZuYW1lfSIpCiAgICBleGNlcHQgRXhjZXB0aW9uOgogICAgICAgIHBhc3MKCgojIOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkAojIEFVVEggRkxPV1MKIyDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZAKCmRlZiBmbG93X3JlZ2lzdGVyKCk6CiAgICAiIiJSZWdpc3RlciBhIG5ldyBhY2NvdW50IOKAlCBubyBUZWxlZ3JhbSBuZWVkZWQuIiIiCiAgICBzZWN0aW9uKCJDUkVBVEUgTkVXIEFDQ09VTlQiKQogICAgcHJpbnQoZiIgIHtDLllMV31Zb3UgZG8gbm90IG5lZWQgYSBUZWxlZ3JhbSBhY2NvdW50IHRvIHJlZ2lzdGVyLntDLlJ9IikKICAgIHByaW50KGYiICB7Qy5CTEt9Q3JlZGl0cyBhbmQgcGxhbnMgY2FuIGJlIHB1cmNoYXNlZCBmcm9tIHRoZSBUZWxlZ3JhbSBib3R7Qy5SfSIpCiAgICBwcmludChmIiAge0MuQkxLfShAZGFya2JveGVzQWRtaW4pIG9yIGRpcmVjdGx5IHRocm91Z2ggdGhlIHRlcm1pbmFsLntDLlJ9XG4iKQoKICAgIHdoaWxlIFRydWU6CiAgICAgICAgdXNlcm5hbWUgPSBwcm9tcHQoIkNob29zZSBhIHVzZXJuYW1lIChtaW4gMyBjaGFycywgbm8gc3BhY2VzKSIpCiAgICAgICAgaWYgbGVuKHVzZXJuYW1lKSA8IDM6CiAgICAgICAgICAgIHdhcm4oIlVzZXJuYW1lIG11c3QgYmUgYXQgbGVhc3QgMyBjaGFyYWN0ZXJzLiIpCiAgICAgICAgICAgIGNvbnRpbnVlCiAgICAgICAgaWYgIiAiIGluIHVzZXJuYW1lOgogICAgICAgICAgICB3YXJuKCJVc2VybmFtZSBjYW5ub3QgY29udGFpbiBzcGFjZXMuIikKICAgICAgICAgICAgY29udGludWUKICAgICAgICBicmVhawoKICAgIHdoaWxlIFRydWU6CiAgICAgICAgcGFzc3dvcmQgPSBwcm9tcHRfcGFzc3dvcmQoIkNob29zZSBhIHBhc3N3b3JkIChtaW4gNiBjaGFycywgaGlkZGVuKSIpCiAgICAgICAgaWYgbGVuKHBhc3N3b3JkKSA8IDY6CiAgICAgICAgICAgIHdhcm4oIlBhc3N3b3JkIG11c3QgYmUgYXQgbGVhc3QgNiBjaGFyYWN0ZXJzLiIpCiAgICAgICAgICAgIGNvbnRpbnVlCiAgICAgICAgY29uZmlybSA9IHByb21wdF9wYXNzd29yZCgiQ29uZmlybSBwYXNzd29yZCAoaGlkZGVuKSIpCiAgICAgICAgaWYgcGFzc3dvcmQgIT0gY29uZmlybToKICAgICAgICAgICAgd2FybigiUGFzc3dvcmRzIGRvIG5vdCBtYXRjaC4gVHJ5IGFnYWluLiIpCiAgICAgICAgICAgIGNvbnRpbnVlCiAgICAgICAgYnJlYWsKCiAgICBsb2FkaW5nKCJDcmVhdGluZyBhY2NvdW50Li4uIikKICAgIHJlc3VsdCA9IGFwaS5yZWdpc3Rlcih1c2VybmFtZSwgcGFzc3dvcmQpCiAgICBjbGVhcl9sb2FkaW5nKCkKCiAgICBpZiByZXN1bHQuZ2V0KCJzdGF0dXMiKSA9PSAic3VjY2VzcyI6CiAgICAgICAgYWNjX2lkID0gcmVzdWx0LmdldCgiYWNjb3VudF9pZCIsICIiKQogICAgICAgIGNyZWRpdHMgPSByZXN1bHQuZ2V0KCJjcmVkaXRzIiwgMCkKICAgICAgICBvaygiQWNjb3VudCBjcmVhdGVkIHN1Y2Nlc3NmdWxseSEiKQogICAgICAgIHByaW50KCkKICAgICAgICBwcmludChmIiAge0MuR1JOfXsn4pSAJyo1MH17Qy5SfSIpCiAgICAgICAgZmllbGQoIkFjY291bnQgSUQiLCAgYWNjX2lkKQogICAgICAgIGZpZWxkKCJVc2VybmFtZSIsICAgIHVzZXJuYW1lKQogICAgICAgIGZpZWxkKCJDcmVkaXRzIiwgICAgIHN0cihjcmVkaXRzKSkKICAgICAgICBmaWVsZCgiUGxhbiIsICAgICAgICAiTm9uZSAocHVyY2hhc2UgdG8gYWN0aXZhdGUpIikKICAgICAgICBwcmludChmIiAge0MuR1JOfXsn4pSAJyo1MH17Qy5SfSIpCiAgICAgICAgcHJpbnQoKQogICAgICAgIHdhcm4oIlNBVkUgeW91ciBBY2NvdW50IElEIGFuZCBwYXNzd29yZCDigJQgdGhleSB3aWxsIG5vdCBiZSBzaG93biBhZ2Fpbi4iKQogICAgICAgIHdhcm4oIklmIHlvdSBsb3NlIHRoZW0sIGNvbnRhY3QgQGRhcmtib3hlc0FkbWluIG9yIHlhZGlpZnlAZ21haWwuY29tIikKICAgICAgICBwcmludCgpCiAgICAgICAgaW5mbygiVG8gbG9nIGluLCB1c2Ugb3B0aW9uIDIgaW4gdGhlIG1haW4gbWVudS4iKQogICAgICAgIGluZm8oIlRvIGJ1eSBjcmVkaXRzL3BsYW5zLCBjb250YWN0IHRoZSBUZWxlZ3JhbSBib3Qgb3IgQGRhcmtib3hlc0FkbWluLiIpCiAgICBlbHNlOgogICAgICAgIGVycihyZXN1bHQuZ2V0KCJtZXNzYWdlIiwgIlJlZ2lzdHJhdGlvbiBmYWlsZWQuIikpCgoKZGVmIGZsb3dfbG9naW4oKSAtPiBib29sOgogICAgIiIiTG9nIGluIHdpdGggQWNjb3VudCBJRCBvciB1c2VybmFtZSArIHBhc3N3b3JkLiIiIgogICAgc2VjdGlvbigiTE9HIElOIikKCiAgICBwcmludChmIiAge0MuWUxXfU5vIFRlbGVncmFtIGFjY291bnQgcmVxdWlyZWQue0MuUn0iKQogICAgcHJpbnQoZiIgIHtDLkJMS31Vc2UgeW91ciBBY2NvdW50IElEIChlLmcuIERCMUEyQjNDNEQpIG9yIHVzZXJuYW1lLntDLlJ9XG4iKQoKICAgIGlkZW50aWZpZXIgPSBwcm9tcHQoIkFjY291bnQgSUQgb3IgdXNlcm5hbWUiKQogICAgaWYgbm90IGlkZW50aWZpZXI6CiAgICAgICAgd2FybigiQ2FuY2VsbGVkLiIpCiAgICAgICAgcmV0dXJuIEZhbHNlCgogICAgcGFzc3dvcmQgPSBwcm9tcHRfcGFzc3dvcmQoIlBhc3N3b3JkIChoaWRkZW4pIikKICAgIGlmIG5vdCBwYXNzd29yZDoKICAgICAgICB3YXJuKCJDYW5jZWxsZWQuIikKICAgICAgICByZXR1cm4gRmFsc2UKCiAgICBsb2FkaW5nKCJBdXRoZW50aWNhdGluZy4uLiIpCiAgICByZXN1bHQgPSBhcGkubG9naW4oaWRlbnRpZmllciwgcGFzc3dvcmQpCiAgICBjbGVhcl9sb2FkaW5nKCkKCiAgICBpZiByZXN1bHQuZ2V0KCJzdGF0dXMiKSA9PSAic3VjY2VzcyI6CiAgICAgICAgc2Vzc2lvbi5hY2NvdW50X2lkID0gcmVzdWx0LmdldCgiYWNjb3VudF9pZCIsICIiKQogICAgICAgIHNlc3Npb24uYXBpX2tleSAgICA9IHJlc3VsdC5nZXQoImFwaV9rZXkiLCAiIikKICAgICAgICBzZXNzaW9uLnVzZXJuYW1lICAgPSBpZGVudGlmaWVyCiAgICAgICAgc2Vzc2lvbi5jcmVkaXRzICAgID0gcmVzdWx0LmdldCgiY3JlZGl0cyIsIDApCiAgICAgICAgc2Vzc2lvbi5wbGFuICAgICAgID0gcmVzdWx0LmdldCgicGxhbiIsICJOb25lIikKICAgICAgICBzZXNzaW9uLnNhdmUoKQoKICAgICAgICBvaygiTG9naW4gc3VjY2Vzc2Z1bCEiKQogICAgICAgIHByaW50KCkKICAgICAgICBmaWVsZCgiQWNjb3VudCBJRCIsIHNlc3Npb24uYWNjb3VudF9pZCkKICAgICAgICBmaWVsZCgiQ3JlZGl0cyIsICAgIHN0cihzZXNzaW9uLmNyZWRpdHMpKQogICAgICAgIGZpZWxkKCJQbGFuIiwgICAgICAgc2Vzc2lvbi5wbGFuKQogICAgICAgIHJldHVybiBUcnVlCiAgICBlbHNlOgogICAgICAgIGVycihyZXN1bHQuZ2V0KCJtZXNzYWdlIiwgIkxvZ2luIGZhaWxlZC4iKSkKICAgICAgICBtc2cgPSByZXN1bHQuZ2V0KCJtZXNzYWdlIiwgIiIpLmxvd2VyKCkKICAgICAgICBpZiAibm90IGZvdW5kIiBpbiBtc2c6CiAgICAgICAgICAgIHdhcm4oIkFjY291bnQgSUQgb3IgdXNlcm5hbWUgbm90IGZvdW5kLiBDaGVjayBhbmQgdHJ5IGFnYWluLiIpCiAgICAgICAgZWxpZiAiaW5jb3JyZWN0IiBpbiBtc2cgb3IgInBhc3N3b3JkIiBpbiBtc2c6CiAgICAgICAgICAgIHdhcm4oIldyb25nIHBhc3N3b3JkLiBDb250YWN0IEBkYXJrYm94ZXNBZG1pbiBpZiB5b3UgZm9yZ290IGl0LiIpCiAgICAgICAgZWxpZiAiYmFubmVkIiBpbiBtc2c6CiAgICAgICAgICAgIHdhcm4oIkFjY291bnQgaXMgYmFubmVkLiBDb250YWN0IEBkYXJrYm94ZXNBZG1pbiB0byBhcHBlYWwuIikKICAgICAgICByZXR1cm4gRmFsc2UKCgpkZWYgZmxvd19sb2dvdXQoKToKICAgICIiIkxvZyBvdXQgYW5kIGNsZWFyIHNhdmVkIHNlc3Npb24uIiIiCiAgICBpZiBub3Qgc2Vzc2lvbi5pc192YWxpZDoKICAgICAgICB3YXJuKCJZb3UgYXJlIG5vdCBsb2dnZWQgaW4uIikKICAgICAgICByZXR1cm4KICAgIHNlc3Npb24uY2xlYXIoKQogICAgb2soIkxvZ2dlZCBvdXQuIFNlc3Npb24gY2xlYXJlZC4iKQoKCiMg4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQCiMgU0VBUkNIIEZMT1dTCiMg4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQCgpTRUFSQ0hfQ0FUQUxPRyA9IFsKICAgICMgKGtleSwgZGlzcGxheV9uYW1lLCBoaW50LCBleGFtcGxlKQogICAgKCJwaG9uZSIsICAgICJQaG9uZSBJbnRlbGxpZ2VuY2UiLCAgICAgICAgIjEwLTE1IGRpZ2l0IG1vYmlsZSBudW1iZXIiLCAiOTg3NjU0MzIxMCIpLAogICAgKCJmYW1pbHkiLCAgICJGYW1pbHkgTmV0d29yayIsICAgICAgICAgICAgIjEyLWRpZ2l0IEFhZGhhciBudW1iZXIiLCAiMTIzNDU2Nzg5MDEyIiksCiAgICAoImFhZGhhciIsICAgIkFhZGhhciBDb21wcmVoZW5zaXZlIiwgICAgICAiMTItZGlnaXQgQWFkaGFyIG51bWJlciIsICIxMjM0NTY3ODkwMTIiKSwKICAgICgidmVoaWNsZSIsICAiVmVoaWNsZSBJbnRlbGxpZ2VuY2UiLCAgICAgICJWZWhpY2xlIG51bWJlciAoZS5nLiBVUDUzQ1ozMzkxKSIsICJVUDUzQ1ozMzkxIiksCiAgICAoInRlbGVncmFtIiwgIlRlbGVncmFtIEludGVsbGlnZW5jZSIsICAgICAiQHVzZXJuYW1lIG9yIHBob25lIG51bWJlciIsICJAdXNlcm5hbWUiKSwKICAgICgiaW1laSIsICAgICAiRGV2aWNlIEludGVsbGlnZW5jZSAoSU1FSSkiLCIxNS1kaWdpdCBJTUVJIG51bWJlciIsICIzNTQ2Nzg5MDEyMzQ1NjciKSwKICAgICgiZ3N0IiwgICAgICAiR1NUIEludGVsbGlnZW5jZSIsICAgICAgICAgICJHU1QgbnVtYmVyICgxNSBjaGFycykiLCAiMjdBQVBGVTA5MzlGMVpWIiksCiAgICAoImluc3RhIiwgICAgIkluc3RhZ3JhbSBJbnRlbGxpZ2VuY2UiLCAgICAiSW5zdGFncmFtIHVzZXJuYW1lIiwgInVzZXJuYW1lIiksCiAgICAoImlwIiwgICAgICAgIklQIEludGVsbGlnZW5jZSIsICAgICAgICAgICAiSVB2NCBvciBJUHY2IGFkZHJlc3MiLCAiMS4yLjMuNCIpLAogICAgKCJpZnNjIiwgICAgICJJRlNDIENvZGUgTG9va3VwIiwgICAgICAgICAgIjExLWNoYXIgSUZTQyBjb2RlIiwgIlNCSU4wMDAxMjM0IiksCiAgICAoImVtYWlsIiwgICAgIkVtYWlsIEludGVsbGlnZW5jZSIsICAgICAgICAiRW1haWwgYWRkcmVzcyIsICJ1c2VyQGV4YW1wbGUuY29tIiksCiAgICAoInVwaSIsICAgICAgIlVQSSBJbnRlbGxpZ2VuY2UiLCAgICAgICAgICAiVVBJIElEIiwgInVzZXJAdXBpIiksCiAgICAoInBhayIsICAgICAgIlBha2lzdGFuIERCIiwgICAgICAgICAgICAgICAiTmFtZSAvIHBob25lIC8gTklDIG51bWJlciIsICJxdWVyeSIpLAogICAgKCJsZWFrIiwgICAgICJBZHZhbmNlZCBPU0lOVCAvIExlYWsiLCAgICAgIkFueSBxdWVyeSDigJQgbmFtZSwgcGhvbmUsIGVtYWlsLCBldGMuIiwgInF1ZXJ5IiksCl0KCgpkZWYgX3JlcXVpcmVfbG9naW4oKSAtPiBib29sOgogICAgaWYgbm90IHNlc3Npb24uaXNfdmFsaWQ6CiAgICAgICAgd2FybigiWW91IGFyZSBub3QgbG9nZ2VkIGluLiBDaG9vc2Ugb3B0aW9uIDIgdG8gbG9nIGluIGZpcnN0LiIpCiAgICAgICAgcmV0dXJuIEZhbHNlCiAgICByZXR1cm4gVHJ1ZQoKCmRlZiBmbG93X3NpbmdsZV9zZWFyY2goa2V5OiBzdHIsIG5hbWU6IHN0ciwgaGludDogc3RyLCBleGFtcGxlOiBzdHIpOgogICAgIiIiUGVyZm9ybSBhIHNpbmdsZSB0YXJnZXRlZCBzZWFyY2guIiIiCiAgICBpZiBub3QgX3JlcXVpcmVfbG9naW4oKToKICAgICAgICByZXR1cm4KCiAgICBzZWN0aW9uKGYie25hbWV9IikKICAgIGluZm8oZiJJbnB1dCA6IHtoaW50fSIpCiAgICBpbmZvKGYiRXhhbXBsZToge2V4YW1wbGV9IikKCiAgICBxdWVyeSA9IHByb21wdChmIkVudGVyIHF1ZXJ5ICh7aGludH0pIikKICAgIGlmIG5vdCBxdWVyeToKICAgICAgICB3YXJuKCJDYW5jZWxsZWQuIikKICAgICAgICByZXR1cm4KCiAgICBsb2FkaW5nKGYiUXVlcnlpbmcge25hbWV9Li4uIikKICAgIHJlc3VsdCA9IGFwaS5zZWFyY2goa2V5LCBxdWVyeSkKICAgIGNsZWFyX2xvYWRpbmcoKQogICAgZGlzcGxheV9yZXN1bHQocmVzdWx0LCBrZXksIHF1ZXJ5KQogICAgIyBSZWZyZXNoIGNyZWRpdHMgaW4gc3RhdHVzIGJhciBhZnRlciBlYWNoIHNlYXJjaAogICAgaWYgcmVzdWx0LmdldCgic3RhdHVzIikgPT0gInN1Y2Nlc3MiOgogICAgICAgIHRyeToKICAgICAgICAgICAgX2JyID0gYXBpLmJhbGFuY2UoKQogICAgICAgICAgICBpZiBfYnIuZ2V0KCJzdGF0dXMiKSA9PSAic3VjY2VzcyI6CiAgICAgICAgICAgICAgICBfYmQgPSBfYnIuZ2V0KCJkYXRhIiwge30pCiAgICAgICAgICAgICAgICBzZXNzaW9uLmNyZWRpdHMgPSBfYmQuZ2V0KCJjcmVkaXRzIiwgc2Vzc2lvbi5jcmVkaXRzKQogICAgICAgICAgICAgICAgc2Vzc2lvbi5wbGFuICAgID0gX2JkLmdldCgicGxhbiIsIHNlc3Npb24ucGxhbikKICAgICAgICAgICAgICAgIHNlc3Npb24uc2F2ZSgpCiAgICAgICAgZXhjZXB0IEV4Y2VwdGlvbjoKICAgICAgICAgICAgcGFzcwoKCmRlZiBmbG93X2JhdGNoX3NlYXJjaCgpOgogICAgIiIiU3VibWl0IG11bHRpcGxlIHNlYXJjaGVzIGF0IG9uY2UuIiIiCiAgICBpZiBub3QgX3JlcXVpcmVfbG9naW4oKToKICAgICAgICByZXR1cm4KCiAgICBzZWN0aW9uKCJCQVRDSCBTRUFSQ0giKQogICAgaW5mbygiRW50ZXIgc2VhcmNoZXMgaW4gZm9ybWF0OiAgdHlwZTpxdWVyeSIpCiAgICBpbmZvKCJBdmFpbGFibGUgdHlwZXM6IHBob25lLCBmYW1pbHksIGFhZGhhciwgdmVoaWNsZSwgZW1haWwsIGltZWksIGdzdCwgZXRjLiIpCiAgICBpbmZvKCJQcmVzcyBFbnRlciBvbiBhbiBlbXB0eSBsaW5lIHdoZW4gZG9uZS5cbiIpCgogICAgc2VhcmNoZXMgPSBbXQogICAgd2hpbGUgVHJ1ZToKICAgICAgICBpZiBOQVJST1c6CiAgICAgICAgICAgIHByaW50KGYiICB7Qy5DWU59W3tsZW4oc2VhcmNoZXMpKzF9XSB0eXBlOnF1ZXJ5e0MuUn0iKQogICAgICAgICAgICBsaW5lID0gaW5wdXQoZiIgIHtDLllMV33ihpIgIHtDLlJ9Iikuc3RyaXAoKQogICAgICAgIGVsc2U6CiAgICAgICAgICAgIGxpbmUgPSBpbnB1dChmIiAge0MuQ1lOfVt7bGVuKHNlYXJjaGVzKSsxfV0gIHtDLllMV30iKS5zdHJpcCgpCiAgICAgICAgICAgIHByaW50KEMuUiwgZW5kPSIiKQoKICAgICAgICBpZiBub3QgbGluZToKICAgICAgICAgICAgaWYgc2VhcmNoZXM6CiAgICAgICAgICAgICAgICBicmVhawogICAgICAgICAgICBlbHNlOgogICAgICAgICAgICAgICAgd2FybigiRW50ZXIgYXQgbGVhc3Qgb25lIHNlYXJjaCwgb3IgQ3RybCtDIHRvIGNhbmNlbC4iKQogICAgICAgICAgICAgICAgY29udGludWUKCiAgICAgICAgaWYgIjoiIG5vdCBpbiBsaW5lOgogICAgICAgICAgICB3YXJuKCJGb3JtYXQgbXVzdCBiZSAgdHlwZTpxdWVyeSAgKGUuZy4gcGhvbmU6OTg3NjU0MzIxMCkiKQogICAgICAgICAgICBjb250aW51ZQoKICAgICAgICBzdHlwZSwgc3F1ZXJ5ID0gbGluZS5zcGxpdCgiOiIsIDEpCiAgICAgICAgc3R5cGUgID0gc3R5cGUuc3RyaXAoKS5sb3dlcigpCiAgICAgICAgc3F1ZXJ5ID0gc3F1ZXJ5LnN0cmlwKCkKCiAgICAgICAgaWYgbm90IHN0eXBlIG9yIG5vdCBzcXVlcnk6CiAgICAgICAgICAgIHdhcm4oIkJvdGggdHlwZSBhbmQgcXVlcnkgYXJlIHJlcXVpcmVkLiIpCiAgICAgICAgICAgIGNvbnRpbnVlCgogICAgICAgIHNlYXJjaGVzLmFwcGVuZCh7InR5cGUiOiBzdHlwZSwgInF1ZXJ5Ijogc3F1ZXJ5fSkKICAgICAgICBvayhmIkFkZGVkOiB7c3R5cGV9IOKGkiB7c3F1ZXJ5fSIpCgogICAgaWYgbm90IHNlYXJjaGVzOgogICAgICAgIHdhcm4oIk5vIHNlYXJjaGVzIGFkZGVkLiIpCiAgICAgICAgcmV0dXJuCgogICAgbG9hZGluZyhmIlN1Ym1pdHRpbmcge2xlbihzZWFyY2hlcyl9IHNlYXJjaGVzLi4uIikKICAgIHJlc3VsdCA9IGFwaS5iYXRjaF9zZWFyY2goc2VhcmNoZXMpCiAgICBjbGVhcl9sb2FkaW5nKCkKCiAgICBpZiByZXN1bHQuZ2V0KCJzdGF0dXMiKSA9PSAic3VjY2VzcyI6CiAgICAgICAgb2soZiJCYXRjaCBzZWFyY2ggY29tcGxldGUg4oCUIHtsZW4oc2VhcmNoZXMpfSBxdWVyaWVzIHByb2Nlc3NlZC4iKQogICAgICAgIHJlc3VsdHNfZGF0YSA9IHJlc3VsdC5nZXQoImRhdGEiLCB7fSkuZ2V0KCJyZXN1bHRzIiwgW10pCiAgICAgICAgZm9yIGksIHJlcyBpbiBlbnVtZXJhdGUocmVzdWx0c19kYXRhLCAxKToKICAgICAgICAgICAgc3Vic2VjdGlvbihmIlJlc3VsdCB7aX0gLyB7bGVuKHJlc3VsdHNfZGF0YSl9IikKICAgICAgICAgICAgZGlzcGxheV9yZXN1bHQoeyJzdGF0dXMiOiAic3VjY2VzcyIsICJkYXRhIjogcmVzfSwKICAgICAgICAgICAgICAgICAgICAgICAgICAgcmVzLmdldCgidHlwZSIsICIiKSwgcmVzLmdldCgicXVlcnkiLCAiIikpCiAgICBlbHNlOgogICAgICAgIGVycihyZXN1bHQuZ2V0KCJtZXNzYWdlIiwgIkJhdGNoIHNlYXJjaCBmYWlsZWQuIikpCgoKIyDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZAKIyBBQ0NPVU5UICYgVVRJTElUWSBGTE9XUwojIOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkAoKZGVmIGZsb3dfY2hlY2tfYmFsYW5jZSgpOgogICAgIiIiU2hvdyBjcmVkaXRzIGFuZCBwbGFuIGluZm8uIiIiCiAgICBpZiBub3QgX3JlcXVpcmVfbG9naW4oKToKICAgICAgICByZXR1cm4KICAgIHNlY3Rpb24oIkFDQ09VTlQgQkFMQU5DRSIpCiAgICBsb2FkaW5nKCJGZXRjaGluZyBiYWxhbmNlLi4uIikKICAgIHJlc3VsdCA9IGFwaS5iYWxhbmNlKCkKICAgIGNsZWFyX2xvYWRpbmcoKQogICAgaWYgcmVzdWx0LmdldCgic3RhdHVzIikgPT0gInN1Y2Nlc3MiOgogICAgICAgIGQgPSByZXN1bHQuZ2V0KCJkYXRhIiwge30pCiAgICAgICAgb2soIkJhbGFuY2UgcmV0cmlldmVkLiIpCiAgICAgICAgcHJpbnQoKQogICAgICAgIGZpZWxkKCJBY2NvdW50IElEIiwgICAgc2Vzc2lvbi5hY2NvdW50X2lkKQogICAgICAgIGZpZWxkKCJDcmVkaXRzIiwgICAgICAgc3RyKGQuZ2V0KCJjcmVkaXRzIiwgc2Vzc2lvbi5jcmVkaXRzKSkpCiAgICAgICAgcGxhbiA9IGQuZ2V0KCJwbGFuIiwgc2Vzc2lvbi5wbGFuKSBvciAiTm9uZSIKICAgICAgICBmaWVsZCgiUGxhbiIsICAgICAgICAgIHBsYW4pCiAgICAgICAgaWYgcGxhbiBhbmQgcGxhbiAhPSAiTm9uZSI6CiAgICAgICAgICAgIGZpZWxkKCJWYWxpZCBVbnRpbCIsICAgZC5nZXQoInZhbGlkX3VudGlsIiwgIuKAlCIpKQogICAgICAgICAgICBpZiBkLmdldCgiZGFpbHlfbGltaXQiLCAwKSA+IDA6CiAgICAgICAgICAgICAgICBmaWVsZCgiRGFpbHkgVXNlZCIsICAgIGYie2QuZ2V0KCdkYWlseV91c2VkJywwKX0gLyB7ZC5nZXQoJ2RhaWx5X2xpbWl0JywwKX0iKQogICAgICAgIGZpZWxkKCJUb3RhbCBTZWFyY2hlcyIsIHN0cihkLmdldCgidG90YWxfc2VhcmNoZXMiLCAwKSkpCiAgICAgICAgIyBVcGRhdGUgc2Vzc2lvbgogICAgICAgIHNlc3Npb24uY3JlZGl0cyA9IGQuZ2V0KCJjcmVkaXRzIiwgc2Vzc2lvbi5jcmVkaXRzKQogICAgICAgIHNlc3Npb24ucGxhbiAgICA9IGQuZ2V0KCJwbGFuIiwgc2Vzc2lvbi5wbGFuKQogICAgICAgIHNlc3Npb24uc2F2ZSgpCiAgICBlbHNlOgogICAgICAgIGVycihyZXN1bHQuZ2V0KCJtZXNzYWdlIiwgIkNvdWxkIG5vdCBmZXRjaCBiYWxhbmNlLiIpKQogICAgICAgIHdhcm4oIlRpcDogVXNlIG9wdGlvbiAyMCB0byBidXkgY3JlZGl0cyBpZiBiYWxhbmNlIGlzIDAuIikKCgpkZWYgZmxvd192aWV3X3VzYWdlKCk6CiAgICAiIiJTaG93IHNlYXJjaCB1c2FnZSBzdGF0cy4iIiIKICAgIGlmIG5vdCBfcmVxdWlyZV9sb2dpbigpOgogICAgICAgIHJldHVybgogICAgc2VjdGlvbigiVVNBR0UgU1RBVElTVElDUyIpCiAgICBsb2FkaW5nKCJGZXRjaGluZyB1c2FnZS4uLiIpCiAgICByZXN1bHQgPSBhcGkudXNhZ2UoKQogICAgY2xlYXJfbG9hZGluZygpCiAgICBpZiByZXN1bHQuZ2V0KCJzdGF0dXMiKSA9PSAic3VjY2VzcyI6CiAgICAgICAgZCA9IHJlc3VsdC5nZXQoImRhdGEiLCB7fSkKICAgICAgICBvaygiVXNhZ2UgcmV0cmlldmVkLiIpCiAgICAgICAgZmllbGQoIlRvdGFsIFNlYXJjaGVzIiwgICBzdHIoZC5nZXQoInRvdGFsX3NlYXJjaGVzIiwgMCkpKQogICAgICAgIGZpZWxkKCJUb2RheSdzIFNlYXJjaGVzIiwgc3RyKGQuZ2V0KCJ0b2RheV9zZWFyY2hlcyIsIDApKSkKICAgICAgICBmaWVsZCgiVGhpcyBNb250aCIsICAgICAgIHN0cihkLmdldCgibW9udGhfc2VhcmNoZXMiLCAwKSkpCiAgICAgICAgZmllbGQoIkxhc3QgU2VhcmNoIiwgICAgICBkLmdldCgibGFzdF9zZWFyY2giLCAiTmV2ZXIiKSkKICAgIGVsc2U6CiAgICAgICAgZXJyKHJlc3VsdC5nZXQoIm1lc3NhZ2UiLCAiQ291bGQgbm90IGZldGNoIHVzYWdlLiIpKQoKCmRlZiBmbG93X2NoZWNrX3N0YXR1cygpOgogICAgIiIiUGluZyB0aGUgQVBJIGFuZCBzaG93IHN5c3RlbSBzdGF0dXMuIiIiCiAgICBzZWN0aW9uKCJTWVNURU0gU1RBVFVTIikKICAgIGxvYWRpbmcoIlBpbmdpbmcgc2VydmVyLi4uIikKICAgIHJlc3VsdCA9IGFwaS5zdGF0dXMoKQogICAgY2xlYXJfbG9hZGluZygpCiAgICBpZiByZXN1bHQuZ2V0KCJzdGF0dXMiKSA9PSAic3VjY2VzcyI6CiAgICAgICAgZCA9IHJlc3VsdC5nZXQoImRhdGEiLCB7fSkKICAgICAgICBzdGF0ZSA9IGYie0MuR1JOfU9QRVJBVElPTkFMe0MuUn0iIGlmIGQuZ2V0KCJvbmxpbmUiLCBUcnVlKSBlbHNlIGYie0MuRVJSfURFR1JBREVEe0MuUn0iCiAgICAgICAgb2soZiJTZXJ2ZXIgaXMge3N0YXRlfSIpCiAgICAgICAgZmllbGQoIlZlcnNpb24iLCBkLmdldCgidmVyc2lvbiIsIFZFUlNJT04pKQogICAgICAgIGZpZWxkKCJVcHRpbWUiLCAgZC5nZXQoInVwdGltZSIsICLigJQiKSkKICAgIGVsc2U6CiAgICAgICAgIyBKdXN0IHNob3cgdGhhdCB3ZSBjYW4gcmVhY2ggdGhlIHNlcnZlcgogICAgICAgIHdhcm4oIlN0YXR1cyBlbmRwb2ludCByZXR1cm5lZCBhbiBlcnJvciwgYnV0IHNlcnZlciBpcyByZWFjaGFibGUuIikKCgpkZWYgZmxvd192aWV3X2RvY3MoKToKICAgICIiIkRpc3BsYXkgQVBJIGVuZHBvaW50IGRvY3VtZW50YXRpb24uIiIiCiAgICBzZWN0aW9uKCJBUEkgRE9DVU1FTlRBVElPTiIpCiAgICBsb2FkaW5nKCJMb2FkaW5nIGRvY3MuLi4iKQogICAgcmVzdWx0ID0gYXBpLmRvY3MoKQogICAgY2xlYXJfbG9hZGluZygpCiAgICBpZiByZXN1bHQ6CiAgICAgICAgZmllbGQoIlNlcnZpY2UiLCAgcmVzdWx0LmdldCgic2VydmljZSIsICJEYXJrQm94ZXMgSW50ZWxsaWdlbmNlIEFQSSIpKQogICAgICAgIGZpZWxkKCJWZXJzaW9uIiwgIHJlc3VsdC5nZXQoInZlcnNpb24iLCBWRVJTSU9OKSkKICAgICAgICBmaWVsZCgiQmFzZSBVUkwiLCByZXN1bHQuZ2V0KCJiYXNlX3VybCIsIEFQSV9CQVNFX1VSTCkpCgogICAgICAgIGVuZHBvaW50cyA9IHJlc3VsdC5nZXQoImVuZHBvaW50cyIsIHt9KQogICAgICAgIGlmIGVuZHBvaW50cy5nZXQoInNlYXJjaCIpOgogICAgICAgICAgICBzdWJzZWN0aW9uKCJTZWFyY2ggRW5kcG9pbnRzIikKICAgICAgICAgICAgZm9yIG5hbWUsIGVwIGluIGVuZHBvaW50c1sic2VhcmNoIl0uaXRlbXMoKToKICAgICAgICAgICAgICAgIHByaW50KGYiICB7Qy5CTEt94pSCe0MuUn0ge0MuQn17ZXAuZ2V0KCdtZXRob2QnLCdQT1NUJyl9e0MuUn0iCiAgICAgICAgICAgICAgICAgICAgICBmIiAge2VwLmdldCgnZW5kcG9pbnQnLCcnKX0iKQoKICAgICAgICBpZiBlbmRwb2ludHMuZ2V0KCJ1dGlsaXR5Iik6CiAgICAgICAgICAgIHN1YnNlY3Rpb24oIlV0aWxpdHkgRW5kcG9pbnRzIikKICAgICAgICAgICAgZm9yIG5hbWUsIGVwIGluIGVuZHBvaW50c1sidXRpbGl0eSJdLml0ZW1zKCk6CiAgICAgICAgICAgICAgICBwcmludChmIiAge0MuQkxLfeKUgntDLlJ9IHtDLkJ9e2VwLmdldCgnbWV0aG9kJywnR0VUJyl9e0MuUn0iCiAgICAgICAgICAgICAgICAgICAgICBmIiAge2VwLmdldCgnZW5kcG9pbnQnLCcnKX0iKQogICAgZWxzZToKICAgICAgICBpbmZvKGYiRG9jcyBhdDoge0FQSV9CQVNFX1VSTH0vYXBpL3YxL2RvY3MiKQoKCmRlZiBmbG93X2hvd190b19idXkoKToKICAgICIiIlNob3cgaG93IHRvIHB1cmNoYXNlIGNyZWRpdHMgLyBwbGFucy4iIiIKICAgIHNlY3Rpb24oIkhPVyBUTyBCVVkgQ1JFRElUUyAvIFBMQU5TIikKICAgIHByaW50KGYiIiIKICB7Qy5ZTFd94pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSBe0MuUn0KCiAge0MuQn1PUFRJT04gMTogVmlhIFRlbGVncmFtIEJvdHtDLlJ9CiAge0MuQkxLfeKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgHtDLlJ9CiAgMS4gT3BlbiBUZWxlZ3JhbSBhbmQgZmluZCBvdXIgYm90LgogIDIuIFRhcCB7Qy5DWU598J+SjiBQcmVtaXVtIFBsYW5ze0MuUn0gaW4gdGhlIG1lbnUuCiAgMy4gU2VsZWN0IGEgcGxhbiBhbmQgcGF5IHZpYSBVUEkuCiAgNC4gRW50ZXIgeW91ciBVVFIgLyBUcmFuc2FjdGlvbiBOdW1iZXIgd2hlbiBwcm9tcHRlZC4KICA1LiBBZG1pbiB2ZXJpZmllcyBtYW51YWxseSDigJQgYWN0aXZhdGVkIHdpdGhpbiA14oCTMTUgbWluLgoKICB7Qy5CfU9QVElPTiAyOiBEaXJlY3QgQ29udGFjdHtDLlJ9CiAge0MuQkxLfeKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgHtDLlJ9CiAg4oCiIFRlbGVncmFtIDoge0MuQ1lOfUBkYXJrYm94ZXNBZG1pbntDLlJ9CiAg4oCiIEVtYWlsICAgIDoge0MuQ1lOfXlhZGlpZnlAZ21haWwuY29te0MuUn0KICDigKIgUHJvdmlkZSAgOiBZb3VyIEFjY291bnQgSUQgKHtDLllMV317c2Vzc2lvbi5hY2NvdW50X2lkIG9yICdzZWUgb3B0aW9uIDExJ317Qy5SfSkKCiAge0MuQn1VUEkgRGV0YWlsc3tDLlJ9CiAge0MuQkxLfeKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgHtDLlJ9CiAg4oCiIFVQSSBJRCA6IHtDLkdSTn1kYXJrYm94ZXNAeWJse0MuUn0KCiAge0MuQn1QbGFucyBBdmFpbGFibGV7Qy5SfQogIHtDLkJMS33ilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIB7Qy5SfQogIOKaoSBTdGFydGVyIFBhY2sgICAgICA1IHNlYXJjaGVzICAgICDigrkxMDAKICDwn5SNIEV4cGxvcmVyIFBhY2sgICAgMTUgc2VhcmNoZXMgICAgIOKCuTI1MAogIPCfmoAgRGFpbHkgMTAvMzBkICAgICAxMC9kYXnCtzMwIGRheXMgIOKCuTgwMAogIPCfko4gRGFpbHkgMjAvMzBkICAgICAyMC9kYXnCtzMwIGRheXMgIOKCuTEwMDAKICDwn4yfIERhaWx5IDEwLzYwZCAgICAgMTAvZGF5wrcyIG1vbnRocyDigrkxNTAwCiAg8J+RkSBEYWlseSAyMC82MGQgICAgIDIwL2RhecK3MiBtb250aHMg4oK5MTgwMAoKICB7Qy5ZTFd94pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSBe0MuUn0KICAiIiIpCgoKZGVmIGZsb3dfYnV5X2NyZWRpdHMoKToKICAgICIiIkludGVyYWN0aXZlIGJ1eSBmbG93OiBzaG93IHBsYW5zIOKGkiB1c2VyIHBpY2tzIOKGkiBwYXlzIFVQSSDihpIgc3VibWl0cyBVVFIuIiIiCiAgICBpZiBub3QgX3JlcXVpcmVfbG9naW4oKToKICAgICAgICByZXR1cm4KICAgIHNlY3Rpb24oIkJVWSBDUkVESVRTIC8gUExBTlMiKQoKICAgIFBMQU5TID0gWwogICAgICAgICgiY3JlZGl0c181IiwgICLimqEgU3RhcnRlciBQYWNrIiwgICAgIjUgc2VhcmNoZXMiLCAgICAgICAgICAi4oK5MTAwIiksCiAgICAgICAgKCJjcmVkaXRzXzE1IiwgIvCflI0gRXhwbG9yZXIgUGFjayIsICAgIjE1IHNlYXJjaGVzIiwgICAgICAgICAi4oK5MjUwIiksCiAgICAgICAgKCJkYWlseTEwXzMwIiwgIvCfmoAgRGFpbHkgMTAvMzBkIiwgICAgIjEwL2RheSDCtyAzMCBkYXlzIiwgICAgIuKCuTgwMCIpLAogICAgICAgICgiZGFpbHkyMF8zMCIsICLwn5KOIERhaWx5IDIwLzMwZCIsICAgICIyMC9kYXkgwrcgMzAgZGF5cyIsICAgICLigrkxMDAwIiksCiAgICAgICAgKCJkYWlseTEwXzYwIiwgIvCfjJ8gRGFpbHkgMTAvNjBkIiwgICAgIjEwL2RheSDCtyAyIG1vbnRocyIsICAgIuKCuTE1MDAiKSwKICAgICAgICAoImRhaWx5MjBfNjAiLCAi8J+RkSBEYWlseSAyMC82MGQiLCAgICAiMjAvZGF5IMK3IDIgbW9udGhzIiwgICAi4oK5MTgwMCIpLAogICAgXQoKICAgIHcgPSBtaW4oVEVSTV9XSURUSCwgNjApCiAgICBwcmludChmIiAge0MuQkxLfXsn4pSAJyp3fXtDLlJ9IikKICAgIHByaW50KGYiICB7Qy5CfUF2YWlsYWJsZSBQbGFuc3tDLlJ9IikKICAgIHByaW50KGYiICB7Qy5CTEt9eyfilIAnKnd9e0MuUn0iKQogICAgZm9yIGksIChrZXksIG5hbWUsIGRlc2MsIHByaWNlKSBpbiBlbnVtZXJhdGUoUExBTlMsIDEpOgogICAgICAgIGlmIE5BUlJPVzoKICAgICAgICAgICAgcHJpbnQoZiIgIHtDLllMV31be2l9XXtDLlJ9IikKICAgICAgICAgICAgcHJpbnQoZiIgICAgICB7bmFtZX0gIHtDLkJMS317ZGVzY317Qy5SfSAge0MuR1JOfXtwcmljZX17Qy5SfSIpCiAgICAgICAgZWxzZToKICAgICAgICAgICAgcHJpbnQoZiIgIHtDLllMV31be2l9XXtDLlJ9ICB7bmFtZTo8MjJ9IHtDLkJMS317ZGVzYzo8MjJ9e0MuUn0gIHtDLkdSTn17cHJpY2V9e0MuUn0iKQogICAgcHJpbnQoZiIgIHtDLllMV31bMF17Qy5SfSAgQ2FuY2VsIikKICAgIHByaW50KGYiICB7Qy5CTEt9eyfilIAnKnd9e0MuUn1cbiIpCgogICAgY2hvaWNlX3AgPSBwcm9tcHQoIlNlbGVjdCBwbGFuIG51bWJlciIpCiAgICBpZiBub3QgY2hvaWNlX3Agb3IgY2hvaWNlX3AgPT0gIjAiOgogICAgICAgIHdhcm4oIkNhbmNlbGxlZC4iKQogICAgICAgIHJldHVybgoKICAgIHRyeToKICAgICAgICBpZHggPSBpbnQoY2hvaWNlX3ApIC0gMQogICAgICAgIGlmIGlkeCA8IDAgb3IgaWR4ID49IGxlbihQTEFOUyk6CiAgICAgICAgICAgIHJhaXNlIFZhbHVlRXJyb3IKICAgIGV4Y2VwdCBWYWx1ZUVycm9yOgogICAgICAgIHdhcm4oIkludmFsaWQgc2VsZWN0aW9uLiIpCiAgICAgICAgcmV0dXJuCgogICAgcGxhbl9rZXksIHBsYW5fbmFtZSwgcGxhbl9kZXNjLCBwbGFuX3ByaWNlID0gUExBTlNbaWR4XQoKICAgIHByaW50KCkKICAgIHByaW50KGYiICB7Qy5CfVBheW1lbnQgSW5zdHJ1Y3Rpb25ze0MuUn0iKQogICAgcHJpbnQoZiIgIHtDLkJMS317J+KUgCcqd317Qy5SfSIpCiAgICBwcmludChmIiAgUGxhbiAgICAgOiB7cGxhbl9uYW1lfSAgKHtwbGFuX2Rlc2N9KSIpCiAgICBwcmludChmIiAgQW1vdW50ICAgOiB7Qy5HUk59e3BsYW5fcHJpY2V9e0MuUn0iKQogICAgcHJpbnQoZiIgIFVQSSBJRCAgIDoge0MuQ1lOfWRhcmtib3hlc0B5Ymx7Qy5SfSIpCiAgICBwcmludChmIiAge0MuQkxLfXsn4pSAJyp3fXtDLlJ9IikKICAgIHByaW50KGYiICB7Qy5ZTFd9MS4gT3BlbiBhbnkgVVBJIGFwcCAoR1BheSwgUGhvbmVQZSwgUGF5dG0sIGV0Yy4pe0MuUn0iKQogICAgcHJpbnQoZiIgIHtDLllMV30yLiBQYXkge3BsYW5fcHJpY2V9IHRvICBkYXJrYm94ZXNAeWJse0MuUn0iKQogICAgcHJpbnQoZiIgIHtDLllMV30zLiBOb3RlIHRoZSAxMi1kaWdpdCBVVFIgLyBUcmFuc2FjdGlvbiBJRHtDLlJ9IikKICAgIHByaW50KGYiICB7Qy5ZTFd9NC4gRW50ZXIgaXQgYmVsb3cg4oCUIGFkbWluIHdpbGwgYWN0aXZhdGUgd2l0aGluIDXigJMxNSBtaW57Qy5SfSIpCiAgICBwcmludCgpCgogICAgdXRyID0gcHJvbXB0KCJFbnRlciBVVFIgLyBUcmFuc2FjdGlvbiBJRCAob3IgMCB0byBjYW5jZWwpIikKICAgIGlmIG5vdCB1dHIgb3IgdXRyID09ICIwIjoKICAgICAgICB3YXJuKCJDYW5jZWxsZWQuIikKICAgICAgICByZXR1cm4KICAgIGlmIGxlbih1dHIpIDwgNjoKICAgICAgICB3YXJuKCJVVFIgdG9vIHNob3J0LiBQbGVhc2UgZW50ZXIgdGhlIGZ1bGwgdHJhbnNhY3Rpb24gSUQuIikKICAgICAgICByZXR1cm4KCiAgICBsb2FkaW5nKCJTdWJtaXR0aW5nIHBheW1lbnQuLi4iKQogICAgcmVzdWx0ID0gYXBpLnN1Ym1pdF91dHIodXRyLCBwbGFuX2tleSkKICAgIGNsZWFyX2xvYWRpbmcoKQoKICAgIGlmIHJlc3VsdC5nZXQoInN0YXR1cyIpID09ICJzdWNjZXNzIjoKICAgICAgICBvaygiUGF5bWVudCBzdWJtaXR0ZWQgc3VjY2Vzc2Z1bGx5ISIpCiAgICAgICAgcHJpbnQoKQogICAgICAgIGZpZWxkKCJQbGFuIiwgICByZXN1bHQuZ2V0KCJwbGFuIiwgcGxhbl9uYW1lKSkKICAgICAgICBmaWVsZCgiVVRSIiwgICAgdXRyKQogICAgICAgIGZpZWxkKCJTdGF0dXMiLCAiUGVuZGluZyBhZG1pbiBhcHByb3ZhbCIpCiAgICAgICAgcHJpbnQoKQogICAgICAgIGluZm8oIllvdSB3aWxsIGJlIG5vdGlmaWVkIG9uIFRlbGVncmFtIG9uY2UgYWN0aXZhdGVkICg14oCTMTUgbWluKS4iKQogICAgICAgIGluZm8oIklmIG5vdCBhY3RpdmF0ZWQgaW4gMzAgbWluLCBjb250YWN0IEBkYXJrYm94ZXNBZG1pbiB3aXRoIHlvdXIgVVRSLiIpCiAgICBlbHNlOgogICAgICAgIGVycihyZXN1bHQuZ2V0KCJtZXNzYWdlIiwgIlN1Ym1pc3Npb24gZmFpbGVkLiIpKQogICAgICAgIHdhcm4oIklmIHBheW1lbnQgd2FzIG1hZGUsIGNvbnRhY3QgQGRhcmtib3hlc0FkbWluIHdpdGggeW91ciBVVFIgYW5kIEFjY291bnQgSUQuIikKICAgICAgICBmaWVsZCgiQWNjb3VudCBJRCIsIHNlc3Npb24uYWNjb3VudF9pZCkKICAgICAgICBmaWVsZCgiVVRSIiwgICAgICAgIHV0cikKCgpkZWYgZmxvd19zdXBwb3J0KCk6CiAgICAiIiJTaG93IHN1cHBvcnQgY29udGFjdCBpbmZvcm1hdGlvbi4iIiIKICAgIHNlY3Rpb24oIlNVUFBPUlQgJiBDT05UQUNUIikKICAgIHByaW50KGYiIiIKICB7Qy5HUk59REFSS0JPWEVTIElOVEVMTElHRU5DRSBTWVNURU17Qy5SfQogIHtDLkJMS317RlVMTF9OQU1FfXtDLlJ9CgogIHtDLkJ9Q29udGFjdCBVc3tDLlJ9CiAge0MuQkxLfeKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgHtDLlJ9CiAgVGVsZWdyYW0gIDoge0MuQ1lOfXtTVVBQT1JUX1RHfXtDLlJ9CiAgRW1haWwgICAgIDoge0MuQ1lOfXtTVVBQT1JUX0VNQUlMfXtDLlJ9CiAgQ2hhbm5lbCAgIDoge0MuQ1lOfXtDSEFOTkVMfXtDLlJ9CgogIHtDLkJ9UmVzcG9uc2UgVGltZXN7Qy5SfQogIHtDLkJMS33ilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIB7Qy5SfQogIEdlbmVyYWwgICA6IHdpdGhpbiAxIGhvdXIKICBVcmdlbnQgICAgOiAxNeKAkzMwIG1pbnV0ZXMKICBQYXltZW50ICAgOiA14oCTMTUgbWludXRlcwoKICB7Qy5CfUNvbW1vbiBJc3N1ZXN7Qy5SfQogIHtDLkJMS33ilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIB7Qy5SfQogIOKAoiBGb3Jnb3QgcGFzc3dvcmQgIOKGkiBDb250YWN0IHtTVVBQT1JUX1RHfQogIOKAoiBQYXltZW50IG5vdCBkb25lIOKGkiBTaGFyZSBVVFIgd2l0aCBhZG1pbgogIOKAoiBTZWFyY2ggZmFpbGVkICAgIOKGkiBDaGVjayBjcmVkaXRzIChvcHQgMjApCiAg4oCiIEFjY291bnQgYmFubmVkICAg4oaSIEVtYWlsIHtTVVBQT1JUX0VNQUlMfQoKICB7Qy5ZTFd9TmV2ZXIgc2hhcmUgeW91ciBwYXNzd29yZCB3aXRoIGFueW9uZS57Qy5SfQogIHtDLllMV31PZmZpY2lhbCBhZG1pbiBvbmx5OiB7U1VQUE9SVF9UR317Qy5SfQogICAgIiIiKQoKCmRlZiBmbG93X3ZpZXdfc2F2ZWQoKToKICAgICIiIkxpc3Qgc2F2ZWQgcmVzdWx0IGZpbGVzLiIiIgogICAgc2VjdGlvbigiU0FWRUQgUkVTVUxUUyIpCiAgICBpZiBub3Qgb3MucGF0aC5leGlzdHMoUkVTVUxUU19ESVIpOgogICAgICAgIGluZm8oIk5vIHJlc3VsdHMgc2F2ZWQgeWV0LiIpCiAgICAgICAgcmV0dXJuCiAgICBmaWxlcyA9IHNvcnRlZChvcy5saXN0ZGlyKFJFU1VMVFNfRElSKSwgcmV2ZXJzZT1UcnVlKQogICAgaWYgbm90IGZpbGVzOgogICAgICAgIGluZm8oIk5vIHJlc3VsdHMgc2F2ZWQgeWV0LiIpCiAgICAgICAgcmV0dXJuCiAgICBvayhmIntsZW4oZmlsZXMpfSBzYXZlZCByZXN1bHQocykgaW4ge1JFU1VMVFNfRElSfSIpCiAgICBmb3IgaSwgZiBpbiBlbnVtZXJhdGUoZmlsZXNbOjIwXSwgMSk6CiAgICAgICAgcHJpbnQoZiIgIHtDLkJMS317aTo+Mn0ue0MuUn0ge2Z9IikKICAgIGlmIGxlbihmaWxlcykgPiAyMDoKICAgICAgICBpbmZvKGYiLi4uIGFuZCB7bGVuKGZpbGVzKS0yMH0gbW9yZS4iKQoKCiMg4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQCiMgTUFJTiBNRU5VCiMg4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQCgpkZWYgX3N0YXR1c19iYXIoKSAtPiBzdHI6CiAgICAiIiJPbmUtbGluZSBzdGF0dXMgZm9yIHRoZSBwcm9tcHQgYXJlYS4iIiIKICAgIGlmIHNlc3Npb24uaXNfdmFsaWQ6CiAgICAgICAgcmV0dXJuIChmIiAge0MuQkxLfUFjY291bnQ6IHtDLkNZTn17c2Vzc2lvbi5hY2NvdW50X2lkfXtDLlJ9IgogICAgICAgICAgICAgICAgZiIgIHtDLkJMS31DcmVkaXRzOiB7Qy5HUk59e3Nlc3Npb24uY3JlZGl0c317Qy5SfSIKICAgICAgICAgICAgICAgIGYiICB7Qy5CTEt9UGxhbjoge0MuWUxXfXtzZXNzaW9uLnBsYW59e0MuUn0iKQogICAgZWxzZToKICAgICAgICByZXR1cm4gZiIgIHtDLldSTn1Ob3QgbG9nZ2VkIGlue0MuUn0iCgoKZGVmIGRpc3BsYXlfYXV0aF9tZW51KCk6CiAgICAiIiJQcmludCBhdXRoZW50aWNhdGlvbi1vbmx5IG1lbnUgc2hvd24gd2hlbiBub3QgbG9nZ2VkIGluLiIiIgogICAgdyA9IG1pbihURVJNX1dJRFRILCA3MCkKICAgIHByaW50KCkKICAgIHByaW50KGYie0MuQ1lOfXtfbGluZSgn4pSAJywgdyl9e0MuUn0iKQogICAgcHJpbnQoZiJ7Qy5DWU59e0MuQn0gIERBUktCT1hFUyBJTlRFTExJR0VOQ0Ug4oCUIFdFTENPTUV7Qy5SfSIpCiAgICBwcmludChmIntDLkNZTn17X2xpbmUoJ+KUgCcsIHcpfXtDLlJ9IikKICAgIEFVVEhfTUVOVSA9IFsKICAgICAgICAoIjEiLCAiUmVnaXN0ZXIgTmV3IEFjY291bnQgIChObyBUZWxlZ3JhbSBuZWVkZWQpIiksCiAgICAgICAgKCIyIiwgIkxvZyBJbiIpLAogICAgICAgICgiMCIsICJFeGl0IiksCiAgICBdCiAgICBmb3Igb3B0LCBsYWJlbCBpbiBBVVRIX01FTlU6CiAgICAgICAgaWYgTkFSUk9XOgogICAgICAgICAgICBwcmludChmIiAge0MuWUxXfVt7b3B0fV17Qy5SfSIpCiAgICAgICAgICAgIHByaW50KGYiICAgICAgIHtsYWJlbH0iKQogICAgICAgIGVsc2U6CiAgICAgICAgICAgIGNvbCA9IEMuR1JOIGlmIG9wdCA9PSAiMCIgZWxzZSBDLllMVwogICAgICAgICAgICBwcmludChmIiAge2NvbH1be29wdH1de0MuUn0gIHtsYWJlbH0iKQogICAgcHJpbnQoKQogICAgcHJpbnQoZiJ7Qy5DWU59e19saW5lKCfilIAnLCB3KX17Qy5SfSIpCiAgICBwcmludChmIiAge0MuWUxXfeKaoCAgTm90IGxvZ2dlZCBpbiDigJQgcmVnaXN0ZXIgb3IgbG9nIGluIHRvIGNvbnRpbnVle0MuUn0iKQogICAgcHJpbnQoZiJ7Qy5DWU59e19saW5lKCfilIAnLCB3KX17Qy5SfSIpCiAgICBwcmludCgpCgoKZGVmIGRpc3BsYXlfbWVudSgpOgogICAgIiIiUHJpbnQgZnVsbCBtYWluIG1lbnUgc2hvd24gb25seSB3aGVuIGxvZ2dlZCBpbi4iIiIKICAgIHcgPSBtaW4oVEVSTV9XSURUSCwgNzApCiAgICBwcmludCgpCiAgICBwcmludChmIntDLkNZTn17X2xpbmUoJ+KUgCcsIHcpfXtDLlJ9IikKICAgIHByaW50KGYie0MuQ1lOfXtDLkJ9ICBEQVJLQk9YRVMg4oCUIE1BSU4gTUVOVXtDLlJ9IikKICAgIHByaW50KGYie0MuQ1lOfXtfbGluZSgn4pSAJywgdyl9e0MuUn0iKQoKICAgIE1FTlUgPSBbCiAgICAgICAgKCIiLCAgIuKUgOKUgCBTRUFSQ0hFUyDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAiKSwKICAgICAgICAoIjEiLCAgIvCfk7EgUGhvbmUgSW50ZWxsaWdlbmNlIiksCiAgICAgICAgKCIyIiwgICLwn5Go4oCN8J+RqeKAjfCfkafigI3wn5GmIEZhbWlseSBOZXR3b3JrIChBYWRoYXIpIiksCiAgICAgICAgKCIzIiwgICLwn4aUIEFhZGhhciBDb21wcmVoZW5zaXZlIiksCiAgICAgICAgKCI0IiwgICLwn5qXIFZlaGljbGUgSW50ZWxsaWdlbmNlIiksCiAgICAgICAgKCI1IiwgICLwn5OyIFRlbGVncmFtIEludGVsbGlnZW5jZSIpLAogICAgICAgICgiNiIsICAi8J+TsSBEZXZpY2UgSW50ZWxsaWdlbmNlIChJTUVJKSIpLAogICAgICAgICgiNyIsICAi8J+PoiBHU1QgSW50ZWxsaWdlbmNlIiksCiAgICAgICAgKCI4IiwgICLwn5O4IEluc3RhZ3JhbSBJbnRlbGxpZ2VuY2UiKSwKICAgICAgICAoIjkiLCAgIvCfjJAgSVAgSW50ZWxsaWdlbmNlIiksCiAgICAgICAgKCIxMCIsICLwn4+mIElGU0MgQ29kZSBMb29rdXAiKSwKICAgICAgICAoIjExIiwgIvCfk6cgRW1haWwgSW50ZWxsaWdlbmNlIiksCiAgICAgICAgKCIxMiIsICLwn5KzIFVQSSBJbnRlbGxpZ2VuY2UiKSwKICAgICAgICAoIjEzIiwgIvCfjI8gUGFraXN0YW4gREIiKSwKICAgICAgICAoIjE0IiwgIvCfmoAgQWR2YW5jZWQgT1NJTlQgLyBMZWFrIFNlYXJjaCIpLAogICAgICAgICgiMTUiLCAi8J+TpiBCYXRjaCBTZWFyY2ggKG11bHRpcGxlIHF1ZXJpZXMpIiksCiAgICAgICAgKCIiLCAgICIiKSwKICAgICAgICAoIiIsICAi4pSA4pSAIEFDQ09VTlQgJiBJTkZPIOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgCIpLAogICAgICAgICgiMTYiLCAi8J+SsCBDaGVjayBCYWxhbmNlICYgUGxhbiIpLAogICAgICAgICgiMTciLCAi8J+TiiBWaWV3IFVzYWdlIFN0YXRpc3RpY3MiKSwKICAgICAgICAoIjE4IiwgIvCfjJAgU3lzdGVtIFN0YXR1cyIpLAogICAgICAgICgiMTkiLCAi8J+TliBBUEkgRG9jdW1lbnRhdGlvbiIpLAogICAgICAgICgiMjAiLCAi8J+SsyBCdXkgQ3JlZGl0cyAvIFBsYW5zICAoUGF5IHZpYSBVUEkpIiksCiAgICAgICAgKCIyMSIsICLwn4aYIFN1cHBvcnQgJiBDb250YWN0IiksCiAgICAgICAgKCIyMiIsICLwn5OBIFZpZXcgU2F2ZWQgUmVzdWx0cyIpLAogICAgICAgICgiIiwgICAiIiksCiAgICAgICAgKCIwIiwgICLwn5STIExvZyBPdXQgJiBFeGl0IiksCiAgICBdCgogICAgZm9yIG9wdCwgbGFiZWwgaW4gTUVOVToKICAgICAgICBpZiBub3Qgb3B0IGFuZCBub3QgbGFiZWw6CiAgICAgICAgICAgIHByaW50KCkKICAgICAgICAgICAgY29udGludWUKICAgICAgICBpZiBub3Qgb3B0OgogICAgICAgICAgICBwcmludChmIiAge0MuQkxLfXtsYWJlbH17Qy5SfSIpCiAgICAgICAgICAgIGNvbnRpbnVlCiAgICAgICAgaWYgTkFSUk9XOgogICAgICAgICAgICBwcmludChmIiAge0MuWUxXfVt7b3B0Oj4yfV17Qy5SfSIpCiAgICAgICAgICAgIHByaW50KGYiICAgICAgIHtsYWJlbH0iKQogICAgICAgIGVsc2U6CiAgICAgICAgICAgIGNvbCA9IEMuR1JOIGlmIG9wdCA9PSAiMCIgZWxzZSAoQy5ZTFcgaWYgb3B0ICE9ICIzIiBlbHNlICJcMDMzWzkxbSIpCiAgICAgICAgICAgIHByaW50KGYiICB7Y29sfVt7b3B0Oj4yfV17Qy5SfSAge2xhYmVsfSIpCgogICAgcHJpbnQoKQogICAgcHJpbnQoZiJ7Qy5DWU59e19saW5lKCfilIAnLCB3KX17Qy5SfSIpCiAgICBwcmludChfc3RhdHVzX2JhcigpKQogICAgcHJpbnQoZiJ7Qy5DWU59e19saW5lKCfilIAnLCB3KX17Qy5SfSIpCiAgICBwcmludCgpCgoKIyDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZAKIyBNQUlOIExPT1AKIyDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZAKCmRlZiBfcHJvbXB0KGxhYmVsOiBzdHIgPSAiRW50ZXIgb3B0aW9uIG51bWJlciIpIC0+IHN0cjoKICAgICIiIlVuaWZpZWQgaW5wdXQgcHJvbXB0LiIiIgogICAgaWYgTkFSUk9XOgogICAgICAgIHByaW50KGYiICB7Qy5DWU594pa2ICB7bGFiZWx9e0MuUn0iKQogICAgICAgIHJldHVybiBpbnB1dChmIiAge0MuWUxXfeKGkiAge0MuUn0iKS5zdHJpcCgpCiAgICByZXR1cm4gaW5wdXQoCiAgICAgICAgZiIgIHtDLkdSTn1kYXJrYm94ZXN7Qy5SfXtDLkJMS31Ae0MuUn17Qy5DWU59Y2xpZW50e0MuUn0ge0MuWUxXfcK7e0MuUn0gIgogICAgKS5zdHJpcCgpCgoKZGVmIF9hdXRoX2xvb3AoKSAtPiBib29sOgogICAgIiIiU2hvdyByZWdpc3Rlci9sb2dpbiBtZW51IHVudGlsIHNlc3Npb24gaXMgdmFsaWQuCiAgICBSZXR1cm5zIFRydWUgaWYgbG9nZ2VkIGluLCBGYWxzZSBpZiB1c2VyIGNob3NlIHRvIGV4aXQuIiIiCiAgICB3aGlsZSBub3Qgc2Vzc2lvbi5pc192YWxpZDoKICAgICAgICB0cnk6CiAgICAgICAgICAgIGRpc3BsYXlfYXV0aF9tZW51KCkKICAgICAgICAgICAgY2hvaWNlID0gX3Byb21wdCgpCiAgICAgICAgICAgIHByaW50KCkKCiAgICAgICAgICAgIGlmIGNob2ljZSA9PSAiMCI6CiAgICAgICAgICAgICAgICBvaygiR29vZGJ5ZS4gU3RheSBzZWN1cmUuIikKICAgICAgICAgICAgICAgIHJldHVybiBGYWxzZQoKICAgICAgICAgICAgZWxpZiBjaG9pY2UgPT0gIjEiOgogICAgICAgICAgICAgICAgZmxvd19yZWdpc3RlcigpCiAgICAgICAgICAgICAgICBpZiBzZXNzaW9uLmlzX3ZhbGlkOgogICAgICAgICAgICAgICAgICAgIG9rKCLinIUgUmVnaXN0cmF0aW9uIGNvbXBsZXRlIOKAlCB5b3UgYXJlIG5vdyBsb2dnZWQgaW4hIikKICAgICAgICAgICAgICAgICAgICB0cnk6CiAgICAgICAgICAgICAgICAgICAgICAgIGlucHV0KGYiICB7Qy5CTEt9UHJlc3MgRW50ZXIgdG8gY29udGludWUuLi57Qy5SfSIpCiAgICAgICAgICAgICAgICAgICAgZXhjZXB0IChLZXlib2FyZEludGVycnVwdCwgRU9GRXJyb3IpOgogICAgICAgICAgICAgICAgICAgICAgICBwYXNzCgogICAgICAgICAgICBlbGlmIGNob2ljZSA9PSAiMiI6CiAgICAgICAgICAgICAgICBpZiBmbG93X2xvZ2luKCk6CiAgICAgICAgICAgICAgICAgICAgdHJ5OgogICAgICAgICAgICAgICAgICAgICAgICBpbnB1dChmIiAge0MuQkxLfVByZXNzIEVudGVyIHRvIGNvbnRpbnVlLi4ue0MuUn0iKQogICAgICAgICAgICAgICAgICAgIGV4Y2VwdCAoS2V5Ym9hcmRJbnRlcnJ1cHQsIEVPRkVycm9yKToKICAgICAgICAgICAgICAgICAgICAgICAgcGFzcwoKICAgICAgICAgICAgZWxzZToKICAgICAgICAgICAgICAgIHdhcm4oZiJJbnZhbGlkIG9wdGlvbjogJ3tjaG9pY2V9Jy4gRW50ZXIgMSwgMiwgb3IgMC4iKQoKICAgICAgICBleGNlcHQgS2V5Ym9hcmRJbnRlcnJ1cHQ6CiAgICAgICAgICAgIHByaW50KCkKICAgICAgICAgICAgd2FybigiUHJlc3MgQ3RybCtDIGFnYWluIHRvIGV4aXQsIG9yIEVudGVyIHRvIGNvbnRpbnVlLiIpCiAgICAgICAgICAgIHRyeToKICAgICAgICAgICAgICAgIGlucHV0KGYiICB7Qy5CTEt9UHJlc3MgRW50ZXIgdG8gY29udGludWUuLi57Qy5SfSIpCiAgICAgICAgICAgIGV4Y2VwdCBLZXlib2FyZEludGVycnVwdDoKICAgICAgICAgICAgICAgIHByaW50KCkKICAgICAgICAgICAgICAgIG9rKCJFeGl0aW5nLiBTdGF5IHNlY3VyZSEiKQogICAgICAgICAgICAgICAgcmV0dXJuIEZhbHNlCiAgICAgICAgZXhjZXB0IEVPRkVycm9yOgogICAgICAgICAgICByZXR1cm4gRmFsc2UKICAgIHJldHVybiBUcnVlCgoKZGVmIG1haW4oKToKICAgICIiIkFwcGxpY2F0aW9uIGVudHJ5IHBvaW50LgoKICAgIE9uIHN0YXJ0OiBzaG93IGF1dGgtb25seSBtZW51IChSZWdpc3RlciAvIExvZ2luIC8gRXhpdCkuCiAgICBBZnRlciBsb2dpbjogc2hvdyBmdWxsIHNlYXJjaCBtZW51IHdpdGhvdXQgUmVnaXN0ZXIvTG9naW4gb3B0aW9ucy4KICAgIE9uIGxvZ291dDogcmV0dXJuIHRvIGF1dGggbWVudSBhdXRvbWF0aWNhbGx5LgogICAgIiIiCiAgICBvcy5tYWtlZGlycyhSRVNVTFRTX0RJUiwgZXhpc3Rfb2s9VHJ1ZSkKICAgIHByaW50X2Jhbm5lcigpCgogICAgIyBUcnkgcmVzdG9yaW5nIHNhdmVkIHNlc3Npb24gc2lsZW50bHkKICAgIGlmIHNlc3Npb24ubG9hZCgpOgogICAgICAgICMgU2lsZW50bHkgcmVmcmVzaCBjcmVkaXRzIGZyb20gc2VydmVyIHNvIHN0YXR1cyBiYXIgaXMgYWNjdXJhdGUKICAgICAgICB0cnk6CiAgICAgICAgICAgIF9yID0gYXBpLmJhbGFuY2UoKQogICAgICAgICAgICBpZiBfci5nZXQoInN0YXR1cyIpID09ICJzdWNjZXNzIjoKICAgICAgICAgICAgICAgIF9kID0gX3IuZ2V0KCJkYXRhIiwge30pCiAgICAgICAgICAgICAgICBzZXNzaW9uLmNyZWRpdHMgPSBfZC5nZXQoImNyZWRpdHMiLCBzZXNzaW9uLmNyZWRpdHMpCiAgICAgICAgICAgICAgICBzZXNzaW9uLnBsYW4gICAgPSBfZC5nZXQoInBsYW4iLCBzZXNzaW9uLnBsYW4pCiAgICAgICAgICAgICAgICBzZXNzaW9uLnNhdmUoKQogICAgICAgIGV4Y2VwdCBFeGNlcHRpb246CiAgICAgICAgICAgIHBhc3MKICAgICAgICBvayhmIlNlc3Npb24gcmVzdG9yZWQgIMK3ICBBY2NvdW50OiB7c2Vzc2lvbi5hY2NvdW50X2lkfSAgwrcgIENyZWRpdHM6IHtzZXNzaW9uLmNyZWRpdHN9ICDCtyAgUGxhbjoge3Nlc3Npb24ucGxhbiBvciAnTm9uZSd9IikKICAgICAgICB0cnk6CiAgICAgICAgICAgIGlucHV0KGYiICB7Qy5CTEt9UHJlc3MgRW50ZXIgdG8gY29udGludWUuLi57Qy5SfSIpCiAgICAgICAgZXhjZXB0IChLZXlib2FyZEludGVycnVwdCwgRU9GRXJyb3IpOgogICAgICAgICAgICBwYXNzCiAgICBlbHNlOgogICAgICAgIGluZm8oIldlbGNvbWUhIFBsZWFzZSByZWdpc3RlciBvciBsb2cgaW4gdG8gY29udGludWUuIikKCiAgICAjIFNob3cgYXV0aCBsb29wIGlmIG5vdCBhbHJlYWR5IGxvZ2dlZCBpbgogICAgaWYgbm90IHNlc3Npb24uaXNfdmFsaWQ6CiAgICAgICAgaWYgbm90IF9hdXRoX2xvb3AoKToKICAgICAgICAgICAgcmV0dXJuICAjIHVzZXIgY2hvc2UgZXhpdAoKICAgICMg4pSA4pSAIE1BSU4gTUVOVSBMT09QIChsb2dnZWQgaW4pIOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgAogICAgd2hpbGUgVHJ1ZToKICAgICAgICB0cnk6CiAgICAgICAgICAgIGRpc3BsYXlfbWVudSgpCiAgICAgICAgICAgIGNob2ljZSA9IF9wcm9tcHQoKQogICAgICAgICAgICBwcmludCgpCgogICAgICAgICAgICBpZiBjaG9pY2UgPT0gIjAiOgogICAgICAgICAgICAgICAgIyBMb2cgT3V0ICYgRXhpdAogICAgICAgICAgICAgICAgaWYgc2Vzc2lvbi5pc192YWxpZDoKICAgICAgICAgICAgICAgICAgICBmbG93X2xvZ291dCgpCiAgICAgICAgICAgICAgICBvaygiR29vZGJ5ZS4gU3RheSBzZWN1cmUuIikKICAgICAgICAgICAgICAgIHByaW50KCkKICAgICAgICAgICAgICAgIGJyZWFrCgogICAgICAgICAgICAjIOKUgOKUgCBTZWFyY2hlcyAxLTE0IOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgAogICAgICAgICAgICBlbGlmIGNob2ljZSBpbiAoIjEiLCIyIiwiMyIsIjQiLCI1IiwiNiIsIjciLCI4IiwiOSIsIjEwIiwiMTEiLCIxMiIsIjEzIiwiMTQiKToKICAgICAgICAgICAgICAgIGlkeF9tYXAgPSB7c3RyKGkpOiBpLTEgZm9yIGkgaW4gcmFuZ2UoMSwgMTUpfQogICAgICAgICAgICAgICAgaXRlbSA9IFNFQVJDSF9DQVRBTE9HW2lkeF9tYXBbY2hvaWNlXV0KICAgICAgICAgICAgICAgIGZsb3dfc2luZ2xlX3NlYXJjaCgqaXRlbSkKCiAgICAgICAgICAgIGVsaWYgY2hvaWNlID09ICIxNSI6CiAgICAgICAgICAgICAgICBmbG93X2JhdGNoX3NlYXJjaCgpCgogICAgICAgICAgICAjIOKUgOKUgCBVdGlsaXR5IOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgAogICAgICAgICAgICBlbGlmIGNob2ljZSA9PSAiMTYiOgogICAgICAgICAgICAgICAgZmxvd19jaGVja19iYWxhbmNlKCkKICAgICAgICAgICAgZWxpZiBjaG9pY2UgPT0gIjE3IjoKICAgICAgICAgICAgICAgIGZsb3dfdmlld191c2FnZSgpCiAgICAgICAgICAgIGVsaWYgY2hvaWNlID09ICIxOCI6CiAgICAgICAgICAgICAgICBmbG93X2NoZWNrX3N0YXR1cygpCiAgICAgICAgICAgIGVsaWYgY2hvaWNlID09ICIxOSI6CiAgICAgICAgICAgICAgICBmbG93X3ZpZXdfZG9jcygpCiAgICAgICAgICAgIGVsaWYgY2hvaWNlID09ICIyMCI6CiAgICAgICAgICAgICAgICBmbG93X2J1eV9jcmVkaXRzKCkKICAgICAgICAgICAgZWxpZiBjaG9pY2UgPT0gIjIxIjoKICAgICAgICAgICAgICAgIGZsb3dfc3VwcG9ydCgpCiAgICAgICAgICAgIGVsaWYgY2hvaWNlID09ICIyMiI6CiAgICAgICAgICAgICAgICBmbG93X3ZpZXdfc2F2ZWQoKQogICAgICAgICAgICBlbHNlOgogICAgICAgICAgICAgICAgd2FybihmIkludmFsaWQgb3B0aW9uOiAne2Nob2ljZX0nLiBQbGVhc2UgZW50ZXIgYSBudW1iZXIgZnJvbSB0aGUgbWVudS4iKQogICAgICAgICAgICAgICAgY29udGludWUKCiAgICAgICAgZXhjZXB0IEtleWJvYXJkSW50ZXJydXB0OgogICAgICAgICAgICBwcmludCgpCiAgICAgICAgICAgIHdhcm4oIkludGVycnVwdGVkLiBQcmVzcyBDdHJsK0MgYWdhaW4gdG8gZXhpdCBvciBFbnRlciB0byBjb250aW51ZS4iKQogICAgICAgICAgICB0cnk6CiAgICAgICAgICAgICAgICBpbnB1dChmIiAge0MuQkxLfVByZXNzIEVudGVyIHRvIGNvbnRpbnVlLi4ue0MuUn0iKQogICAgICAgICAgICBleGNlcHQgS2V5Ym9hcmRJbnRlcnJ1cHQ6CiAgICAgICAgICAgICAgICBwcmludCgpCiAgICAgICAgICAgICAgICBvaygiRXhpdGluZy4gU3RheSBzZWN1cmUhIikKICAgICAgICAgICAgICAgIGJyZWFrCiAgICAgICAgICAgIGNvbnRpbnVlCgogICAgICAgIGV4Y2VwdCBFT0ZFcnJvcjoKICAgICAgICAgICAgcHJpbnQoKQogICAgICAgICAgICBvaygiRU9GIGRldGVjdGVkIOKAlCBleGl0aW5nLiIpCiAgICAgICAgICAgIGJyZWFrCgogICAgICAgIGV4Y2VwdCBFeGNlcHRpb24gYXMgZToKICAgICAgICAgICAgZXJyKGYiVW5leHBlY3RlZCBlcnJvcjoge2V9IikKICAgICAgICAgICAgaW5mbygiSWYgdGhpcyBwZXJzaXN0cywgY29udGFjdCB5YWRpaWZ5QGdtYWlsLmNvbSIpCgogICAgICAgICMgUGF1c2UgYWZ0ZXIgZXZlcnkgYWN0aW9uCiAgICAgICAgdHJ5OgogICAgICAgICAgICBpZiBOQVJST1c6CiAgICAgICAgICAgICAgICBwcmludCgpCiAgICAgICAgICAgICAgICBpbnB1dChmIiAge0MuQkxLfeKUgOKUgOKUgCBQcmVzcyBFbnRlciB0byBjb250aW51ZSDilIDilIDilIB7Qy5SfSIpCiAgICAgICAgICAgIGVsc2U6CiAgICAgICAgICAgICAgICBpbnB1dChmIlxuICB7Qy5CTEt9UHJlc3MgRW50ZXIgdG8gcmV0dXJuIHRvIG1lbnUuLi57Qy5SfSIpCiAgICAgICAgZXhjZXB0IChLZXlib2FyZEludGVycnVwdCwgRU9GRXJyb3IpOgogICAgICAgICAgICBwYXNzCgoKIyDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZDilZAKIyBFTlRSWSBQT0lOVAojIOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkOKVkAoKaWYgX19uYW1lX18gPT0gIl9fbWFpbl9fIjoKICAgIHRyeToKICAgICAgICBtYWluKCkKICAgIGV4Y2VwdCBLZXlib2FyZEludGVycnVwdDoKICAgICAgICBwcmludChmIlxuICB7Qy5XUk59WyFdIFRlcm1pbmF0ZWQgYnkgdXNlci57Qy5SfVxuIikKICAgICAgICBzeXMuZXhpdCgwKQogICAgZXhjZXB0IEV4Y2VwdGlvbiBhcyBlOgogICAgICAgIHByaW50KGYiXG4gIHtDLkVSUn1bIV0gRmF0YWwgZXJyb3I6IHtlfXtDLlJ9IikKICAgICAgICBwcmludChmIiAge0MuQkxLfUNvbnRhY3QgeWFkaWlmeUBnbWFpbC5jb20gaWYgdGhpcyBwZXJzaXN0cy57Qy5SfVxuIikKICAgICAgICBzeXMuZXhpdCgxKQo="
-)
-
-_INSTRUCTIONS_B64 = (
-    "4pWU4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWXCuKVkSAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIOKVkQrilZEgICAgICAgIERBUktCT1hFUyBJTlRFTExJR0VOQ0UgU1lTVEVNICAgICAgICAgICAgICAgICAgICAgICAgICAgICDilZEK4pWRICAgICAgICBUZXJtaW5hbCBDbGllbnQg4oCUIEluc3RhbGxhdGlvbiAmIFVzYWdlIEd1aWRlICAgICAgICAgICAgICDilZEK4pWRICAgICAgICBWZXJzaW9uIDMuMCAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg4pWRCuKVkSAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIOKVkQrilZEgIFN1cHBvcnQgIDogQGRhcmtib3hlc0FkbWluIChUZWxlZ3JhbSkgICAgICAgICAgICAgICAgICAgICAgICAgICDilZEK4pWRICBFbWFpbCAgICA6IHlhZGlpZnlAZ21haWwuY29tICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg4pWRCuKVkSAgQ2hhbm5lbCAgOiBAZGFya2JveGVzdjEgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIOKVkQrilZEgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICDilZEK4pWa4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWQ4pWdCgoK4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSBClNFQ1RJT04gMTogUkVRVUlSRU1FTlRTCuKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgQoKICDigKIgUHl0aG9uIDMuOCBvciBhYm92ZQogIOKAoiBwaXAgKFB5dGhvbiBwYWNrYWdlIG1hbmFnZXIsIGNvbWVzIHdpdGggUHl0aG9uKQogIOKAoiBJbnRlcm5ldCBjb25uZWN0aW9uCiAg4oCiIEEgRGFya0JveGVzIGFjY291bnQgKEFjY291bnQgSUQgKyBQYXNzd29yZCkKICDigKIgTk8gVGVsZWdyYW0gYWNjb3VudCByZXF1aXJlZAoKCuKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgQpTRUNUSU9OIDI6IElOU1RBTExBVElPTgrilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIEKCk9OIFRFUk1VWCAoQW5kcm9pZCkK4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSA4pSACiAgU3RlcCAxOiBPcGVuIFRlcm11eAogIAogIFN0ZXAgMjogVXBkYXRlIHBhY2thZ2VzIGFuZCBpbnN0YWxsIFB5dGhvbgogICAgcGtnIHVwZGF0ZSAmJiBwa2cgdXBncmFkZQogICAgcGtnIGluc3RhbGwgcHl0aG9uCgogIFN0ZXAgMzogSW5zdGFsbCByZXF1aXJlZCBsaWJyYXJ5CiAgICBwaXAgaW5zdGFsbCByZXF1ZXN0cwoKICBTdGVwIDQ6IENvcHkgdGhlIGNsaWVudCBzY3JpcHQgdG8gVGVybXV4CiAgICAtIERvd25sb2FkIGRhcmtib3hlc19jbGllbnQucHkgZnJvbSB0aGUgVGVsZWdyYW0gYm90CiAgICAgIChUYXAgIkRvd25sb2FkIENsaWVudCBTY3JpcHQiIGluIHRoZSBib3QgbWVudSkKICAgIC0gT3IgdHJhbnNmZXIgaXQgbWFudWFsbHkgdG8geW91ciBUZXJtdXggaG9tZSBkaXJlY3RvcnkKCiAgU3RlcCA1OiBSdW4gdGhlIGNsaWVudAogICAgcHl0aG9uIGRhcmtib3hlc19jbGllbnQucHkKCiAgVEVSTVVYIFRJUFM6CiAg4oCiIElmIHRleHQgbG9va3MgY3JhbXBlZCwgdHVybiB5b3VyIHBob25lIHRvIGxhbmRzY2FwZSBtb2RlLgogIOKAoiBUaGUgY2xpZW50IGF1dG8tZGV0ZWN0cyBuYXJyb3cgdGVybWluYWxzIGFuZCB1c2VzIDItbGluZQogICAgZGlzcGxheSBtb2RlIGZvciBtZW51cyBhbmQgcHJvbXB0cy4KICDigKIgWW91IGNhbiBpbmNyZWFzZSBmb250IHNpemUgaW4gVGVybXV4IHNldHRpbmdzLgoKCk9OIExJTlVYIC8gS0FMSSAvIFVCVU5UVSAvIERFQklBTgrilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAKICBTdGVwIDE6IEluc3RhbGwgUHl0aG9uIChpZiBub3QgcHJlc2VudCkKICAgIHN1ZG8gYXB0IGluc3RhbGwgcHl0aG9uMyBweXRob24zLXBpcAoKICBTdGVwIDI6IEluc3RhbGwgcmVxdWlyZWQgbGlicmFyeQogICAgcGlwMyBpbnN0YWxsIHJlcXVlc3RzCgogIFN0ZXAgMzogUnVuIHRoZSBjbGllbnQKICAgIHB5dGhvbjMgZGFya2JveGVzX2NsaWVudC5weQoKCk9OIFdJTkRPV1MgKFBvd2VyU2hlbGwgLyBDTUQpCuKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgAogIFN0ZXAgMTogRG93bmxvYWQgUHl0aG9uIGZyb20gaHR0cHM6Ly9weXRob24ub3JnCiAgICAgICAgICBDaGVjayAiQWRkIFB5dGhvbiB0byBQQVRIIiBkdXJpbmcgaW5zdGFsbAoKICBTdGVwIDI6IEluc3RhbGwgcmVxdWlyZWQgbGlicmFyeQogICAgcGlwIGluc3RhbGwgcmVxdWVzdHMKCiAgU3RlcCAzOiBSdW4gdGhlIGNsaWVudAogICAgcHl0aG9uIGRhcmtib3hlc19jbGllbnQucHkKCgpPTiBtYWNPUwrilIDilIDilIDilIDilIDilIDilIDilIAKICBTdGVwIDE6IEluc3RhbGwgUHl0aG9uCiAgICBicmV3IGluc3RhbGwgcHl0aG9uICAob3IgZG93bmxvYWQgZnJvbSBweXRob24ub3JnKQoKICBTdGVwIDI6IEluc3RhbGwgcmVxdWlyZWQgbGlicmFyeQogICAgcGlwMyBpbnN0YWxsIHJlcXVlc3RzCgogIFN0ZXAgMzogUnVuIHRoZSBjbGllbnQKICAgIHB5dGhvbjMgZGFya2JveGVzX2NsaWVudC5weQoKCuKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgQpTRUNUSU9OIDM6IEdFVFRJTkcgU1RBUlRFRCAoRklSU1QgUlVOKQrilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIEKCllvdSBkbyBOT1QgbmVlZCBhIFRlbGVncmFtIGFjY291bnQgdG8gdXNlIHRoZSB0ZXJtaW5hbCBjbGllbnQuCgpPUFRJT04gQTogUmVnaXN0ZXIgZGlyZWN0bHkgaW4gdGhlIGNsaWVudAogIDEuIFJ1bjogcHl0aG9uIGRhcmtib3hlc19jbGllbnQucHkKICAyLiBDaG9vc2UgWzFdIFJlZ2lzdGVyIE5ldyBBY2NvdW50CiAgMy4gRW50ZXIgYSB1c2VybmFtZSBhbmQgcGFzc3dvcmQKICA0LiBZb3VyIEFjY291bnQgSUQgd2lsbCBiZSBzaG93biDigJQgU0FWRSBJVC4KICA1LiBDb250YWN0IEBkYXJrYm94ZXNBZG1pbiB0byBwdXJjaGFzZSBjcmVkaXRzL3BsYW5zLgoKT1BUSU9OIEI6IEdldCBjcmVkZW50aWFscyBmcm9tIHRoZSBUZWxlZ3JhbSBib3QgKGlmIHlvdSB1c2UgVEcpCiAgMS4gT3BlbiBvdXIgVGVsZWdyYW0gYm90LgogIDIuIFRhcCAiR2V0IE15IExvZ2luIENyZWRlbnRpYWxzIiAo8J+Xne+4jykgaW4gdGhlIG1haW4gbWVudS4KICAzLiBOb3RlIHlvdXIgQWNjb3VudCBJRCBhbmQgcGFzc3dvcmQuCiAgNC4gVXNlIHRoZW0gdG8gbG9nIGluIHdpdGggb3B0aW9uIFsyXSBpbiB0aGUgY2xpZW50LgoKCuKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgQpTRUNUSU9OIDQ6IEhPVyBUTyBCVVkgQ1JFRElUUyAvIFBMQU5TCuKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgQoKTUVUSE9EIDEg4oCUIFZpYSBUZWxlZ3JhbSBCb3QKICAxLiBPcGVuIHRoZSBEYXJrQm94ZXMgVGVsZWdyYW0gYm90LgogIDIuIFRhcCDwn5KOIFByZW1pdW0gUGxhbnMuCiAgMy4gU2VsZWN0IGEgcGxhbi4KICA0LiBQYXkgdmlhIFVQSTogZGFya2JveGVzQHlibAogIDUuIEFmdGVyIHBheW1lbnQsIGVudGVyIHlvdXIgVVRSIC8gVHJhbnNhY3Rpb24gTnVtYmVyCiAgICAgKHNob3duIGluIHlvdXIgVVBJIGFwcCDigJQgUGhvbmVQZSwgR1BheSwgUGF5dG0sIGV0Yy4pCiAgNi4gQWRtaW4gdmVyaWZpZXMgbWFudWFsbHkg4oCUIGFjdGl2YXRlZCB3aXRoaW4gNeKAkzE1IG1pbnV0ZXMuCgpNRVRIT0QgMiDigJQgRGlyZWN0IENvbnRhY3QKICBDb250YWN0OiBAZGFya2JveGVzQWRtaW4gKFRlbGVncmFtKQogIEVtYWlsICA6IHlhZGlpZnlAZ21haWwuY29tCiAgUHJvdmlkZTogeW91ciBBY2NvdW50IElEICsgcGF5bWVudCBwcm9vZiAoVVRSIG51bWJlcikKCkFWQUlMQUJMRSBQTEFOUwogIOKaoSBTdGFydGVyIFBhY2sgICAgICA1IHNlYXJjaGVzICAgICDigrkxMDAgIChubyBleHBpcnkpCiAg8J+UjSBFeHBsb3JlciBQYWNrICAgIDE1IHNlYXJjaGVzICAgICDigrkyNTAgIChubyBleHBpcnkpCiAg8J+agCBEYWlseSAxMC8zMGQgICAgIDEwL2RhecK3MzAgZGF5cyAg4oK5ODAwCiAg8J+SjiBEYWlseSAyMC8zMGQgICAgIDIwL2RhecK3MzAgZGF5cyAg4oK5MTAwMAogIPCfjJ8gRGFpbHkgMTAvMm0gICAgICAxMC9kYXnCtzYwIGRheXMgIOKCuTE1MDAKICDwn5GRIERhaWx5IDIwLzJtICAgICAgMjAvZGF5wrc2MCBkYXlzICDigrkxODAwCgoK4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSBClNFQ1RJT04gNTogQVZBSUxBQkxFIFNFQVJDSEVTCuKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgQoKICBPcHRpb24gIFNlYXJjaCBUeXBlICAgICAgICAgICBJbnB1dCBFeGFtcGxlCiAg4pSA4pSA4pSA4pSA4pSA4pSAICDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAgIOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgOKUgAogIFs0XSAgICAgUGhvbmUgSW50ZWxsaWdlbmNlICAgIDk4NzY1NDMyMTAKICBbNV0gICAgIEZhbWlseSBOZXR3b3JrICAgICAgICAxMjM0NTY3ODkwMTIgKEFhZGhhcikKICBbNl0gICAgIEFhZGhhciBDb21wcmVoZW5zaXZlICAxMjM0NTY3ODkwMTIKICBbN10gICAgIFZlaGljbGUgSW50ZWxsaWdlbmNlICBVUDUzQ1ozMzkxCiAgWzhdICAgICBUZWxlZ3JhbSBJbnRlbGxpZ2VuY2UgQHVzZXJuYW1lCiAgWzldICAgICBEZXZpY2UgSU1FSSAgICAgICAgICAgMzU0Njc4OTAxMjM0NTY3CiAgWzEwXSAgICBHU1QgSW50ZWxsaWdlbmNlICAgICAgMjdBQVBGVTA5MzlGMVpWCiAgWzExXSAgICBJbnN0YWdyYW0gICAgICAgICAgICAgdXNlcm5hbWUKICBbMTJdICAgIElQIEludGVsbGlnZW5jZSAgICAgICAxLjIuMy40CiAgWzEzXSAgICBJRlNDIENvZGUgICAgICAgICAgICAgU0JJTjAwMDEyMzQKICBbMTRdICAgIEVtYWlsIEludGVsbGlnZW5jZSAgICB1c2VyQGV4YW1wbGUuY29tCiAgWzE1XSAgICBVUEkgSW50ZWxsaWdlbmNlICAgICAgdXNlckB1cGkKICBbMTZdICAgIFBha2lzdGFuIERCICAgICAgICAgICBuYW1lIC8gcGhvbmUgLyBOSUMKICBbMTddICAgIEFkdmFuY2VkIE9TSU5UL0xlYWsgICBhbnkgcXVlcnkKICBbMThdICAgIEJhdGNoIFNlYXJjaCAgICAgICAgICBtdWx0aXBsZSBhdCBvbmNlCgoK4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSBClNFQ1RJT04gNjogU0FWRUQgUkVTVUxUUwrilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIEKCkFsbCBzZWFyY2ggcmVzdWx0cyBhcmUgYXV0b21hdGljYWxseSBzYXZlZCBhcyBKU09OIGZpbGVzIGluOgogIH4vZGFya2JveGVzX3Jlc3VsdHMvCgpZb3UgY2FuIHZpZXcgdGhlbSB3aXRoIG9wdGlvbiBbMjZdIGluIHRoZSBtZW51LCBvciBvcGVuCnRoZSBKU09OIGZpbGVzIGRpcmVjdGx5LgoKCuKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgQpTRUNUSU9OIDc6IFNFQ1VSSVRZIE5PVElDRVMK4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSBCgogIOKAoiBOZXZlciBzaGFyZSB5b3VyIHBhc3N3b3JkIHdpdGggYW55b25lLCBpbmNsdWRpbmcgYWRtaW4uCiAg4oCiIE9mZmljaWFsIGFkbWluOiBAZGFya2JveGVzQWRtaW4gT05MWS4KICDigKIgQmV3YXJlIG9mIGltcGVyc29uYXRvcnMuCiAg4oCiIFRoaXMgc2VydmljZSBpcyBmb3IgYXV0aG9yaXplZCwgbGF3ZnVsIHVzZSBvbmx5LgogIOKAoiBNaXN1c2UgbWF5IHJlc3VsdCBpbiBhY2NvdW50IHRlcm1pbmF0aW9uLgoKCuKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgQpTRUNUSU9OIDg6IFRST1VCTEVTSE9PVElORwrilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIHilIEKCiAgUHJvYmxlbTogIk1vZHVsZU5vdEZvdW5kRXJyb3I6IE5vIG1vZHVsZSBuYW1lZCAncmVxdWVzdHMnIgogIEZpeCAgICA6IFJ1biAgcGlwIGluc3RhbGwgcmVxdWVzdHMKCiAgUHJvYmxlbTogIkNvbm5lY3Rpb24gZmFpbGVkIiBvciAiVGltZW91dCIKICBGaXggICAgOiBDaGVjayBpbnRlcm5ldC4gVHJ5IGFnYWluIGluIGEgbW9tZW50LgogICAgICAgICAgIFNlcnZlciBtYXkgYmUgdGVtcG9yYXJpbHkgYnVzeS4KCiAgUHJvYmxlbTogIkludmFsaWQgY3JlZGVudGlhbHMiCiAgRml4ICAgIDogQ2hlY2sgQWNjb3VudCBJRCBhbmQgcGFzc3dvcmQgY2FyZWZ1bGx5LgogICAgICAgICAgIEFjY291bnQgSUQgc3RhcnRzIHdpdGggREIsIGUuZy4gREIxQTJCM0M0RC4KCiAgUHJvYmxlbTogIkluc3VmZmljaWVudCBjcmVkaXRzIgogIEZpeCAgICA6IEJ1eSBjcmVkaXRzIHZpYSBvcHRpb24gWzI0XSBpbiB0aGUgbWVudS4KCiAgUHJvYmxlbTogRGlzcGxheSBsb29rcyB3cm9uZyBpbiBUZXJtdXgKICBGaXggICAgOiBUaGUgY2xpZW50IGF1dG8tYWRqdXN0cyBmb3IgbmFycm93IHNjcmVlbnMuCiAgICAgICAgICAgVHJ5IGxhbmRzY2FwZSBtb2RlIG9yIGluY3JlYXNlIHRlcm1pbmFsIHdpZHRoLgoKICBTdGlsbCBzdHVjaz8gQ29udGFjdDoKICAgIFRlbGVncmFtIDogQGRhcmtib3hlc0FkbWluCiAgICBFbWFpbCAgICA6IHlhZGlpZnlAZ21haWwuY29tCgoK4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSB4pSBCkRBUktCT1hFUyBJTlRFTExJR0VOQ0UgU1lTVEVNICDCqTIwMjUgIEFsbCByaWdodHMgcmVzZXJ2ZWQuCuKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgeKUgQo="
-)
-
-def _get_client_bytes() -> bytes:
-    """Decode embedded client script."""
-    return _b64.b64decode(_CLIENT_SCRIPT_B64)
-
-def _get_instructions_bytes() -> bytes:
-    """Decode embedded instructions."""
-    return _b64.b64decode(_INSTRUCTIONS_B64)
-
-
-@bot_client.on(events.CallbackQuery(pattern=r'^download_client$'))
-async def download_client_callback(event):
-    """Send client script and instructions directly from embedded content."""
-    try:
-        user_id = event.sender_id
-
-        user_doc = await db_manager.get_user(user_id)
-        if not user_doc:
-            await event.answer("❌ Please /start the bot first.", alert=True)
-            return
-
-        await event.answer("📦 Preparing download...", alert=False)
-
-        sent_files = []
-
-        # ── Send darkboxes_client.py from embedded bytes ──────────
-        try:
-            client_bytes = _get_client_bytes()
-            client_buf = _BytesIO(client_bytes)
-            client_buf.name = "darkboxes_client.py"
-            await bot_client.send_file(
-                user_id,
-                client_buf,
-                caption=(
-                    "💻 **DARKBOXES INTELLIGENCE CLIENT**\n\n"
-                    "**Version:** 3.0 — Professional Terminal Edition\n"
-                    "**Compatible:** Termux · Linux · Kali · Windows · macOS\n\n"
-                    "📋 **Quick Start:**\n"
-                    "`pip install requests`\n"
-                    "`python darkboxes_client.py`\n\n"
-                    "🔑 Log in with your Account ID & Password (see 🗝️ button below).\n"
-                    "❌ No Telegram account needed to use the client.\n\n"
-                    "📖 Installation guide sent separately (INSTRUCTIONS.txt)"
-                ),
-                parse_mode="md"
-            )
-            sent_files.append("darkboxes_client.py ✅")
-            logger.info(f"✅ Sent darkboxes_client.py to {user_id}")
-        except Exception as e:
-            logger.error(f"❌ Failed to send client script to {user_id}: {e}")
-            sent_files.append("darkboxes_client.py ❌")
-
-        # ── Send INSTRUCTIONS.txt from embedded bytes ─────────────
-        try:
-            instr_bytes = _get_instructions_bytes()
-            instr_buf = _BytesIO(instr_bytes)
-            instr_buf.name = "INSTRUCTIONS.txt"
-            await bot_client.send_file(
-                user_id,
-                instr_buf,
-                caption=(
-                    "📖 **DARKBOXES — INSTALLATION & USAGE GUIDE**\n\n"
-                    "Read this before running the client.\n"
-                    "• Termux (Android), Linux, Kali, Windows, macOS steps included.\n\n"
-                    "❓ Help: @darkboxesAdmin | yadiify@gmail.com"
-                ),
-                parse_mode="md"
-            )
-            sent_files.append("INSTRUCTIONS.txt ✅")
-            logger.info(f"✅ Sent INSTRUCTIONS.txt to {user_id}")
-        except Exception as e:
-            logger.error(f"❌ Failed to send instructions to {user_id}: {e}")
-            sent_files.append("INSTRUCTIONS.txt ❌")
-
-        await event.edit(
-            f"✅ **FILES SENT TO YOUR CHAT**\n\n"
-            f"📦 **Sent:**\n"
-            + "\n".join(f"  • {f}" for f in sent_files) +
-            f"\n\n"
-            f"📋 **Next Steps:**\n"
-            f"1. Install: `pip install requests`\n"
-            f"2. Run: `python darkboxes_client.py`\n"
-            f"3. Register (option 1) or log in (option 2)\n"
-            f"4. Use option 24 inside the client to buy credits\n\n"
-            f"❓ Help: @darkboxesAdmin | yadiify@gmail.com",
-            buttons=[
-                [Button.inline("🗝️ Get My Login Credentials", "get_credentials")],
-                [Button.inline("« Main Menu", "main_menu")]
-            ],
-            parse_mode="md"
-        )
-
-    except Exception as e:
-        logger.error(f"❌ download_client_callback: {e}")
-        await event.answer("❌ Error preparing download. Contact @darkboxesAdmin.", alert=True)
-
-
-@bot_client.on(events.CallbackQuery(pattern=r'^get_credentials$'))
-async def get_credentials_callback(event):
-    """Show user their account credentials for the client script"""
-    try:
-        user_id = event.sender_id
-
-        account = await asyncio.get_running_loop().run_in_executor(
-            None, lambda: db_manager.db.accounts.find_one({"linked_tg_ids": user_id})
-        )
-
-        if not account:
-            # Auto-create account
-            user = await event.get_sender()
-            account = await get_or_create_db_account(
-                user_id,
-                getattr(user, 'username', '') or '',
-                getattr(user, 'first_name', '') or 'User'
-            )
-
-        acc_id = account.get("account_id", "N/A")
-        sub = account.get("subscription") or "None"
-        credits = account.get("searches_remaining", 0)
-
-        cred_text = (
-            f"🗝️ **YOUR LOGIN CREDENTIALS**\n\n"
-            f"Use these to log into the terminal client.\n"
-            f"No Telegram account needed — just these details.\n\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"🆔 **Account ID:** `{acc_id}`\n"
-            f"🔑 **Password:** Your password was sent when you first started the bot.\n"
-            f"   If you can't find it, scroll up in this chat to the welcome message,\n"
-            f"   or contact @darkboxesAdmin with your Account ID to reset it.\n"
-            f"💰 **Credits:** {credits}\n"
-            f"📦 **Plan:** {sub}\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"💻 **Use in client:**\n"
-            f"1. Run `python darkboxes_client.py`\n"
-            f"2. Choose Log In (option 2)\n"
-            f"3. Enter Account ID: `{acc_id}`\n"
-            f"4. Enter your password\n\n"
-            f"🔒 Never share your password with anyone.\n"
-            f"Official support only: @darkboxesAdmin | yadiify@gmail.com"
-        )
-
-        await event.edit(
-            cred_text,
-            buttons=[
-                [Button.inline("💻 Download Client", "download_client")],
-                [Button.inline("🔄 Refresh Account Info", "get_credentials")],
-                [Button.inline("« Main Menu", "main_menu")]
-            ],
-            parse_mode="md"
-        )
-
-    except Exception as e:
-        logger.error(f"❌ get_credentials_callback: {e}")
-        await event.answer("❌ Error fetching credentials", alert=True)
-
-
-# ================== ENHANCED ADMIN — LAST ACTIVE USERS & SEARCH LOGS ==================
-
-@bot_client.on(events.CallbackQuery(pattern=r'^admin_last_active$'))
-async def admin_last_active_callback(event):
-    """Admin: show recently active users"""
-    try:
-        if not admin_panel.is_admin(event.sender_id):
-            await event.answer("❌ Admin only", alert=True)
-            return
-
-        loop = asyncio.get_running_loop()
-        users = await loop.run_in_executor(
-            None, lambda: list(db_manager.db.users.find(
-                {},
-                {"user_id": 1, "username": 1, "first_name": 1, "last_seen": 1,
-                 "searches_remaining": 1, "subscription": 1, "total_searches": 1}
-            ).sort("last_seen", -1).limit(20))
-        )
-
-        if not users:
-            await event.edit(
-                "👥 **LAST ACTIVE USERS**\n\nNo users found.",
-                buttons=[[Button.inline("« Admin Panel", "admin_panel")]],
-                parse_mode="md"
-            )
-            return
-
-        text = "👥 **LAST ACTIVE USERS** (Top 20)\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        now = datetime.now(timezone.utc)
-
-        for i, u in enumerate(users, 1):
-            uname = f"@{u.get('username')}" if u.get('username') else "no_username"
-            fname = u.get('first_name', 'Unknown')
-            uid = u.get('user_id', 'N/A')
-            last_seen_raw = u.get('last_seen', '')
-            sub = u.get('subscription') or "—"
-            credits = u.get('searches_remaining', 0)
-            searches = u.get('total_searches', 0)
-
-            # Format time ago
-            if last_seen_raw:
-                try:
-                    ls = datetime.fromisoformat(last_seen_raw.replace('Z', '+00:00'))
-                    diff = now - ls
-                    if diff.seconds < 60:
-                        ago = "just now"
-                    elif diff.seconds < 3600:
-                        ago = f"{diff.seconds // 60}m ago"
-                    elif diff.days == 0:
-                        ago = f"{diff.seconds // 3600}h ago"
-                    else:
-                        ago = f"{diff.days}d ago"
-                except Exception:
-                    ago = last_seen_raw[:10]
-            else:
-                ago = "unknown"
-
-            text += (
-                f"{i}. **{fname}** ({uname})\n"
-                f"   🆔 `{uid}` • 🕐 {ago}\n"
-                f"   💰 Credits: {credits} • 📦 Plan: {sub} • 🔍 Searches: {searches}\n\n"
-            )
-
-        await event.edit(
-            text,
-            buttons=[
-                [Button.inline("🔄 Refresh", "admin_last_active")],
-                [Button.inline("« Admin Panel", "admin_panel")]
-            ],
-            parse_mode="md"
-        )
-
-    except Exception as e:
-        logger.error(f"❌ admin_last_active_callback: {e}")
-        await event.answer("❌ Error loading last active users", alert=True)
-
-
-@bot_client.on(events.CallbackQuery(pattern=r'^admin_search_logs$'))
-async def admin_search_logs_callback(event):
-    """Admin: show recent search logs across all users"""
-    try:
-        if not admin_panel.is_admin(event.sender_id):
-            await event.answer("❌ Admin only", alert=True)
-            return
-
-        loop = asyncio.get_running_loop()
-        logs = await loop.run_in_executor(
-            None, lambda: list(db_manager.db.search_logs.find(
-                {},
-                {"user_id": 1, "search_type": 1, "query": 1, "timestamp": 1,
-                 "success": 1, "credits_used": 1}
-            ).sort("timestamp", -1).limit(25))
-        )
-
-        if not logs:
-            await event.edit(
-                "🔍 **SEARCH LOGS**\n\nNo search logs found.",
-                buttons=[[Button.inline("« Admin Panel", "admin_panel")]],
-                parse_mode="md"
-            )
-            return
-
-        text = "🔍 **RECENT SEARCH LOGS** (Last 25)\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-
-        for i, log in enumerate(logs, 1):
-            uid = log.get('user_id', 'N/A')
-            stype = log.get('search_type', 'unknown')
-            query = log.get('query', '—')
-            ts = log.get('timestamp', '')[:16].replace('T', ' ')
-            success = "✅" if log.get('success') else "❌"
-            credits = log.get('credits_used', 0)
-
-            # Mask sensitive query data
-            if len(query) > 12:
-                masked = query[:4] + "****" + query[-3:]
-            else:
-                masked = query[:3] + "****"
-
-            text += (
-                f"{i}. {success} **{stype}** — `{masked}`\n"
-                f"   👤 UID: `{uid}` • 🕐 {ts} • 💳 {credits}cr\n\n"
-            )
-
-        await event.edit(
-            text,
-            buttons=[
-                [Button.inline("🔄 Refresh", "admin_search_logs")],
-                [Button.inline("📊 User Search Logs", "admin_user_search_logs")],
-                [Button.inline("« Admin Panel", "admin_panel")]
-            ],
-            parse_mode="md"
-        )
-
-    except Exception as e:
-        logger.error(f"❌ admin_search_logs_callback: {e}")
-        await event.answer("❌ Error loading search logs", alert=True)
-
-
-@bot_client.on(events.CallbackQuery(pattern=r'^admin_user_search_logs$'))
-async def admin_user_search_logs_ask(event):
-    """Admin: ask for user ID to see their search logs"""
-    try:
-        if not admin_panel.is_admin(event.sender_id):
-            await event.answer("❌ Admin only", alert=True)
-            return
-
-        user_states[event.sender_id] = {"action": "admin_view_user_search_logs"}
-        await event.edit(
-            "🔍 **VIEW USER SEARCH LOGS**\n\n"
-            "Enter the User ID to see their complete search history:",
-            buttons=[[Button.inline("❌ Cancel", "admin_panel")]],
-            parse_mode="md"
-        )
-    except Exception as e:
-        logger.error(f"❌ admin_user_search_logs_ask: {e}")
-
-
-@bot_client.on(events.CallbackQuery(pattern=r'^admin_intent_monitor$'))
-async def admin_intent_monitor_callback(event):
-    """Admin: intent monitoring — show suspicious/high-volume users"""
-    try:
-        if not admin_panel.is_admin(event.sender_id):
-            await event.answer("❌ Admin only", alert=True)
-            return
-
-        loop = asyncio.get_running_loop()
-        now = datetime.now(timezone.utc)
-        one_hour_ago = (now - timedelta(hours=1)).isoformat()
-
-        # High-volume in last hour
-        pipeline = [
-            {"$match": {"timestamp": {"$gte": one_hour_ago}}},
-            {"$group": {
-                "_id": "$user_id",
-                "count": {"$sum": 1},
-                "types": {"$addToSet": "$search_type"}
-            }},
-            {"$sort": {"count": -1}},
-            {"$limit": 15}
-        ]
-
-        high_vol = await loop.run_in_executor(
-            None, lambda: list(db_manager.db.search_logs.aggregate(pipeline))
-        )
-
-        text = (
-            "🕵️ **INTENT MONITOR — ACTIVITY ANALYSIS**\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            "**High Volume Users (Last 1 Hour):**\n\n"
-        )
-
-        if not high_vol:
-            text += "No significant activity in the last hour.\n\n"
-        else:
-            for i, entry in enumerate(high_vol, 1):
-                uid = entry.get('_id', 'N/A')
-                count = entry.get('count', 0)
-                types = ", ".join(entry.get('types', []))
-
-                # Flag if suspicious
-                flag = "🚨" if count >= 10 else ("⚠️" if count >= 5 else "ℹ️")
-
-                # Look up username
-                u = await loop.run_in_executor(
-                    None, lambda: db_manager.db.users.find_one(
-                        {"user_id": uid}, {"username": 1, "first_name": 1}
-                    )
-                )
-                uname = f"@{u.get('username', '?')}" if u else "unknown"
-                fname = u.get('first_name', 'Unknown') if u else 'Unknown'
-
-                text += (
-                    f"{flag} {i}. **{fname}** ({uname})\n"
-                    f"   UID: `{uid}` • {count} searches\n"
-                    f"   Types: {types}\n\n"
-                )
-
-        text += "\n💡 High-volume = 10+ searches in 1 hour. Review manually."
-
-        await event.edit(
-            text,
-            buttons=[
-                [Button.inline("🔄 Refresh", "admin_intent_monitor")],
-                [Button.inline("📋 Search Logs", "admin_search_logs")],
-                [Button.inline("👥 Last Active", "admin_last_active")],
-                [Button.inline("« Admin Panel", "admin_panel")]
-            ],
-            parse_mode="md"
-        )
-
-    except Exception as e:
-        logger.error(f"❌ admin_intent_monitor_callback: {e}")
-        await event.answer("❌ Error loading intent monitor", alert=True)
-
-
-@bot_client.on(events.CallbackQuery(pattern=r'^admin_pending_utr$'))
-async def admin_pending_utr_callback(event):
-    """Admin: view all pending UTR payments"""
-    try:
-        if not admin_panel.is_admin(event.sender_id):
-            await event.answer("❌ Admin only", alert=True)
-            return
-
-        loop = asyncio.get_running_loop()
-        pending = await loop.run_in_executor(
-            None, lambda: list(db_manager.db.pending_payments.find(
-                {"status": "pending"}
-            ).sort("timestamp", -1).limit(20))
-        )
-
-        if not pending:
-            await event.edit(
-                "✅ **NO PENDING PAYMENTS**\n\nAll payments have been processed.",
-                buttons=[[Button.inline("« Admin Panel", "admin_panel")]],
-                parse_mode="md"
-            )
-            return
-
-        text = f"⏳ **PENDING UTR PAYMENTS** ({len(pending)} pending)\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-
-        for i, pay in enumerate(pending[:10], 1):
-            pid = pay.get('payment_id', 'N/A')
-            uid = pay.get('user_id', 'N/A')
-            fname = pay.get('first_name', 'N/A')
-            plan = pay.get('plan_name', 'N/A')
-            amount = pay.get('amount', 0)
-            utr = pay.get('utr', '—')
-            ts = pay.get('timestamp', '')[:16].replace('T', ' ')
-            plan_id = pay.get('plan_id', '')
-
-            text += (
-                f"{i}. **{fname}** — UID: `{uid}`\n"
-                f"   💳 Plan: {plan} (₹{amount})\n"
-                f"   🏦 UTR: `{utr}`\n"
-                f"   🕐 {ts}\n"
-                f"   [✅ Approve](tg://btn/approve_payment_{pid}_{uid}_{plan_id})\n\n"
-            )
-
-        await event.edit(
-            text,
-            buttons=[
-                [Button.inline("🔄 Refresh", "admin_pending_utr")],
-                [Button.inline("« Admin Panel", "admin_panel")]
-            ],
-            parse_mode="md"
-        )
-
-    except Exception as e:
-        logger.error(f"❌ admin_pending_utr_callback: {e}")
-        await event.answer("❌ Error loading pending payments", alert=True)
-
-
-async def handle_admin_view_user_search_logs(event):
-    """Handle admin request to view a specific user's search logs"""
-    try:
-        user_input = (event.text or "").strip()
-        if not user_input.isdigit():
-            await event.respond("❌ Please enter a valid numeric user ID.")
-            return
-
-        target_uid = int(user_input)
-        loop = asyncio.get_running_loop()
-
-        logs = await loop.run_in_executor(
-            None, lambda: list(db_manager.db.search_logs.find(
-                {"user_id": target_uid},
-                {"search_type": 1, "query": 1, "timestamp": 1, "success": 1, "credits_used": 1}
-            ).sort("timestamp", -1).limit(30))
-        )
-
-        user_doc = await db_manager.get_user(target_uid)
-        uname = f"@{user_doc.get('username', '?')}" if user_doc else "unknown"
-        fname = user_doc.get('first_name', 'Unknown') if user_doc else 'Unknown'
-
-        if not logs:
-            await event.respond(
-                f"📋 **SEARCH LOGS — {fname} ({uname})**\n\nNo search logs found for this user."
-            )
-            user_states.pop(event.sender_id, None)
-            return
-
-        text = f"📋 **SEARCH LOGS — {fname} ({uname})**\nUID: `{target_uid}`\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-
-        for i, log in enumerate(logs, 1):
-            stype = log.get('search_type', 'unknown')
-            query = log.get('query', '—')
-            ts = log.get('timestamp', '')[:16].replace('T', ' ')
-            success = "✅" if log.get('success') else "❌"
-            credits = log.get('credits_used', 0)
-
-            text += (
-                f"{i}. {success} **{stype}**\n"
-                f"   Query: `{query}`\n"
-                f"   🕐 {ts} • 💳 {credits}cr\n\n"
-            )
-
-        await event.respond(text, parse_mode="md")
-        user_states.pop(event.sender_id, None)
-
-    except Exception as e:
-        logger.error(f"❌ handle_admin_view_user_search_logs: {e}")
-        await event.respond("❌ Error retrieving search logs.")
-        user_states.pop(event.sender_id, None)
-
-async def daily_subscription_reset():
-    """Background task: reset daily usage counter at midnight UTC"""
-    while True:
-        try:
-            now = datetime.now(timezone.utc)
-            # Sleep until next midnight UTC
-            next_midnight = (now + timedelta(days=1)).replace(
-                hour=0, minute=0, second=5, microsecond=0
-            )
-            sleep_secs = (next_midnight - now).total_seconds()
-            logger.info(f"⏰ Next subscription reset in {sleep_secs/3600:.1f}h")
-            await asyncio.sleep(sleep_secs)
-
-            today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            result = await asyncio.get_running_loop().run_in_executor(
-                None, lambda: db_manager.db.users.update_many(
-                    {"subscription_reset_date": {"$ne": today_str}, "subscription": {"$ne": None}},
-                    {"$set": {"subscription_used_today": 0, "subscription_reset_date": today_str}}
-                )
-            )
-            logger.info(f"✅ Daily reset: {result.modified_count} subscriptions reset")
-        except Exception as e:
-            logger.error(f"❌ Error in daily_subscription_reset: {e}")
-            await asyncio.sleep(3600)
-
-
-
-# ================== WEB SERVER ==================
-
-
-async def memory_monitor():
-    """Background task: log memory usage every 5 minutes to detect leaks.
-    Uses /proc/self/status (always available on Linux) — no psutil needed.
-    """
-    def _get_rss_mb() -> float:
-        try:
-            with open("/proc/self/status") as f:
-                for line in f:
-                    if line.startswith("VmRSS:"):
-                        return int(line.split()[1]) / 1024  # kB → MB
-        except Exception:
-            pass
-        return 0.0
-
-    while True:
-        try:
-            mem_mb = _get_rss_mb()
-            active = len(search_engine.active_searches) if search_engine else 0
-            logger.info(f"📊 Memory: {mem_mb:.1f} MB | Active searches: {active}")
-        except Exception as e:
-            logger.error(f"❌ memory_monitor error: {e}")
-        await asyncio.sleep(300)
-
-
-async def _run_bot():
-    """Inner bot runner with auto-reconnect on disconnect"""
-    global search_engine, admin_panel, bot_info, api_handler
-
-    try:
-        logger.info("🚀 Starting DarkBoxes Intelligence System...")
-
-        # Start bot client
-        await bot_client.start(bot_token=config.BOT_TOKEN)
-        bot_info = await bot_client.get_me()
-        logger.info(f"✅ Bot: @{bot_info.username}")
-
-        # Start user client if configured
-        if USE_USER_ACCOUNT:
-            await user_client.connect()
-            if not await user_client.is_user_authorized():
-                logger.error("❌ User client not authorized")
-                return
-            logger.info("✅ User client ready")
-        else:
-            logger.info("ℹ️ Using bot client for all operations")
-
-        # Connect to database
-        if not await db_manager.connect():
-            logger.error("❌ Database connection failed")
-            return
-
-        # Initialize admin panel
-        admin_panel = AdminPanelHandler(db_manager, bot_client)
-
-        # Initialize search engine
-        search_engine = SearchEngine(db_manager, db_manager)
-
-        # Initialize API handler
-        logger.info("🔑 Initializing API handler...")
-        api_handler = APIHandler(db_manager, search_engine)
-
-        # Resolve groups
-        logger.info("📡 Connecting to intelligence networks...")
-        for group_name, group_data in GROUP_PRIORITIES.items():
-            if group_data["enabled"]:
-                try:
-                    group_data["entity"] = await user_client.get_entity(group_data["identifier"])
-                    logger.info(f"✅ Connected: {group_data['name']}")
-                except Exception as e:
-                    logger.warning(f"⚠️ Failed: {group_data['name']} - {e}")
-
-        # Register user_client incoming message handler
-        # (handlers already registered globally via @user_client.on decorators below)
-
-        # ── Safe task wrapper — prevents "Task exception was never retrieved" ──
-        async def _safe_task(coro_fn, name: str):
-            while True:
-                try:
-                    await coro_fn()
-                except Exception as _e:
-                    logger.error(f"❌ Background task '{name}' crashed: {_e} — restarting in 10s")
-                    await asyncio.sleep(10)
-
-        # Start background tasks — ALL wrapped in _safe_task so exceptions
-        # are caught, logged, and the task restarts rather than dying silently.
-        asyncio.create_task(_safe_task(cleanup_expired_searches,  "cleanup_expired_searches"))
-        asyncio.create_task(_safe_task(start_web_server,          "start_web_server"))
-        asyncio.create_task(_safe_task(daily_subscription_reset,  "daily_subscription_reset"))
-        asyncio.create_task(_safe_task(memory_monitor,            "memory_monitor"))
-
-        logger.info("=" * 60)
-        logger.info("🎭 DARK BOXES INTELLIGENCE SYSTEM - OPERATIONAL")
-        logger.info("=" * 60)
-
-        await bot_client.run_until_disconnected()
-
-    except KeyboardInterrupt:
-        logger.info("🛑 Shutting down...")
-        raise
-    except Exception as e:
-        logger.error(f"💀 Fatal error: {e}")
-        logger.error(traceback.format_exc())
-        raise
-    finally:
-        try:
-            await bot_client.disconnect()
-            if USE_USER_ACCOUNT and user_client is not bot_client:
-                await user_client.disconnect()
-            if db_manager.client:
-                db_manager.client.close()
-        except Exception:
-            pass
-
-
-async def main():
-    """Main function with auto-reconnect loop"""
-    while True:
-        try:
-            await _run_bot()
-            logger.info("🔄 Bot disconnected — restarting in 5 seconds...")
-            await asyncio.sleep(5)
-        except KeyboardInterrupt:
-            logger.info("🛑 Shutting down by user request.")
-            break
-        except Exception as e:
-            logger.error(f"🔄 Reconnect error: {e} — retrying in 5 seconds...")
-            await asyncio.sleep(5)
-
-if __name__ == "__main__":
-    # Set event loop policy for Windows if needed
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-    
-    # Run the bot
-    asyncio.run(main())
+    w
