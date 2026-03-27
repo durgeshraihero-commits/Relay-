@@ -290,7 +290,7 @@ GROUP_PRIORITIES = {
     },
     "secondary": {
         "name": "🌐 IntelX Network",
-        "identifier": "LegendInfoChattingGc",
+        "identifier": "EncoreXgroup",
         "timeout": 25,
         "weight": 7,
         "enabled": True,
@@ -298,15 +298,15 @@ GROUP_PRIORITIES = {
         # This group uses different command names — configure per your group's bot
         "commands": {
             "phone":   "/num",
-            "family":  "/familyinfo",   # <-- example: this group uses /familyinfo
+            "family":  "/family",   # <-- example: this group uses /familyinfo
             "aadhar":  "/aadhar",
-            "vehicle": "/vehicle",
-            "telegram": "/telegram",
-            "imei":    "/device",
+            "vehicle": "/vnum",
+            "telegram": "/tg",
+            "imei":    "/imei",
             "gst":     "/gstin",
-            "insta":   "/instagram",
-            "ip":      "/location",
-            "ifsc":    "/bank",
+            "insta":   "/insta",
+            "ip":      "/ip",
+            "ifsc":    "/ifsc",
         }
     },
     "tertiary": {
