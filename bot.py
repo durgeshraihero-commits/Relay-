@@ -89,17 +89,23 @@ class BotConfig:
     API_SECRET_KEY: str = os.getenv("API_SECRET_KEY", secrets.token_hex(32))
     API_BASE_URL: str = os.getenv("API_BASE_URL", "https://relay-wzlz.onrender.com")
 
-config = BotConfig()
+print("[STARTUP] Initialising BotConfig...", flush=True)
+try:
+    config = BotConfig()
+    print("[STARTUP] BotConfig OK", flush=True)
+except Exception as _cfg_err:
+    print(f"[STARTUP] FATAL: BotConfig failed — {_cfg_err}", flush=True)
+    import traceback as _tb; _tb.print_exc()
+    sys.exit(1)
 
 # ================== LOGGING SETUP ==================
+# Use StreamHandler only — Render captures stdout/stderr directly.
+# FileHandler is omitted to avoid silent crashes on read-only filesystems.
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s]: %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler("darkboxes.log", encoding="utf-8")
-    ]
+    handlers=[logging.StreamHandler()]
 )
 
 logger = logging.getLogger("DarkBoxes")
@@ -111,29 +117,38 @@ def validate_config() -> bool:
     errors = []
     
     required_configs = [
-        ("BOT_API_ID", config.BOT_API_ID, lambda x: x != 0),
-        ("BOT_API_HASH", config.BOT_API_HASH, lambda x: len(x) > 0),
-        ("BOT_TOKEN", config.BOT_TOKEN, lambda x: len(x) > 0),
-        ("ADMIN_USER_ID", config.ADMIN_USER_ID, lambda x: x != 0),
-        ("MONGODB_URI", config.MONGODB_URI, lambda x: len(x) > 0),
+        ("BOT_API_ID (env: API_ID)",     config.BOT_API_ID,    lambda x: x != 0),
+        ("BOT_API_HASH (env: API_HASH)", config.BOT_API_HASH,  lambda x: len(x) > 0),
+        ("BOT_TOKEN",                    config.BOT_TOKEN,     lambda x: len(x) > 0),
+        ("ADMIN_USER_ID",                config.ADMIN_USER_ID, lambda x: x != 0),
+        ("MONGODB_URI",                  config.MONGODB_URI,   lambda x: len(x) > 0),
     ]
     
     for name, value, validator in required_configs:
-        if not validator(value):
-            errors.append(f"{name} is not properly configured")
+        try:
+            ok = validator(value)
+        except Exception:
+            ok = False
+        if not ok:
+            errors.append(f"{name} is not properly configured (got: {repr(value)[:40]})")
     
     if errors:
-        logger.error("Configuration validation failed:")
+        print("[STARTUP] FATAL: Configuration validation failed:", flush=True)
         for error in errors:
-            logger.error(f"  {error}")
+            print(f"[STARTUP]   ✗ {error}", flush=True)
+        logger.error("Configuration validation failed — see stdout for details")
         return False
-    
+
+    print("[STARTUP] All required env vars OK", flush=True)
     return True
 
 if not validate_config():
     sys.exit(1)
 
-USE_USER_ACCOUNT = config.USER_API_ID != 0 and config.USER_API_HASH and config.USER_PHONE
+USE_USER_ACCOUNT = config.USER_API_ID != 0 and bool(config.USER_API_HASH) and bool(config.USER_PHONE)
+print(f"[STARTUP] USE_USER_ACCOUNT={USE_USER_ACCOUNT} "
+      f"(USER_API_ID={'set' if config.USER_API_ID else 'NOT SET'}, "
+      f"USER_PHONE={'set' if config.USER_PHONE else 'NOT SET'})", flush=True)
 
 # ================== API KEY MANAGEMENT ==================
 
@@ -283,15 +298,15 @@ GROUP_PRIORITIES = {
         # This group uses different command names — configure per your group's bot
         "commands": {
             "phone":   "/num",
-            "family":  "/familyinfo",   # <-- example: this group uses /familyinfo
+            "family":  "/family",   # <-- example: this group uses /familyinfo
             "aadhar":  "/aadhar",
-            "vehicle": "/vehicle",
-            "telegram": "/telegram",
-            "imei":    "/device",
+            "vehicle": "/vnum",
+            "telegram": "/tg",
+            "imei":    "/imei",
             "gst":     "/gstin",
-            "insta":   "/instagram",
-            "ip":      "/location",
-            "ifsc":    "/bank",
+            "insta":   "/insta",
+            "ip":      "/ip",
+            "ifsc":    "/ifsc",
         }
     },
     "tertiary": {
@@ -9473,29 +9488,4 @@ async def submit_api_payment_callback(event):
         user_id = event.sender_id
         
         user_states[user_id] = {
-            "action": "awaiting_payment_utr",
-            "plan_id": f"api_{plan}",
-            "plan_name": f"API {plan.title()} Plan",
-            "plan_price": prices[plan]
-        }
-        
-        await event.edit(
-            f"🏦 **ENTER UTR / TRANSACTION NUMBER**\n\n"
-            f"Plan: **API {plan.title()}** — ₹{prices[plan]}/month\n\n"
-            f"After completing your UPI payment, type the UTR number\n"
-            f"or Transaction Reference Number from your payment app.\n\n"
-            f"Admin will verify manually and activate your API key.\n\n"
-            f"Your ID: `{user_id}`",
-            buttons=[[Button.inline("❌ Cancel", "api_menu")]],
-            parse_mode="md"
-        )
-    except Exception as e:
-        logger.error(f"submit_api_payment error: {e}")
-        await event.answer("❌ Error", alert=True)
-
-
-# ================== CLEANUP TASK ==================
-
-async def cleanup_expired_searches():
-    """Clean up expired searches"""
-    w
+            "action": "awaiting_paymen
