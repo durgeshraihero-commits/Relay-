@@ -320,7 +320,7 @@ GROUP_PRIORITIES = {
             "phone":   "/num",
             "family":  "/family",
             "aadhar":  "/aadhar",
-            "vehicle": "/rto",
+            "vehicle": "/vnum",
             "telegram": "/tg",
             "imei":    "/imei",
             "gst":     "/gst",
