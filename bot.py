@@ -10361,9 +10361,11 @@ async def daily_subscription_reset():
 
 
 async def memory_monitor():
-    """Background task: log memory usage every 5 minutes to detect leaks.
-    Uses /proc/self/status (always available on Linux) — no psutil needed.
+    """Background task: monitor memory every 5 minutes and aggressively clear
+    stale state to prevent OOM kills on Render's 512 MB free tier.
     """
+    import gc
+
     def _get_rss_mb() -> float:
         try:
             with open("/proc/self/status") as f:
@@ -10379,9 +10381,82 @@ async def memory_monitor():
             mem_mb = _get_rss_mb()
             active = len(search_engine.active_searches) if search_engine else 0
             logger.info(f"📊 Memory: {mem_mb:.1f} MB | Active searches: {active}")
+
+            # Aggressively clean up if memory is high (>380 MB on Render free = danger zone)
+            if mem_mb > 380:
+                logger.warning(f"⚠️ High memory ({mem_mb:.1f} MB) — clearing stale state")
+                if search_engine:
+                    # Cancel and remove searches older than 60 seconds
+                    now = time.time()
+                    stale = [
+                        sid for sid, info in list(search_engine.active_searches.items())
+                        if now - info.get("start_time", now) > 60
+                    ]
+                    for sid in stale:
+                        entry = search_engine.active_searches.pop(sid, None)
+                        if entry:
+                            fut = entry.get("future")
+                            if fut and not fut.done():
+                                fut.cancel()
+                    if stale:
+                        logger.info(f"🧹 Cleared {len(stale)} stale search(es)")
+                gc.collect()
+                mem_after = _get_rss_mb()
+                logger.info(f"🧹 Memory after GC: {mem_after:.1f} MB")
+
+            if mem_mb > 450:
+                logger.error(f"🚨 Critical memory ({mem_mb:.1f} MB) — forcing full active_searches clear")
+                if search_engine:
+                    search_engine.active_searches.clear()
+                gc.collect()
+
         except Exception as e:
             logger.error(f"❌ memory_monitor error: {e}")
         await asyncio.sleep(300)
+
+
+async def telegram_keepalive():
+    """Ping Telegram every 4 minutes to prevent silent disconnects.
+    
+    Telegram servers drop idle MTProto connections after ~5 minutes.
+    get_me() sends a lightweight API call that resets the idle timer.
+    If it fails, the exception propagates to _safe_task which restarts it.
+    """
+    while True:
+        await asyncio.sleep(240)  # 4 minutes
+        try:
+            await bot_client.get_me()
+            if USE_USER_ACCOUNT and user_client is not bot_client:
+                await user_client.get_me()
+            logger.debug("💓 Telegram keepalive OK")
+        except Exception as e:
+            logger.warning(f"⚠️ Telegram keepalive failed: {e} — will retry")
+            raise  # let _safe_task restart this coroutine
+
+
+async def mongodb_watchdog():
+    """Ping MongoDB every 5 minutes to detect stale connections and reconnect.
+    
+    Motor connections time out silently after long idle periods on cloud hosts.
+    This watchdog detects that and forces a reconnect before the bot starts
+    returning DB errors to users.
+    """
+    while True:
+        await asyncio.sleep(300)  # 5 minutes
+        try:
+            if db_manager.db is not None:
+                await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: db_manager.client.admin.command("ping")
+                )
+                logger.debug("🗄️ MongoDB watchdog ping OK")
+        except Exception as e:
+            logger.warning(f"⚠️ MongoDB watchdog: connection lost ({e}) — reconnecting...")
+            try:
+                await db_manager.connect()
+                logger.info("✅ MongoDB reconnected by watchdog")
+            except Exception as re_err:
+                logger.error(f"❌ MongoDB reconnect failed: {re_err}")
+                raise  # let _safe_task restart
 
 
 async def _run_bot():
@@ -10452,6 +10527,8 @@ async def _run_bot():
         asyncio.create_task(_safe_task(start_web_server,          "start_web_server"))
         asyncio.create_task(_safe_task(daily_subscription_reset,  "daily_subscription_reset"))
         asyncio.create_task(_safe_task(memory_monitor,            "memory_monitor"))
+        asyncio.create_task(_safe_task(telegram_keepalive,        "telegram_keepalive"))
+        asyncio.create_task(_safe_task(mongodb_watchdog,          "mongodb_watchdog"))
 
         logger.info("=" * 60)
         logger.info("🎭 DARK BOXES INTELLIGENCE SYSTEM - OPERATIONAL")
