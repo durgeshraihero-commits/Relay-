@@ -300,7 +300,7 @@ GROUP_PRIORITIES = {
             "phone":   "/num",
             "family":  "/family",   # <-- example: this group uses /familyinfo
             "aadhar":  "/aadhar",
-            "vehicle": "/vehicle",
+            "vehicle": "/vnum",
             "telegram": "/tg",
             "imei":    "/imei",
             "gst":     "/gstin",
@@ -320,7 +320,7 @@ GROUP_PRIORITIES = {
             "phone":   "/num",
             "family":  "/family",
             "aadhar":  "/aadhar",
-            "vehicle": "/vnum",
+            "vehicle": "/rto",
             "telegram": "/tg",
             "imei":    "/imei",
             "gst":     "/gst",
@@ -4096,9 +4096,18 @@ class SearchEngine:
         self.group_performance = {}
     
     async def _auto_cleanup(self, search_id: str):
-        """Auto-remove a search entry after 180 seconds to prevent memory leaks"""
-        await asyncio.sleep(180)
-        self.active_searches.pop(search_id, None)
+        """Auto-remove a search entry after 90 seconds.
+        
+        Cancels the future explicitly before removing so the polling loop in
+        _search_single_group exits cleanly — prevents asyncio's
+        'Task was destroyed but it is pending!' warning.
+        """
+        await asyncio.sleep(90)
+        entry = self.active_searches.pop(search_id, None)
+        if entry:
+            future = entry.get("future")
+            if future and not future.done():
+                future.cancel()
 
     def _get_group_command(self, group: Dict, search_type: str) -> str:
         """Get the correct command for a specific group and search type.
@@ -4320,9 +4329,14 @@ class SearchEngine:
                         logger.error(f"❌ Task error: {e}")
                         continue
                     if result.get("success"):
-                        # Cancel remaining group tasks — we have our answer
+                        # Cancel remaining group tasks and await them cleanly.
+                        # Without the gather(), Python logs:
+                        # "Task was destroyed but it is pending!" for each
+                        # cancelled task that still holds an awaitable future.
                         for p in pending:
                             p.cancel()
+                        if pending:
+                            await asyncio.gather(*pending, return_exceptions=True)
                         logger.info(f"🎯 Got valid result, cancelled {len(pending)} remaining task(s)")
                         return result
 
@@ -9516,47 +9530,6 @@ async def submit_api_payment_callback(event):
 
 
 # ================== CLEANUP TASK ==================
-
-async def cleanup_expired_searches():
-    """Clean up expired searches"""
-    while True:
-        try:
-            await asyncio.sleep(30)
-            
-            current_time = time.time()
-            expired = []
-            
-            for search_id, search_info in list(search_engine.active_searches.items()):
-                timeout = search_info["group"]["timeout"]
-                
-                if search_info.get("expecting_file") and search_info.get("file_wait_start"):
-                    file_wait_time = current_time - search_info["file_wait_start"]
-                    if file_wait_time < 20:
-                        continue
-                    else:
-                        logger.info(f"⏱️ File wait timeout in {search_info['group']['name']}")
-                
-                if current_time - search_info["start_time"] > timeout:
-                    expired.append(search_id)
-            
-            for search_id in expired:
-                search_info = search_engine.active_searches.pop(search_id, None)
-                if search_info:
-                    future = search_info["future"]
-                    if not future.done():
-                        try:
-                            future.set_result({"success": False})
-                        except:
-                            pass
-                    logger.info(f"🧹 Cleaned expired search: {search_id}")
-            
-            if expired:
-                logger.info(f"🧹 Cleaned {len(expired)} expired searches")
-                
-        except Exception as e:
-            logger.error(f"❌ Error in cleanup: {e}")
-
-
 # ================== ACCOUNT SYSTEM — LOGIN & LINKING ==================
 
 def generate_password(length: int = 10) -> str:
@@ -10416,31 +10389,68 @@ async def memory_monitor():
 
 
 async def telegram_keepalive():
-    """Ping Telegram every 4 minutes to prevent silent disconnects.
-    
-    Telegram servers drop idle MTProto connections after ~5 minutes.
-    get_me() sends a lightweight API call that resets the idle timer.
-    If it fails, the exception propagates to _safe_task which restarts it.
+    """Ping Telegram every 3 minutes to prevent silent disconnects.
+
+    Waits for bot_info to be set (i.e. _run_bot has fully started) before
+    sending any pings — prevents crashing on startup before clients connect.
     """
+    # Wait until bot is fully started
+    while bot_info is None:
+        await asyncio.sleep(5)
+
     while True:
-        await asyncio.sleep(240)  # 4 minutes
+        await asyncio.sleep(180)  # 3 minutes
         try:
+            if not bot_client.is_connected():
+                logger.warning("⚠️ Telegram keepalive: bot_client not connected, skipping ping")
+                continue
             await bot_client.get_me()
             if USE_USER_ACCOUNT and user_client is not bot_client:
-                await user_client.get_me()
-            logger.debug("💓 Telegram keepalive OK")
+                if user_client.is_connected():
+                    await user_client.get_me()
+            logger.info("💓 Telegram keepalive OK")
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.warning(f"⚠️ Telegram keepalive failed: {e} — will retry")
-            raise  # let _safe_task restart this coroutine
+            logger.warning(f"⚠️ Telegram keepalive failed: {e}")
+            # Don't raise — just log and continue. The reconnect loop in
+            # main() handles actual disconnections.
+
+
+async def event_loop_watchdog():
+    """Detect event loop stalls caused by thread pool exhaustion."""
+    # Brief startup delay so initial DC migration doesn't look like a stall
+    await asyncio.sleep(30)
+    last_tick = time.time()
+    while True:
+        try:
+            await asyncio.sleep(60)
+            now = time.time()
+            gap = now - last_tick
+            last_tick = now
+            if gap > 90:
+                logger.error(
+                    f"🚨 Event loop STALLED for {gap:.1f}s! "
+                    f"Thread pool may be exhausted. "
+                    f"Active searches: {len(search_engine.active_searches) if search_engine else '?'}"
+                )
+            elif gap > 70:
+                logger.warning(f"⚠️ Event loop slow tick: {gap:.1f}s")
+            else:
+                logger.info(f"⏱️ Event loop healthy (tick={gap:.1f}s)")
+        except asyncio.CancelledError:
+            raise
 
 
 async def mongodb_watchdog():
     """Ping MongoDB every 5 minutes to detect stale connections and reconnect.
-    
-    Motor connections time out silently after long idle periods on cloud hosts.
-    This watchdog detects that and forces a reconnect before the bot starts
-    returning DB errors to users.
+
+    Waits for DB to be initially connected before starting the ping loop.
     """
+    # Wait until DB is connected for the first time
+    while db_manager.db is None:
+        await asyncio.sleep(5)
+
     while True:
         await asyncio.sleep(300)  # 5 minutes
         try:
@@ -10448,7 +10458,9 @@ async def mongodb_watchdog():
                 await asyncio.get_running_loop().run_in_executor(
                     None, lambda: db_manager.client.admin.command("ping")
                 )
-                logger.debug("🗄️ MongoDB watchdog ping OK")
+                logger.info("🗄️ MongoDB watchdog ping OK")
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.warning(f"⚠️ MongoDB watchdog: connection lost ({e}) — reconnecting...")
             try:
@@ -10456,7 +10468,7 @@ async def mongodb_watchdog():
                 logger.info("✅ MongoDB reconnected by watchdog")
             except Exception as re_err:
                 logger.error(f"❌ MongoDB reconnect failed: {re_err}")
-                raise  # let _safe_task restart
+                # Don't raise — watchdog keeps running and retries next cycle
 
 
 async def _run_bot():
@@ -10512,28 +10524,12 @@ async def _run_bot():
         # Register user_client incoming message handler
         # (handlers already registered globally via @user_client.on decorators below)
 
-        # ── Safe task wrapper — prevents "Task exception was never retrieved" ──
-        async def _safe_task(coro_fn, name: str):
-            while True:
-                try:
-                    await coro_fn()
-                except Exception as _e:
-                    logger.error(f"❌ Background task '{name}' crashed: {_e} — restarting in 10s")
-                    await asyncio.sleep(10)
-
-        # Start background tasks — ALL wrapped in _safe_task so exceptions
-        # are caught, logged, and the task restarts rather than dying silently.
-        asyncio.create_task(_safe_task(cleanup_expired_searches,  "cleanup_expired_searches"))
-        asyncio.create_task(_safe_task(start_web_server,          "start_web_server"))
-        asyncio.create_task(_safe_task(daily_subscription_reset,  "daily_subscription_reset"))
-        asyncio.create_task(_safe_task(memory_monitor,            "memory_monitor"))
-        asyncio.create_task(_safe_task(telegram_keepalive,        "telegram_keepalive"))
-        asyncio.create_task(_safe_task(mongodb_watchdog,          "mongodb_watchdog"))
-
         logger.info("=" * 60)
         logger.info("🎭 DARK BOXES INTELLIGENCE SYSTEM - OPERATIONAL")
         logger.info("=" * 60)
 
+        # Background tasks are started ONCE from main() — NOT here.
+        # Restarting them on every reconnect causes task duplication/deadlock.
         await bot_client.run_until_disconnected()
 
     except KeyboardInterrupt:
@@ -10554,24 +10550,90 @@ async def _run_bot():
             pass
 
 
-async def main():
-    """Main function with auto-reconnect loop"""
+async def _safe_task(coro_fn, name: str):
+    """Wrap a background coroutine so crashes are logged and it auto-restarts."""
     while True:
         try:
-            await _run_bot()
-            logger.info("🔄 Bot disconnected — restarting in 5 seconds...")
+            await coro_fn()
+        except asyncio.CancelledError:
+            logger.info(f"🛑 Background task '{name}' cancelled cleanly")
+            return  # clean shutdown — do NOT restart
+        except Exception as _e:
+            logger.error(f"❌ Background task '{name}' crashed: {_e} — restarting in 10s")
+            await asyncio.sleep(10)
+
+
+async def main():
+    """Main entry point.
+
+    Background tasks (web server, keepalive, watchdog, cleanup) are started
+    ONCE here and live for the entire process lifetime.
+
+    Only the Telegram connection (_run_bot) is restarted on disconnect.
+    This prevents the task-duplication bug where every reconnect spawned a
+    duplicate set of background workers that then deadlocked the event loop.
+    """
+    # ── Start background tasks ONCE ───────────────────────────────────────
+    bg_task_fns = [
+        (cleanup_expired_searches,  "cleanup_expired_searches"),
+        (start_web_server,          "start_web_server"),
+        (daily_subscription_reset,  "daily_subscription_reset"),
+        (memory_monitor,            "memory_monitor"),
+        (telegram_keepalive,        "telegram_keepalive"),
+        (mongodb_watchdog,          "mongodb_watchdog"),
+        (event_loop_watchdog,       "event_loop_watchdog"),
+    ]
+    bg_tasks = [
+        asyncio.create_task(_safe_task(fn, name), name=name)
+        for fn, name in bg_task_fns
+    ]
+    logger.info(f"✅ Started {len(bg_tasks)} background tasks")
+
+    try:
+        # ── Reconnect loop — only restarts the Telegram connection ────────
+        while True:
+            try:
+                await _run_bot()
+                logger.info("🔄 Telegram disconnected — reconnecting in 5 seconds...")
+            except KeyboardInterrupt:
+                logger.info("🛑 Shutting down by user request.")
+                break
+            except Exception as e:
+                logger.error(f"🔄 _run_bot error: {e} — retrying in 5 seconds...")
             await asyncio.sleep(5)
-        except KeyboardInterrupt:
-            logger.info("🛑 Shutting down by user request.")
-            break
-        except Exception as e:
-            logger.error(f"🔄 Reconnect error: {e} — retrying in 5 seconds...")
-            await asyncio.sleep(5)
+    finally:
+        # ── Cancel all background tasks cleanly on exit ───────────────────
+        logger.info("🛑 Cancelling background tasks...")
+        for t in bg_tasks:
+            t.cancel()
+        await asyncio.gather(*bg_tasks, return_exceptions=True)
+        logger.info("🛑 All background tasks stopped")
 
 if __name__ == "__main__":
-    # Set event loop policy for Windows if needed
+    import concurrent.futures
+
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-    
-    # Run the bot
-    asyncio.run(main())
+
+    # ── Bounded thread pool for run_in_executor calls ─────────────────────
+    # The default executor is unbounded — under load, 157 run_in_executor
+    # calls (all sync PyMongo ops) spawn unlimited threads, starving the event
+    # loop and causing the bot to freeze while still "alive" to Render.
+    # 20 threads is enough for all concurrent DB ops without overwhelming a
+    # Render free-tier container.
+    _executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=20,
+        thread_name_prefix="db-worker"
+    )
+
+    loop = asyncio.new_event_loop()
+    loop.set_default_executor(_executor)
+    asyncio.set_event_loop(loop)
+
+    print("[STARTUP] Event loop ready with bounded 20-thread executor", flush=True)
+
+    try:
+        loop.run_until_complete(main())
+    finally:
+        _executor.shutdown(wait=False)
+        loop.close()
