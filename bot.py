@@ -10862,7 +10862,8 @@ async def poll_results_callback(event):
         for opt, voter_ids in votes.items():
             count = len(voter_ids)
             bar = "█" * count + "░" * max(0, 10 - count)
-            lines.append(f"**{opt}** — {count} vote{"s" if count != 1 else ""}")
+            vote_word = "votes" if count != 1 else "vote"
+            lines.append(f"**{opt}** — {count} {vote_word}")
             if voter_ids:
                 id_list = ", ".join(f"`{v}`" for v in voter_ids[:10])
                 lines.append(f"> Voters: {id_list}")
