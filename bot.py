@@ -5425,7 +5425,14 @@ async def start_web_server():
             "timestamp": datetime.now().isoformat()
         })
 
+
+    # Root handler — Render pings GET / and HEAD / to check liveness
+    async def root_handler(request):
+        return web.json_response({"status": "ok", "service": "DarkBoxes Relay"})
+
     # Basic routes
+    app.router.add_get('/',  root_handler)
+    app.router.add_head('/', root_handler)
     app.router.add_get('/health', health_check)
     app.router.add_get('/api/v1/health', health_check)
 
@@ -10388,6 +10395,34 @@ async def memory_monitor():
         await asyncio.sleep(300)
 
 
+async def render_self_ping():
+    """Ping our own /health endpoint every 10 minutes.
+
+    Render free tier spins down a web service after ~15 minutes of NO HTTP
+    traffic. The Telegram MTProto connection is not HTTP, so Render treats the
+    service as idle and kills it — even though the bot is actively working.
+
+    Hitting our own health endpoint over loopback keeps Render's inactivity
+    timer reset without any external dependency.
+    """
+    # Wait for web server to be up before pinging
+    await asyncio.sleep(30)
+
+    url = f"http://127.0.0.1:{config.PORT}/health"
+    while True:
+        try:
+            from aiohttp import ClientSession, ClientTimeout
+            async with ClientSession(timeout=ClientTimeout(total=10)) as session:
+                async with session.get(url) as resp:
+                    status = resp.status
+                    logger.info(f"🏓 Self-ping {url} → HTTP {status}")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"⚠️ Self-ping failed: {e}")
+        await asyncio.sleep(600)  # every 10 minutes
+
+
 async def telegram_keepalive():
     """Ping Telegram every 3 minutes to prevent silent disconnects.
 
@@ -10582,6 +10617,7 @@ async def main():
         (telegram_keepalive,        "telegram_keepalive"),
         (mongodb_watchdog,          "mongodb_watchdog"),
         (event_loop_watchdog,       "event_loop_watchdog"),
+        (render_self_ping,          "render_self_ping"),
     ]
     bg_tasks = [
         asyncio.create_task(_safe_task(fn, name), name=name)
