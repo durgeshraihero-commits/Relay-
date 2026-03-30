@@ -557,51 +557,42 @@ class PremiumFormatter:
     
     @staticmethod
     def format_welcome(user_name: str, user_data: Dict) -> str:
-        """Format glowing neon welcome message"""
+        """Professional welcome message using Telegram quote blocks."""
         credits = "∞" if user_data.get("subscription") else str(user_data.get("searches_remaining", 0))
         searches = user_data.get("total_searches", 0)
         ref_code = user_data.get("referral_code", "N/A")
         refs = user_data.get("referrals", 0)
-        name = user_name.upper()
+        name = user_name
 
-        welcome  = "```\n"
-        welcome += "╔══════════════════════════════════════╗\n"
-        welcome += "║  ░▒▓  DARK BOXES INTEL  ▓▒░          ║\n"
-        welcome += f"║  ► AGENT: {name:<28}║\n"
-        welcome += "║  ● SYSTEM STATUS: [ONLINE]           ║\n"
-        welcome += "╚══════════════════════════════════════╝\n"
-        welcome += "```\n"
+        lines = []
+        # Telegram expandable quote block (renders as highlighted box)
+        lines.append(f"**Dark Boxes Intelligence**")
+        lines.append(f"")
+        lines.append(f"Welcome back, **{name}**.")
+        lines.append(f"")
+        lines.append(f"**Credits available:** `{credits}`")
+        lines.append(f"**Total searches:** `{searches}`")
+        lines.append(f"**Your referral code:** `{ref_code}` — {refs} referral(s)")
+        lines.append(f"")
+        lines.append(f"Pick a search tool below to get started.")
 
-        welcome += f"⚡ **Credits:** `{credits}`  ·  🔍 **Searches:** `{searches}`\n"
-        welcome += f"🔗 **Ref Code:** `{ref_code}`  ·  👥 **Referrals:** `{refs}`\n\n"
-
-        welcome += (
-            "🟢 Phone Intel  🔵 Family Net  🟣 Aadhar\n"
-            "🟠 Vehicle  🔴 Telegram  🟡 IMEI\n"
-            "🟤 GST  🩷 Instagram  🌐 IP  🏦 IFSC\n\n"
-        )
-        welcome += "━━━ **SELECT A SERVICE BELOW** ━━━"
-
-        return welcome
+        return "\n".join(lines)
     
     @staticmethod
     def format_processing(search_type: str, query: str) -> str:
-        """Format glowing scan-in-progress message"""
+        """Clean, professional processing message."""
         cmd = SEARCH_COMMANDS.get(search_type, {})
         icon = cmd.get("icon", "🔍")
-        name = cmd.get("name", "Search").upper()
+        name = cmd.get("name", "Search")
 
-        processing  = "```\n"
-        processing += "╔══════════════════════════════════════╗\n"
-        processing += f"║  {icon}  SCANNING · {name:<22}║\n"
-        processing += f"║  ► QUERY : {query[:28]:<28}║\n"
-        processing += "║  ● STATUS: [PARALLEL RELAY ACTIVE]  ║\n"
-        processing += "╚══════════════════════════════════════╝\n"
-        processing += "```\n"
-        processing += "🔴 Querying all intelligence networks simultaneously...\n"
-        processing += "⚡ Results delivered the moment data is found."
-
-        return processing
+        return (
+            f"{icon} **{name}**\n"
+            f"\n"
+            f"> Searching for `{query}`\n"
+            f"> Querying all networks in parallel...\n"
+            f"\n"
+            f"_Results will appear here in a moment._"
+        )
 
 # ================== TEXT PROCESSOR ==================
 
@@ -1906,57 +1897,59 @@ class APIDatabaseManager:
 
 class OneLineKeyboard:
     @staticmethod
-    def main_menu(is_admin: bool = False) -> List[List[Button]]:
-        """Build colourful keyboard — two search buttons per row, action buttons below."""
-        # ── Search command pairs (2 per row for compact colourful layout) ────
-        search_pairs = [
-            ("phone",    "family"),
-            ("aadhar",   "vehicle"),
-            ("telegram", "imei"),
-            ("gst",      "insta"),
-            ("ip",       "ifsc"),
-        ]
-        # Colour prefix per search type (shows as coloured square on Telegram)
-        colour_map = {
-            "phone":    "🟢", "family":   "🔵",
-            "aadhar":   "🟣", "vehicle":  "🟠",
-            "telegram": "🔴", "imei":     "🟡",
-            "gst":      "🟤", "insta":    "🩷",
-            "ip":       "🌐", "ifsc":     "🏦",
-        }
-        buttons = []
-        for left_key, right_key in search_pairs:
-            row = []
-            for key in (left_key, right_key):
-                if key in SEARCH_COMMANDS:
-                    cmd = SEARCH_COMMANDS[key]
-                    dot = colour_map.get(key, "⚪")
-                    label = cmd["name"].split()[-1]  # e.g. "Intelligence" → last word
-                    row.append(Button.inline(f"{dot} {cmd['icon']} {label}", f"search_{key}"))
-            if row:
-                buttons.append(row)
+    def main_menu(is_admin: bool = False, disabled_buttons: set = None) -> List[List[Button]]:
+        """Professional colourful keyboard. disabled_buttons = set of keys to hide."""
+        if disabled_buttons is None:
+            disabled_buttons = set()
 
-        # ── Action buttons — 2 per row ────────────────────────────────────────
+        # ── Search section — colourful 2-per-row grid ─────────────────────────
+        # Each entry: (key, colour_block, short_label)
+        search_items = [
+            ("phone",    "🟩", "📱 Phone"),
+            ("family",   "🟦", "👨‍👩‍👧 Family"),
+            ("aadhar",   "🟪", "🆔 Aadhar"),
+            ("vehicle",  "🟧", "🚗 Vehicle"),
+            ("telegram", "🟥", "📲 Telegram"),
+            ("imei",     "🟨", "📱 IMEI"),
+            ("gst",      "🟫", "🏢 GST"),
+            ("insta",    "🌸", "📸 Instagram"),
+            ("ip",       "🌐", "🌍 IP Geo"),
+            ("ifsc",     "🏦", "🏦 Bank"),
+        ]
+
+        buttons = []
+        visible = [(k, c, l) for k, c, l in search_items
+                   if k not in disabled_buttons and k in SEARCH_COMMANDS]
+
+        # Pair them into rows of 2
+        for i in range(0, len(visible), 2):
+            row = []
+            for key, colour, label in visible[i:i+2]:
+                row.append(Button.inline(f"{colour} {label}", f"search_{key}"))
+            buttons.append(row)
+
+        # ── Separator ─────────────────────────────────────────────────────────
+        buttons.append([Button.inline("─────────────────────", "noop")])
+
+        # ── Account & utility buttons ─────────────────────────────────────────
+        if "profile" not in disabled_buttons:
+            buttons.append([
+                Button.inline("👤  My Profile",      "profile"),
+                Button.inline("💎  Buy Credits",     "premium"),
+            ])
+        if "referrals" not in disabled_buttons:
+            buttons.append([
+                Button.inline("🎁  Refer & Earn",    "referrals"),
+                Button.inline("🆘  Support",         "support"),
+            ])
         buttons.append([
-            Button.inline("👤 Profile",        "profile"),
-            Button.inline("💎 Premium",        "premium"),
+            Button.inline("🔑  API Access",     "api_menu"),
+            Button.inline("🔒  Protect Query",  "protect_query_menu"),
         ])
-        buttons.append([
-            Button.inline("📊 Refer & Earn",   "referrals"),
-            Button.inline("🆘 Support",        "support"),
-        ])
-        buttons.append([
-            Button.inline("🔑 API Access",     "api_menu"),
-            Button.inline("🔐 Login / Link",   "login_account"),
-        ])
-        buttons.append([
-            Button.inline("🔒 Protect Query",  "protect_query_menu"),
-            Button.inline("💻 Client Script",  "download_client"),
-        ])
-        buttons.append([Button.inline("🗝️ Get My Credentials", "get_credentials")])
+        buttons.append([Button.inline("✉️  Message Admin",  "user_message_admin")])
 
         if is_admin:
-            buttons.append([Button.inline("⚙️ ━━━ ADMIN PANEL ━━━ ⚙️", "admin_panel")])
+            buttons.append([Button.inline("━━━━  ⚙️ ADMIN PANEL  ━━━━", "admin_panel")])
 
         return buttons
     
@@ -1987,9 +1980,9 @@ class OneLineKeyboard:
             [Button.inline("⏳ Pending UTR Payments", "admin_pending_utr")],
             [Button.inline("💳 Pending Payments (Legacy)", "admin_pending_payments")],
             [Button.inline("🔍 Search Users", "admin_search_user")],
-            [Button.inline("📢 Broadcast (Text)", "admin_broadcast")],
-            [Button.inline("🖼️ Broadcast (Media)", "admin_broadcast_media")],
-            [Button.inline("📋 Broadcast History", "admin_broadcast_history")],
+            [Button.inline("📢 Text Broadcast", "admin_broadcast"),   Button.inline("🖼️ Media Broadcast", "admin_broadcast_media")],
+            [Button.inline("📊 Send Live Poll",   "admin_send_poll"),  Button.inline("📋 Broadcast History", "admin_broadcast_history")],
+            [Button.inline("🚫 Restrict Menu Buttons", "admin_restrict_buttons")],
             [Button.inline("⚙️ Bot Settings", "admin_settings")],
             [Button.inline("🚫 Ban/Unban User", "admin_ban")],
             [Button.inline("👑 Add/Remove Admin", "admin_admin")],
@@ -3487,10 +3480,12 @@ class AdminPanelHandler:
                     f"   ├─ Sent: {sent} | Seen: {seen}\n"
                     f"   └─ {timestamp}\n\n"
                 )
-                buttons.append([Button.inline(
-                    f"👁️ {bc_id} — {seen} seen",
-                    f"admin_broadcast_seen_{bc_id}"
-                )])
+                is_deleted = bc.get("deleted", False)
+            del_label = "✅ Deleted" if is_deleted else "🗑 Delete"
+            buttons.append([
+                Button.inline(f"👁 {bc_id} · {seen} seen", f"admin_broadcast_seen_{bc_id}"),
+                Button.inline(del_label, f"del_broadcast_{bc_id}"),
+            ])
 
             buttons.append([Button.inline("« Admin Panel", "admin_panel")])
             await event.edit(hist_text, buttons=buttons, parse_mode="md")
@@ -5760,8 +5755,17 @@ async def start_handler(event):
         welcome_text = PremiumFormatter.format_welcome(user.first_name, user_doc)
         
         # Get keyboard - ONE COMMAND PER LINE
-        buttons = OneLineKeyboard.main_menu(is_admin)
-        
+        # Load disabled buttons from DB
+        try:
+            _dis_doc = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: db_manager.db.settings.find_one({"_id": "disabled_buttons"})
+            )
+            _disabled = set(_dis_doc.get("keys", []) if _dis_doc else [])
+        except Exception:
+            _disabled = set()
+
+        buttons = OneLineKeyboard.main_menu(is_admin, disabled_buttons=_disabled)
+
         await event.respond(
             welcome_text,
             buttons=buttons,
@@ -6532,8 +6536,106 @@ async def private_message_handler(event):
                 buttons=[[Button.inline("🔒 Manage Restricted Queries", "admin_restricted_queries")]]
             )
 
+        elif state.get("action") == "admin_reply_to_user":
+            # Admin typed a reply to a user who messaged the bot
+            target_uid = state.get("reply_to_user_id")
+            reply_text = (event.text or "").strip()
+            if target_uid and reply_text:
+                try:
+                    await bot_client.send_message(
+                        target_uid,
+                        f"> ✉️ **Message from Admin**\n\n{reply_text}",
+                        parse_mode="md"
+                    )
+                    user_states.pop(user_id, None)
+                    await event.respond("✅ Reply sent to user.", buttons=OneLineKeyboard.back_to_admin())
+                except Exception as _re:
+                    await event.respond(f"❌ Could not send: {_re}")
+            return
+
     except Exception as e:
         logger.error(f"❌ Error in private_message_handler: {e}")
+
+
+@bot_client.on(events.NewMessage(func=lambda e: e.is_private and not (e.text or "").startswith("/")))
+async def user_freetext_handler(event):
+    """Forward any free-text message (not in a state) to admin as a support ticket."""
+    try:
+        user_id = event.sender_id
+        # Skip if user is already in a state — private_message_handler covers that
+        if user_id in user_states:
+            return
+        # Skip admins messaging themselves
+        if admin_panel and admin_panel.is_admin(user_id):
+            return
+
+        text = (event.text or "").strip()
+        if not text:
+            return
+
+        sender = await event.get_sender()
+        uname = f"@{sender.username}" if sender.username else f"ID {user_id}"
+
+        # Notify admin with an inline reply button
+        admin_msg = (
+            f"✉️ **User message**\n"
+            f"\n"
+            f"> From: {sender.first_name or ''} {uname}\n"
+            f"> ID: `{user_id}`\n"
+            f"\n"
+            f"{text}"
+        )
+        await bot_client.send_message(
+            config.ADMIN_USER_ID,
+            admin_msg,
+            parse_mode="md",
+            buttons=[[Button.inline(f"↩ Reply to {sender.first_name or user_id}", f"admin_reply_user_{user_id}")]]
+        )
+
+        await event.respond(
+            "> ✅ Your message was delivered to admin.\n"
+            "> You'll receive a reply here shortly.",
+            parse_mode="md"
+        )
+    except Exception as e:
+        logger.error(f"❌ user_freetext_handler: {e}")
+
+
+@bot_client.on(events.CallbackQuery(pattern=r"^user_message_admin$"))
+async def user_message_admin_callback(event):
+    """User pressed 'Message Admin' from the main menu."""
+    try:
+        await event.edit(
+            "> ✉️ **Send a message to admin**\n"
+            "> Type your message below and send it.\n"
+            "> Admin will reply directly in this chat.",
+            parse_mode="md",
+            buttons=[[Button.inline("❌ Cancel", "main_menu")]]
+        )
+        # Put user in a loose state — next message goes through user_freetext_handler
+        # (we don't need a state here; freetext handler catches it automatically)
+    except Exception as e:
+        logger.error(f"❌ user_message_admin_callback: {e}")
+
+
+@bot_client.on(events.CallbackQuery(pattern=r"^admin_reply_user_(\d+)$"))
+async def admin_reply_user_callback(event):
+    """Admin pressed Reply button on a user support message."""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.answer("❌ Admins only", alert=True)
+            return
+        target_uid = int(event.pattern_match.group(1))
+        user_states[event.sender_id] = {"action": "admin_reply_to_user", "reply_to_user_id": target_uid}
+        await event.edit(
+            f"> ↩ **Reply to user `{target_uid}`**\n"
+            f"> Type your reply and send it.\n"
+            f"> It will be delivered instantly.",
+            parse_mode="md",
+            buttons=[[Button.inline("❌ Cancel", "admin_panel")]]
+        )
+    except Exception as e:
+        logger.error(f"❌ admin_reply_user_callback: {e}")
 
 async def handle_payment_utr(event, state):
     """Handle UTR/Transaction number submission from user (no screenshot required)"""
@@ -7954,33 +8056,61 @@ async def confirm_broadcast_handler(event):
         sent = 0
         failed = 0
         
-        broadcast_text = f"📢 **ANNOUNCEMENT**\n\n{message}\n\n— DarkBoxes Administration"
-        
+        broadcast_id = str(uuid.uuid4())[:12].upper()
+        broadcast_text = (
+            f"> 📢 **Announcement**\n"
+            f"\n"
+            f"{message}\n"
+            f"\n"
+            f"_— Dark Boxes Team_"
+        )
+
+        sent_msg_ids = {}  # {user_id: message_id}
         for user in users:
             try:
-                await bot_client.send_message(
+                msg = await bot_client.send_message(
                     user["user_id"],
                     broadcast_text,
                     parse_mode="md"
                 )
+                sent_msg_ids[str(user["user_id"])] = msg.id
                 sent += 1
-                await asyncio.sleep(0.1)  # Rate limiting
-            except Exception as e:
+                await asyncio.sleep(0.05)
+            except Exception:
                 failed += 1
-        
-        # Clear state
-        user_states.pop(user_id, None)
-        
-        result_text = (
-            f"✅ **BROADCAST COMPLETE**\n\n"
-            f"📊 **Results:**\n"
-            f"├─ Total Users: {len(users)}\n"
-            f"├─ Successfully Sent: {sent}\n"
-            f"└─ Failed: {failed}\n\n"
-            f"📝 **Message Preview:**\n{message[:200]}..."
+
+        # Store broadcast with message IDs so admin can delete later
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: db_manager.db.broadcasts.insert_one({
+                "broadcast_id": broadcast_id,
+                "sender_id": user_id,
+                "media_type": "text",
+                "caption": message[:200],
+                "total_recipients": len(users),
+                "sent_count": sent,
+                "failed_count": failed,
+                "seen_by": [],
+                "sent_msg_ids": sent_msg_ids,
+                "deleted": False,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
         )
-        
-        await event.edit(result_text, buttons=OneLineKeyboard.back_to_admin(), parse_mode="md")
+
+        user_states.pop(user_id, None)
+
+        result_text = (
+            f"✅ **Broadcast sent**\n"
+            f"\n"
+            f"> ID: `{broadcast_id}`\n"
+            f"> Sent: {sent}  ·  Failed: {failed}\n"
+            f"\n"
+            f"_You can delete this broadcast from Broadcast History._"
+        )
+
+        await event.edit(result_text,
+            buttons=[[Button.inline("🗑 Delete This Broadcast", f"del_broadcast_{broadcast_id}"),
+                      Button.inline("« Admin", "admin_panel")]],
+            parse_mode="md")
         
     except Exception as e:
         logger.error(f"❌ Error in confirm_broadcast_handler: {e}")
@@ -10600,6 +10730,260 @@ async def _run_bot():
                 db_manager.client.close()
         except Exception:
             pass
+
+
+# ══════════════════════════════════════════════════
+# POLL BROADCAST
+# ══════════════════════════════════════════════════
+@bot_client.on(events.CallbackQuery(pattern=r"^admin_send_poll$"))
+async def admin_send_poll_callback(event):
+    """Admin initiates a poll broadcast."""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.answer("❌ Admins only", alert=True)
+            return
+        user_states[event.sender_id] = {"action": "admin_poll_question"}
+        await event.edit(
+            "> 📊 **Create a Poll**\n"
+            "> \n"
+            "> Step 1 of 2: Type your **poll question** and send it.",
+            parse_mode="md",
+            buttons=[[Button.inline("❌ Cancel", "admin_panel")]]
+        )
+    except Exception as e:
+        logger.error(f"admin_send_poll_callback: {e}")
+
+
+@bot_client.on(events.NewMessage(func=lambda e: e.is_private and not (e.text or "").startswith("/")))
+async def poll_question_handler(event):
+    """Capture poll question text."""
+    try:
+        uid = event.sender_id
+        state = user_states.get(uid, {})
+        if state.get("action") != "admin_poll_question":
+            return
+        question = (event.text or "").strip()
+        if not question:
+            return
+        user_states[uid] = {"action": "admin_poll_options", "poll_question": question}
+        await event.respond(
+            f"> 📊 **Poll question set:**\n> _{question}_\n"
+            f"\n"
+            f"Step 2 of 2: Send the **answer options**, one per line (2–10 options):\n"
+            f"`Yes\nNo\nMaybe`",
+            parse_mode="md",
+            buttons=[[Button.inline("❌ Cancel", "admin_panel")]]
+        )
+    except Exception as e:
+        logger.error(f"poll_question_handler: {e}")
+
+
+@bot_client.on(events.NewMessage(func=lambda e: e.is_private and not (e.text or "").startswith("/")))
+async def poll_options_handler(event):
+    """Capture poll options and send poll to all users."""
+    try:
+        uid = event.sender_id
+        state = user_states.get(uid, {})
+        if state.get("action") != "admin_poll_options":
+            return
+        raw = (event.text or "").strip()
+        options = [o.strip() for o in raw.split("\n") if o.strip()]
+        if len(options) < 2:
+            await event.respond("❌ Please provide at least 2 options, one per line.")
+            return
+        if len(options) > 10:
+            options = options[:10]
+
+        question = state["poll_question"]
+        user_states.pop(uid, None)
+
+        # Get all users
+        users = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: list(db_manager.db.users.find({}, {"user_id": 1}))
+        )
+
+        sent = failed = 0
+        await event.respond(f"📊 Sending poll to {len(users)} users…")
+
+        for u in users:
+            try:
+                await bot_client.send_message(
+                    u["user_id"],
+                    message=question,
+                    buttons=None,
+                )
+                # Send actual Telegram native poll
+                from telethon.tl.functions.messages import SendMediaRequest
+                from telethon.tl.types import InputMediaPoll, Poll, PollAnswer
+                from telethon.tl.types import PollAnswerVoters
+
+                peer = await bot_client.get_input_entity(u["user_id"])
+                poll_answers = [
+                    PollAnswer(text=opt, option=str(i).encode())
+                    for i, opt in enumerate(options)
+                ]
+                poll_obj = Poll(
+                    id=0,
+                    question=question,
+                    answers=poll_answers,
+                    closed=False,
+                    public_voters=False,
+                    multiple_choice=False,
+                    quiz=False,
+                    close_period=None,
+                    close_date=None,
+                )
+                media = InputMediaPoll(poll=poll_obj)
+                await bot_client(SendMediaRequest(peer=peer, media=media, message="", random_id=int(time.time()*1000)))
+                sent += 1
+                await asyncio.sleep(0.08)
+            except Exception:
+                failed += 1
+
+        await event.respond(
+            f"> 📊 **Poll sent!**\n"
+            f"> Sent: {sent}  ·  Failed: {failed}",
+            parse_mode="md",
+            buttons=OneLineKeyboard.back_to_admin()
+        )
+    except Exception as e:
+        logger.error(f"poll_options_handler: {e}")
+        await event.respond("❌ Error sending poll.")
+
+
+# ══════════════════════════════════════════════════
+# DELETE BROADCAST
+# ══════════════════════════════════════════════════
+@bot_client.on(events.CallbackQuery(pattern=r"^del_broadcast_(.+)$"))
+async def delete_broadcast_callback(event):
+    """Delete a broadcast — remove messages from all users who received it."""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.answer("❌ Admins only", alert=True)
+            return
+
+        broadcast_id = event.pattern_match.group(1).decode() if isinstance(event.pattern_match.group(1), bytes) else event.pattern_match.group(1)
+
+        bc = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: db_manager.db.broadcasts.find_one({"broadcast_id": broadcast_id})
+        )
+
+        if not bc:
+            await event.answer("❌ Broadcast not found", alert=True)
+            return
+
+        if bc.get("deleted"):
+            await event.answer("ℹ️ Already deleted", alert=True)
+            return
+
+        await event.answer("🗑 Deleting…")
+
+        sent_msg_ids = bc.get("sent_msg_ids", {})  # {user_id_str: msg_id}
+        deleted = failed = 0
+
+        for uid_str, msg_id in sent_msg_ids.items():
+            try:
+                await bot_client.delete_messages(int(uid_str), [msg_id])
+                deleted += 1
+                await asyncio.sleep(0.05)
+            except Exception:
+                failed += 1
+
+        # Mark as deleted in DB
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: db_manager.db.broadcasts.update_one(
+                {"broadcast_id": broadcast_id},
+                {"$set": {"deleted": True}}
+            )
+        )
+
+        await event.edit(
+            f"> 🗑 **Broadcast deleted**\n"
+            f"> ID: `{broadcast_id}`\n"
+            f"> Removed from {deleted} chats ({failed} failed)",
+            parse_mode="md",
+            buttons=[[Button.inline("« Broadcast History", "admin_broadcast_history"),
+                      Button.inline("« Admin", "admin_panel")]]
+        )
+    except Exception as e:
+        logger.error(f"delete_broadcast_callback: {e}")
+        await event.answer("❌ Error deleting broadcast", alert=True)
+
+
+# ══════════════════════════════════════════════════
+# RESTRICT MENU BUTTONS (Admin disables search types)
+# ══════════════════════════════════════════════════
+@bot_client.on(events.CallbackQuery(pattern=r"^admin_restrict_buttons$"))
+async def admin_restrict_buttons_callback(event):
+    """Show admin the button restriction panel."""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.answer("❌ Admins only", alert=True)
+            return
+
+        disabled = set(await asyncio.get_running_loop().run_in_executor(
+            None, lambda: (db_manager.db.settings.find_one({"_id": "disabled_buttons"}) or {}).get("keys", [])
+        ))
+
+        all_buttons = [
+            ("phone", "📱 Phone"), ("family", "👨‍👩‍👧 Family"),
+            ("aadhar", "🆔 Aadhar"), ("vehicle", "🚗 Vehicle"),
+            ("telegram", "📲 Telegram"), ("imei", "📱 IMEI"),
+            ("gst", "🏢 GST"), ("insta", "📸 Instagram"),
+            ("ip", "🌍 IP"), ("ifsc", "🏦 IFSC"),
+        ]
+
+        btns = []
+        for key, label in all_buttons:
+            status = "🔴 OFF" if key in disabled else "🟢 ON"
+            btns.append([Button.inline(f"{label}  [{status}]", f"toggle_btn_{key}")])
+        btns.append([Button.inline("« Admin Panel", "admin_panel")])
+
+        await event.edit(
+            "> ⚙️ **Menu Button Control**\n"
+            "> Tap a button to toggle it ON/OFF for all users.",
+            parse_mode="md",
+            buttons=btns
+        )
+    except Exception as e:
+        logger.error(f"admin_restrict_buttons_callback: {e}")
+
+
+@bot_client.on(events.CallbackQuery(pattern=r"^toggle_btn_(.+)$"))
+async def toggle_button_callback(event):
+    """Toggle a search button on or off."""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.answer("❌ Admins only", alert=True)
+            return
+
+        key = event.pattern_match.group(1).decode() if isinstance(event.pattern_match.group(1), bytes) else event.pattern_match.group(1)
+
+        doc = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: db_manager.db.settings.find_one({"_id": "disabled_buttons"})
+        )
+        disabled = set(doc.get("keys", []) if doc else [])
+
+        if key in disabled:
+            disabled.remove(key)
+            action = "enabled"
+        else:
+            disabled.add(key)
+            action = "disabled"
+
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: db_manager.db.settings.update_one(
+                {"_id": "disabled_buttons"},
+                {"$set": {"keys": list(disabled)}},
+                upsert=True
+            )
+        )
+
+        await event.answer(f"✅ {key} {action}")
+        # Refresh the panel
+        await admin_restrict_buttons_callback(event)
+    except Exception as e:
+        logger.error(f"toggle_button_callback: {e}")
 
 
 async def _safe_task(coro_fn, name: str):
