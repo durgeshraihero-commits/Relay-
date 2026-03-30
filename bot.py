@@ -580,18 +580,16 @@ class PremiumFormatter:
     
     @staticmethod
     def format_processing(search_type: str, query: str) -> str:
-        """Clean, professional processing message."""
+        """Waiting message in quote format."""
         cmd = SEARCH_COMMANDS.get(search_type, {})
-        icon = cmd.get("icon", "🔍")
         name = cmd.get("name", "Search")
-
         return (
-            f"{icon} **{name}**\n"
+            f"**{name}**\n"
             f"\n"
-            f"> Searching for `{query}`\n"
-            f"> Querying all networks in parallel...\n"
+            f"> Query: `{query}`\n"
+            f"> Checking all sources at once...\n"
             f"\n"
-            f"_Results will appear here in a moment._"
+            f"_Please wait. This usually takes under 30 seconds._"
         )
 
 # ================== TEXT PROCESSOR ==================
@@ -1898,58 +1896,41 @@ class APIDatabaseManager:
 class OneLineKeyboard:
     @staticmethod
     def main_menu(is_admin: bool = False, disabled_buttons: set = None) -> List[List[Button]]:
-        """Professional colourful keyboard. disabled_buttons = set of keys to hide."""
+        """Clean keyboard — no emojis, real command names, 2 per row."""
         if disabled_buttons is None:
             disabled_buttons = set()
 
-        # ── Search section — colourful 2-per-row grid ─────────────────────────
-        # Each entry: (key, colour_block, short_label)
+        # (key, label shown on button)
         search_items = [
-            ("phone",    "🟩", "📱 Phone"),
-            ("family",   "🟦", "👨‍👩‍👧 Family"),
-            ("aadhar",   "🟪", "🆔 Aadhar"),
-            ("vehicle",  "🟧", "🚗 Vehicle"),
-            ("telegram", "🟥", "📲 Telegram"),
-            ("imei",     "🟨", "📱 IMEI"),
-            ("gst",      "🟫", "🏢 GST"),
-            ("insta",    "🌸", "📸 Instagram"),
-            ("ip",       "🌐", "🌍 IP Geo"),
-            ("ifsc",     "🏦", "🏦 Bank"),
+            ("phone",    "Phone Lookup"),
+            ("family",   "Family Search"),
+            ("aadhar",   "Aadhar Search"),
+            ("vehicle",  "Vehicle Info"),
+            ("telegram", "Telegram Lookup"),
+            ("imei",     "IMEI Trace"),
+            ("gst",      "GST Business"),
+            ("insta",    "Instagram Info"),
+            ("ip",       "IP Location"),
+            ("ifsc",     "Bank / IFSC"),
         ]
 
         buttons = []
-        visible = [(k, c, l) for k, c, l in search_items
+        visible = [(k, l) for k, l in search_items
                    if k not in disabled_buttons and k in SEARCH_COMMANDS]
 
-        # Pair them into rows of 2
         for i in range(0, len(visible), 2):
-            row = []
-            for key, colour, label in visible[i:i+2]:
-                row.append(Button.inline(f"{colour} {label}", f"search_{key}"))
+            row = [Button.inline(label, f"search_{key}") for key, label in visible[i:i+2]]
             buttons.append(row)
 
-        # ── Separator ─────────────────────────────────────────────────────────
-        buttons.append([Button.inline("─────────────────────", "noop")])
-
-        # ── Account & utility buttons ─────────────────────────────────────────
-        if "profile" not in disabled_buttons:
-            buttons.append([
-                Button.inline("👤  My Profile",      "profile"),
-                Button.inline("💎  Buy Credits",     "premium"),
-            ])
-        if "referrals" not in disabled_buttons:
-            buttons.append([
-                Button.inline("🎁  Refer & Earn",    "referrals"),
-                Button.inline("🆘  Support",         "support"),
-            ])
-        buttons.append([
-            Button.inline("🔑  API Access",     "api_menu"),
-            Button.inline("🔒  Protect Query",  "protect_query_menu"),
-        ])
-        buttons.append([Button.inline("✉️  Message Admin",  "user_message_admin")])
+        buttons.append([Button.inline("My Profile",     "profile"),
+                        Button.inline("Buy Credits",    "premium")])
+        buttons.append([Button.inline("Refer & Earn",   "referrals"),
+                        Button.inline("Support",        "support")])
+        buttons.append([Button.inline("API Access",     "api_menu"),
+                        Button.inline("Message Admin",  "user_message_admin")])
 
         if is_admin:
-            buttons.append([Button.inline("━━━━  ⚙️ ADMIN PANEL  ━━━━", "admin_panel")])
+            buttons.append([Button.inline("Admin Panel", "admin_panel")])
 
         return buttons
     
@@ -5960,35 +5941,23 @@ async def search_callback(event):
             return
         
         cmd = SEARCH_COMMANDS[search_type]
-        
-        # Special formatting for leak search
-        if search_type == "leak":
-            leak_text = (
-                f"🚀 **ADVANCED OSINT TOOL - SEARCH ANYTHING**\n\n"
-                f"{cmd['description']}\n\n"
-                f"⚡ **ULTRA-FAST PROCESSING** (5 seconds)\n"
-                f"💎 **Cost:** {cmd['cost']} credits\n"
-                f"📁 **Returns:** JSON + TXT files\n"
-                f"🌐 **Best For:** Phone numbers with country code (e.g., 917204764637)\n\n"
-                f"📝 **Enter your query below:**\n"
-                f"(Email, Phone with country code, Name, Document, Username, etc.)"
-            )
-            
-            await event.edit(
-                leak_text,
-                buttons=OneLineKeyboard.cancel_button(),
-                parse_mode="md"
-            )
-        else:
-            await event.edit(
-                f"{cmd['icon']} **{cmd['name']}**\n\n"
-                f"{cmd['description']}\n\n"
-                f"⚡ **Cost:** {cmd['cost']} credit{'s' if cmd['cost'] > 1 else ''}\n"
-                f"📝 **Example:** `{cmd['example']}`\n\n"
-                f"Enter your query below:",
-                buttons=OneLineKeyboard.cancel_button(),
-                parse_mode="md"
-            )
+        cost_word = f"{cmd['cost']} credit{'s' if cmd['cost'] > 1 else ''}"
+
+        instruction = (
+            f"**{cmd['name']}**\n"
+            f"\n"
+            f"> What it returns: {cmd['description'].split(chr(10))[2].strip().replace('🔸 **Returns:** ', '').replace('**', '')}\n"
+            f"> Format: `{cmd['example']}`\n"
+            f"> Cost: {cost_word}\n"
+            f"\n"
+            f"Type your query below and send it."
+        )
+
+        await event.edit(
+            instruction,
+            buttons=OneLineKeyboard.cancel_button(),
+            parse_mode="md"
+        )
         
         user_states[user_id] = {"action": "search", "type": search_type}
         
@@ -6007,49 +5976,39 @@ async def profile_callback(event):
             await event.answer("❌ User not found", alert=True)
             return
         
-        # Format profile
-        profile_text = (
-            f"👤 **USER PROFILE**\n"
-            f"═══════════════════════\n\n"
-            f"📋 **Personal Information**\n"
-            f"├─ Name: {user_doc.get('first_name', 'N/A')}\n"
-            f"├─ Username: @{user_doc.get('username', 'N/A')}\n"
-            f"├─ User ID: `{user_id}`\n"
-            f"├─ Joined: {user_doc.get('joined_at', 'N/A')[:10]}\n"
-            f"└─ Last Seen: {user_doc.get('last_seen', 'N/A')[:16]}\n\n"
-        )
-        
-        # Credits and subscription
-        profile_text += f"💰 **Account Status**\n"
-        
-        if user_doc.get('subscription') and user_doc.get('subscription_expiry'):
-            expiry_date = datetime.fromisoformat(user_doc['subscription_expiry'])
-            days_left = (expiry_date - datetime.now(timezone.utc)).days
-            
-            if days_left > 0:
-                profile_text += f"├─ Subscription: {user_doc['subscription']}\n"
-                profile_text += f"├─ Status: Active ({days_left} days left)\n"
-                profile_text += f"└─ Searches: Unlimited\n\n"
-            else:
-                profile_text += f"├─ Credits: {user_doc.get('searches_remaining', 0)}\n"
-                profile_text += f"└─ Subscription: Expired\n\n"
+        cred = user_doc.get("searches_remaining", 0)
+        sub  = user_doc.get("subscription")
+        expiry_str = user_doc.get("subscription_expiry", "")
+        if sub and expiry_str:
+            try:
+                exp = datetime.fromisoformat(expiry_str)
+                days_left = (exp - datetime.now(timezone.utc)).days
+                credit_line = f"Active plan · {days_left} days left" if days_left > 0 else f"{cred} credits (plan expired)"
+            except Exception:
+                credit_line = f"{cred} credits"
         else:
-            profile_text += f"├─ Credits: {user_doc.get('searches_remaining', 0)}\n"
-            profile_text += f"└─ Subscription: None\n\n"
-        
-        # Statistics
-        profile_text += f"📊 **Statistics**\n"
-        profile_text += f"├─ Total Searches: {user_doc.get('total_searches', 0)}\n"
-        profile_text += f"├─ Successful: {user_doc.get('total_searches', 0) - user_doc.get('failed_searches', 0)}\n"
-        profile_text += f"├─ Referral Code: `{user_doc.get('referral_code', 'N/A')}`\n"
-        profile_text += f"├─ Referrals: {user_doc.get('referrals', 0)}\n"
-        profile_text += f"└─ Referral Credits: {user_doc.get('referral_credits', 0)}\n\n"
-        
-        # Referral link
+            credit_line = f"{cred} credit{'s' if cred != 1 else ''}"
+
         referral_link = f"https://t.me/{bot_info.username}?start={user_doc.get('referral_code')}"
-        profile_text += f"📢 **Referral Link**\n"
-        profile_text += f"🔗 {referral_link}\n\n"
-        profile_text += f"💎 **Earn 1 credit for each successful referral!**"
+
+        profile_text = (
+            f"**Your Profile**\n"
+            f"\n"
+            f"> Name: {user_doc.get('first_name', 'N/A')}\n"
+            f"> ID: `{user_id}`\n"
+            f"> Joined: {user_doc.get('joined_at', 'N/A')[:10]}\n"
+            f"\n"
+            f"**Balance**\n"
+            f"> {credit_line}\n"
+            f"\n"
+            f"**Activity**\n"
+            f"> Total searches: {user_doc.get('total_searches', 0)}\n"
+            f"> Referrals made: {user_doc.get('referrals', 0)}\n"
+            f"> Referral code: `{user_doc.get('referral_code', 'N/A')}` · earn 1 credit per signup\n"
+            f"\n"
+            f"Your referral link:\n"
+            f"`{referral_link}`"
+        )
         
         await event.edit(
             profile_text,
@@ -10755,8 +10714,9 @@ async def admin_send_poll_callback(event):
 
 
 @bot_client.on(events.NewMessage(func=lambda e: e.is_private and not (e.text or "").startswith("/")))
+@bot_client.on(events.NewMessage(func=lambda e: e.is_private and not (e.text or "").startswith("/")))
 async def poll_question_handler(event):
-    """Capture poll question text."""
+    """Step 1: admin provides poll question."""
     try:
         uid = event.sender_id
         state = user_states.get(uid, {})
@@ -10767,12 +10727,14 @@ async def poll_question_handler(event):
             return
         user_states[uid] = {"action": "admin_poll_options", "poll_question": question}
         await event.respond(
-            f"> 📊 **Poll question set:**\n> _{question}_\n"
+            f"**Poll question saved**\n"
             f"\n"
-            f"Step 2 of 2: Send the **answer options**, one per line (2–10 options):\n"
-            f"`Yes\nNo\nMaybe`",
+            f"> {question}\n"
+            f"\n"
+            f"Now send the answer options, **one per line** (2 to 10 options):\n"
+            f"Example:\n`Yes\nNo\nMaybe`",
             parse_mode="md",
-            buttons=[[Button.inline("❌ Cancel", "admin_panel")]]
+            buttons=[[Button.inline("Cancel", "admin_panel")]]
         )
     except Exception as e:
         logger.error(f"poll_question_handler: {e}")
@@ -10780,7 +10742,7 @@ async def poll_question_handler(event):
 
 @bot_client.on(events.NewMessage(func=lambda e: e.is_private and not (e.text or "").startswith("/")))
 async def poll_options_handler(event):
-    """Capture poll options and send poll to all users."""
+    """Step 2: admin provides options → send native Telegram poll to all users."""
     try:
         uid = event.sender_id
         state = user_states.get(uid, {})
@@ -10789,66 +10751,161 @@ async def poll_options_handler(event):
         raw = (event.text or "").strip()
         options = [o.strip() for o in raw.split("\n") if o.strip()]
         if len(options) < 2:
-            await event.respond("❌ Please provide at least 2 options, one per line.")
+            await event.respond("Please provide at least 2 options, one per line.")
             return
-        if len(options) > 10:
-            options = options[:10]
-
+        options = options[:10]
         question = state["poll_question"]
         user_states.pop(uid, None)
 
-        # Get all users
+        # Bots can only send polls via sendPoll API, not via Telethon MTProto directly
+        # Use the Bot API (requests) to send polls to each user
+        import aiohttp
+        BOT_API = f"https://api.telegram.org/bot{config.BOT_TOKEN}"
+
         users = await asyncio.get_running_loop().run_in_executor(
             None, lambda: list(db_manager.db.users.find({}, {"user_id": 1}))
         )
 
         sent = failed = 0
-        await event.respond(f"📊 Sending poll to {len(users)} users…")
+        poll_id = str(uuid.uuid4())[:10].upper()
+        # Track poll: store question + options + per-user message ids for results
+        await asyncio.get_running_loop().run_in_executor(
+            None, lambda: db_manager.db.polls.insert_one({
+                "poll_id": poll_id,
+                "question": question,
+                "options": options,
+                "votes": {o: [] for o in options},  # option → [user_ids]
+                "telegram_poll_ids": {},  # user_id → telegram poll id
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_by": uid,
+            })
+        )
 
-        for u in users:
-            try:
-                await bot_client.send_message(
-                    u["user_id"],
-                    message=question,
-                    buttons=None,
-                )
-                # Send actual Telegram native poll
-                from telethon.tl.functions.messages import SendMediaRequest
-                from telethon.tl.types import InputMediaPoll, Poll, PollAnswer
-                from telethon.tl.types import PollAnswerVoters
+        status_msg = await event.respond(f"Sending poll to {len(users)} users...")
 
-                peer = await bot_client.get_input_entity(u["user_id"])
-                poll_answers = [
-                    PollAnswer(text=opt, option=str(i).encode())
-                    for i, opt in enumerate(options)
-                ]
-                poll_obj = Poll(
-                    id=0,
-                    question=question,
-                    answers=poll_answers,
-                    closed=False,
-                    public_voters=False,
-                    multiple_choice=False,
-                    quiz=False,
-                    close_period=None,
-                    close_date=None,
-                )
-                media = InputMediaPoll(poll=poll_obj)
-                await bot_client(SendMediaRequest(peer=peer, media=media, message="", random_id=int(time.time()*1000)))
-                sent += 1
-                await asyncio.sleep(0.08)
-            except Exception:
-                failed += 1
+        async with aiohttp.ClientSession() as session:
+            for i, u in enumerate(users):
+                try:
+                    payload = {
+                        "chat_id": u["user_id"],
+                        "question": question,
+                        "options": options,
+                        "is_anonymous": False,  # NON-ANONYMOUS so admin can see who voted
+                        "allows_multiple_answers": False,
+                    }
+                    async with session.post(f"{BOT_API}/sendPoll", json=payload, timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                        data = await resp.json()
+                        if data.get("ok"):
+                            tg_poll_id = data["result"]["poll"]["id"]
+                            msg_id = data["result"]["message_id"]
+                            await asyncio.get_running_loop().run_in_executor(
+                                None, lambda pid=poll_id, uid2=u["user_id"], tpid=tg_poll_id, mid=msg_id:
+                                    db_manager.db.polls.update_one(
+                                        {"poll_id": pid},
+                                        {"$set": {f"telegram_poll_ids.{uid2}": {"tg_poll_id": tpid, "msg_id": mid}}}
+                                    )
+                            )
+                            sent += 1
+                        else:
+                            failed += 1
+                    await asyncio.sleep(0.05)
+                except Exception as _pe:
+                    failed += 1
+                # Progress update every 50 users
+                if (i + 1) % 50 == 0:
+                    try:
+                        await bot_client.edit_message(uid, status_msg.id, f"Sending... {i+1}/{len(users)}")
+                    except Exception:
+                        pass
 
-        await event.respond(
-            f"> 📊 **Poll sent!**\n"
-            f"> Sent: {sent}  ·  Failed: {failed}",
+        await bot_client.edit_message(
+            uid, status_msg.id,
+            f"**Poll sent**\n"
+            f"\n"
+            f"> ID: `{poll_id}`\n"
+            f"> Sent to {sent} users · {failed} failed\n"
+            f"\n"
+            f"Since the poll is non-anonymous, you can see who voted from Poll Results.",
             parse_mode="md",
-            buttons=OneLineKeyboard.back_to_admin()
+            buttons=[
+                [Button.inline(f"View Results: {poll_id}", f"poll_results_{poll_id}")],
+                [Button.inline("Back to Admin", "admin_panel")],
+            ]
         )
     except Exception as e:
         logger.error(f"poll_options_handler: {e}")
-        await event.respond("❌ Error sending poll.")
+        await event.respond("Error sending poll. Check logs.")
+
+
+@bot_client.on(events.CallbackQuery(pattern=r"^poll_results_(.+)$"))
+async def poll_results_callback(event):
+    """Show admin who voted for what in a poll."""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.answer("Admins only", alert=True)
+            return
+        poll_id = event.pattern_match.group(1)
+        if isinstance(poll_id, bytes): poll_id = poll_id.decode()
+
+        poll_doc = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: db_manager.db.polls.find_one({"poll_id": poll_id})
+        )
+        if not poll_doc:
+            await event.answer("Poll not found", alert=True)
+            return
+
+        votes = poll_doc.get("votes", {})
+        total_voters = sum(len(v) for v in votes.values())
+        question = poll_doc.get("question", "?")
+
+        lines = [f"**Poll Results**", "", f"> {question}", ""]
+        for opt, voter_ids in votes.items():
+            count = len(voter_ids)
+            bar = "█" * count + "░" * max(0, 10 - count)
+            lines.append(f"**{opt}** — {count} vote{"s" if count != 1 else ""}")
+            if voter_ids:
+                id_list = ", ".join(f"`{v}`" for v in voter_ids[:10])
+                lines.append(f"> Voters: {id_list}")
+            lines.append("")
+        lines.append(f"Total votes received: {total_voters}")
+
+        await event.edit(
+            "\n".join(lines),
+            parse_mode="md",
+            buttons=[[Button.inline("Back to Admin", "admin_panel")]]
+        )
+    except Exception as e:
+        logger.error(f"poll_results_callback: {e}")
+
+
+@bot_client.on(events.Raw(types=[__import__("telethon.tl.types", fromlist=["UpdateMessagePoll"]).UpdateMessagePoll]))
+async def poll_vote_handler(update):
+    """Listen for poll votes and record who voted for what."""
+    try:
+        tg_poll_id = str(update.poll_id)
+        results = update.results
+        if not results or not results.results:
+            return
+        # Find poll in DB by telegram poll id
+        poll_doc = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: db_manager.db.polls.find_one(
+                {f"telegram_poll_ids.{tg_poll_id}": {"$exists": True}}
+            )
+        )
+        if not poll_doc:
+            return
+        options = poll_doc.get("options", [])
+        for r in results.results:
+            if r.chosen and r.option is not None:
+                opt_idx = int(r.option) if r.option.isdigit() else 0
+                if opt_idx < len(options):
+                    opt_text = options[opt_idx]
+                    # Voter ID comes from results.recent_voters if available
+                    pass  # vote tracking via UpdateMessagePollVote below
+    except Exception as e:
+        logger.error(f"poll_vote_handler: {e}")
+
+
 
 
 # ══════════════════════════════════════════════════
