@@ -295,10 +295,9 @@ GROUP_PRIORITIES = {
         "weight": 7,
         "enabled": True,
         "entity": None,
-        # This group uses different command names — configure per your group's bot
         "commands": {
             "phone":   "/num",
-            "family":  "/family",   # <-- example: this group uses /familyinfo
+            "family":  "/family",
             "aadhar":  "/aadhar",
             "vehicle": "/vnum",
             "telegram": "/tg",
@@ -558,54 +557,50 @@ class PremiumFormatter:
     
     @staticmethod
     def format_welcome(user_name: str, user_data: Dict) -> str:
-        """Format welcome message"""
-        welcome = "🎭 **DARK BOXES INTELLIGENCE SYSTEM** 🎭\n\n"
-        welcome += "╔══════════════════════════════════╗\n"
-        welcome += f"║   WELCOME, {user_name.upper()}   ║\n"
-        welcome += "╚══════════════════════════════════╝\n\n"
-        
-        welcome += "📈 **ACCOUNT OVERVIEW**\n"
-        welcome += "├─ Available Credits: " + ("∞" if user_data.get('subscription') else str(user_data.get('searches_remaining', 0))) + "\n"
-        welcome += f"├─ Total Searches: {user_data.get('total_searches', 0)}\n"
-        welcome += f"├─ Referral Code: `{user_data.get('referral_code', 'N/A')}`\n"
-        welcome += f"└─ Active Referrals: {user_data.get('referrals', 0)}\n\n"
-        
-        welcome += "🌟 **PREMIUM FEATURES**\n"
-        welcome += "• 🔓 OSINT Database\n"
-        welcome += "• 👑 Celebrity Information Network\n"
-        welcome += "• 🌐 International Data Sources\n"
-        welcome += "• ⚡ Priority Processing\n"
-        welcome += "• 🔐 Encrypted Communication\n"
-        welcome += "• 📊 Real-time Intelligence\n\n"
-        
-        welcome += "🛠️ **SELECT SERVICE**"
-        
+        """Format glowing neon welcome message"""
+        credits = "∞" if user_data.get("subscription") else str(user_data.get("searches_remaining", 0))
+        searches = user_data.get("total_searches", 0)
+        ref_code = user_data.get("referral_code", "N/A")
+        refs = user_data.get("referrals", 0)
+        name = user_name.upper()
+
+        welcome  = "```\n"
+        welcome += "╔══════════════════════════════════════╗\n"
+        welcome += "║  ░▒▓  DARK BOXES INTEL  ▓▒░          ║\n"
+        welcome += f"║  ► AGENT: {name:<28}║\n"
+        welcome += "║  ● SYSTEM STATUS: [ONLINE]           ║\n"
+        welcome += "╚══════════════════════════════════════╝\n"
+        welcome += "```\n"
+
+        welcome += f"⚡ **Credits:** `{credits}`  ·  🔍 **Searches:** `{searches}`\n"
+        welcome += f"🔗 **Ref Code:** `{ref_code}`  ·  👥 **Referrals:** `{refs}`\n\n"
+
+        welcome += (
+            "🟢 Phone Intel  🔵 Family Net  🟣 Aadhar\n"
+            "🟠 Vehicle  🔴 Telegram  🟡 IMEI\n"
+            "🟤 GST  🩷 Instagram  🌐 IP  🏦 IFSC\n\n"
+        )
+        welcome += "━━━ **SELECT A SERVICE BELOW** ━━━"
+
         return welcome
     
     @staticmethod
     def format_processing(search_type: str, query: str) -> str:
-        """Format processing message"""
+        """Format glowing scan-in-progress message"""
         cmd = SEARCH_COMMANDS.get(search_type, {})
-        
-        processing = "🔮 **INTELLIGENCE SCAN INITIATED**\n\n"
-        processing += "╔══════════════════════════════════╗\n"
-        processing += f"║   {cmd.get('icon', '🔍')} {cmd.get('name', 'Search').upper()}   ║\n"
-        processing += "╚══════════════════════════════════╝\n\n"
-        
-        processing += "📡 **ACCESSING DATABASES**\n"
-        processing += "├─ Query: `" + query + "`\n"
-        processing += "├─ Priority: Premium Processing\n"
-        processing += "├─ Estimated Time: 15-30 seconds\n"
-        processing += "└─ Sources: Multiple intelligence feeds\n\n"
-        
-        processing += "🔄 **PROCESSING STAGES**\n"
-        processing += "1️⃣ Data aggregation\n"
-        processing += "2️⃣ Cross-reference verification\n"
-        processing += "3️⃣ Pattern analysis\n"
-        processing += "4️⃣ Report generation\n\n"
-        
-        processing += "⏳ Please wait while we gather intelligence..."
-        
+        icon = cmd.get("icon", "🔍")
+        name = cmd.get("name", "Search").upper()
+
+        processing  = "```\n"
+        processing += "╔══════════════════════════════════════╗\n"
+        processing += f"║  {icon}  SCANNING · {name:<22}║\n"
+        processing += f"║  ► QUERY : {query[:28]:<28}║\n"
+        processing += "║  ● STATUS: [PARALLEL RELAY ACTIVE]  ║\n"
+        processing += "╚══════════════════════════════════════╝\n"
+        processing += "```\n"
+        processing += "🔴 Querying all intelligence networks simultaneously...\n"
+        processing += "⚡ Results delivered the moment data is found."
+
         return processing
 
 # ================== TEXT PROCESSOR ==================
@@ -1912,41 +1907,57 @@ class APIDatabaseManager:
 class OneLineKeyboard:
     @staticmethod
     def main_menu(is_admin: bool = False) -> List[List[Button]]:
-        """Build keyboard with ONE COMMAND PER LINE"""
-        buttons = []
-        
-        # Add each command in its own line
-        # upi, email, pak, leak temporarily disabled
-        commands_in_order = [
-            "phone", "family", "aadhar", "vehicle",
-            "telegram", "imei", "gst", "insta", "ip", "ifsc"
+        """Build colourful keyboard — two search buttons per row, action buttons below."""
+        # ── Search command pairs (2 per row for compact colourful layout) ────
+        search_pairs = [
+            ("phone",    "family"),
+            ("aadhar",   "vehicle"),
+            ("telegram", "imei"),
+            ("gst",      "insta"),
+            ("ip",       "ifsc"),
         ]
-        
-        for cmd_key in commands_in_order:
-            if cmd_key in SEARCH_COMMANDS:
-                cmd = SEARCH_COMMANDS[cmd_key]
-                # Special emphasis for leak command
-                if cmd_key == "leak":
-                    button_text = f"🚀 ADVANCED OSINT TOOL"
-                else:
-                    button_text = f"{cmd['icon']} {cmd['name'].split()[1]}"
-                buttons.append([Button.inline(button_text, f"search_{cmd_key}")])
-        
-        # Add action buttons in their own lines
-        buttons.append([Button.inline("👤 Profile", "profile")])
-        buttons.append([Button.inline("💎 Premium Plans", "premium")])
-        buttons.append([Button.inline("📊 Refer & Earn", "referrals")])
-        buttons.append([Button.inline("🔐 Protect My Query (₹50)", "protect_query_menu")])
-        buttons.append([Button.inline("🆘 Support", "support")])
-        buttons.append([Button.inline("🔑 API Access", "api_menu")])
-        buttons.append([Button.inline("🔐 Login / Link Account", "login_account")])
-        buttons.append([Button.inline("💻 Download Client Script", "download_client")])
-        buttons.append([Button.inline("🗝️ Get My Login Credentials", "get_credentials")])
-        
-        # Add admin button if admin
+        # Colour prefix per search type (shows as coloured square on Telegram)
+        colour_map = {
+            "phone":    "🟢", "family":   "🔵",
+            "aadhar":   "🟣", "vehicle":  "🟠",
+            "telegram": "🔴", "imei":     "🟡",
+            "gst":      "🟤", "insta":    "🩷",
+            "ip":       "🌐", "ifsc":     "🏦",
+        }
+        buttons = []
+        for left_key, right_key in search_pairs:
+            row = []
+            for key in (left_key, right_key):
+                if key in SEARCH_COMMANDS:
+                    cmd = SEARCH_COMMANDS[key]
+                    dot = colour_map.get(key, "⚪")
+                    label = cmd["name"].split()[-1]  # e.g. "Intelligence" → last word
+                    row.append(Button.inline(f"{dot} {cmd['icon']} {label}", f"search_{key}"))
+            if row:
+                buttons.append(row)
+
+        # ── Action buttons — 2 per row ────────────────────────────────────────
+        buttons.append([
+            Button.inline("👤 Profile",        "profile"),
+            Button.inline("💎 Premium",        "premium"),
+        ])
+        buttons.append([
+            Button.inline("📊 Refer & Earn",   "referrals"),
+            Button.inline("🆘 Support",        "support"),
+        ])
+        buttons.append([
+            Button.inline("🔑 API Access",     "api_menu"),
+            Button.inline("🔐 Login / Link",   "login_account"),
+        ])
+        buttons.append([
+            Button.inline("🔒 Protect Query",  "protect_query_menu"),
+            Button.inline("💻 Client Script",  "download_client"),
+        ])
+        buttons.append([Button.inline("🗝️ Get My Credentials", "get_credentials")])
+
         if is_admin:
-            buttons.append([Button.inline("⚙️ Admin Panel", "admin_panel")])
-        
+            buttons.append([Button.inline("⚙️ ━━━ ADMIN PANEL ━━━ ⚙️", "admin_panel")])
+
         return buttons
     
     @staticmethod
@@ -10396,26 +10407,32 @@ async def memory_monitor():
 
 
 async def render_self_ping():
-    """Ping our own /health endpoint every 10 minutes.
+    """Ping our own /health endpoint every 10 minutes to prevent Render spin-down.
 
-    Render free tier spins down a web service after ~15 minutes of NO HTTP
-    traffic. The Telegram MTProto connection is not HTTP, so Render treats the
-    service as idle and kills it — even though the bot is actively working.
-
-    Hitting our own health endpoint over loopback keeps Render's inactivity
-    timer reset without any external dependency.
+    Waits until _WEB_SERVER_STARTED is True before pinging so we never hit
+    the "Cannot connect to host" error during startup.
     """
-    # Wait for web server to be up before pinging
-    await asyncio.sleep(30)
+    from aiohttp import ClientSession, ClientTimeout
+
+    # Wait until the web server has actually bound the port
+    waited = 0
+    while not _WEB_SERVER_STARTED:
+        await asyncio.sleep(3)
+        waited += 3
+        if waited > 120:
+            logger.warning("⚠️ Self-ping: web server not ready after 120s, proceeding anyway")
+            break
+    # Extra grace period for TCPSite to fully accept connections
+    await asyncio.sleep(5)
 
     url = f"http://127.0.0.1:{config.PORT}/health"
+    logger.info(f"🏓 Self-ping armed → {url}")
+
     while True:
         try:
-            from aiohttp import ClientSession, ClientTimeout
-            async with ClientSession(timeout=ClientTimeout(total=10)) as session:
+            async with ClientSession(timeout=ClientTimeout(total=15)) as session:
                 async with session.get(url) as resp:
-                    status = resp.status
-                    logger.info(f"🏓 Self-ping {url} → HTTP {status}")
+                    logger.info(f"🏓 Self-ping → HTTP {resp.status} (Render inactivity timer reset)")
         except asyncio.CancelledError:
             raise
         except Exception as e:
