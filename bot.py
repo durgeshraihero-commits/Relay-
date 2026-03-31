@@ -580,19 +580,19 @@ class PremiumFormatter:
         refs = user_data.get("referrals", 0)
         name = user_name
 
-        lines = []
-        # Telegram expandable quote block (renders as highlighted box)
-        lines.append(f"**Dark Boxes Intelligence**")
-        lines.append(f"")
-        lines.append(f"Welcome back, **{name}**.")
-        lines.append(f"")
-        lines.append(f"**Credits available:** `{credits}`")
-        lines.append(f"**Total searches:** `{searches}`")
-        lines.append(f"**Your referral code:** `{ref_code}` — {refs} referral(s)")
-        lines.append(f"")
-        lines.append(f"Pick a search tool below to get started.")
-
-        return "\n".join(lines)
+        return (
+            f"**Welcome, {name}**"
+            f"\n\n"
+            f"__Dark Boxes Intelligence System__"
+            f"\n\n"
+            f"> Credits: **{credits}**"
+            f"\n"
+            f"> Searches done: **{searches}**"
+            f"\n"
+            f"> Referral code: `{ref_code}` · {refs} referral{'s' if refs != 1 else ''}"
+            f"\n\n"
+            f"Select a search tool below."
+        )
     
     @staticmethod
     def format_processing(search_type: str, query: str) -> str:
@@ -1964,38 +1964,39 @@ class OneLineKeyboard:
     
     @staticmethod
     def admin_panel() -> List[List[Button]]:
-        """Professional admin panel with all features"""
-        buttons = [
-            [Button.inline("📊 Today's Stats", "admin_today")],
-            [Button.inline("👥 User List & Management", "admin_users")],
-            [Button.inline("🕐 Last Active Users", "admin_last_active")],
-            [Button.inline("📈 Search Analytics", "admin_analytics")],
-            [Button.inline("🔍 All Search Logs", "admin_search_logs")],
-            [Button.inline("🔍 User Search Logs", "admin_user_search_logs")],
-            [Button.inline("🕵️ Intent Monitor", "admin_intent_monitor")],
-            [Button.inline("💰 Payment Stats", "admin_payments")],
-            [Button.inline("⏳ Pending UTR Payments", "admin_pending_utr")],
-            [Button.inline("💳 Pending Payments (Legacy)", "admin_pending_payments")],
-            [Button.inline("🔍 Search Users", "admin_search_user")],
-            [Button.inline("📢 Text Broadcast", "admin_broadcast"),   Button.inline("🖼️ Media Broadcast", "admin_broadcast_media")],
-            [Button.inline("📊 Send Live Poll",   "admin_send_poll"),  Button.inline("📋 Broadcast History", "admin_broadcast_history")],
-            [Button.inline("🚫 Restrict Menu Buttons", "admin_restrict_buttons")],
-            [Button.inline("⚙️ Bot Settings", "admin_settings")],
-            [Button.inline("🚫 Ban/Unban User", "admin_ban")],
-            [Button.inline("👑 Add/Remove Admin", "admin_admin")],
-            [Button.inline("🎯 Add Credits to User", "admin_add_credits")],
-            [Button.inline("💎 Give Subscription", "admin_give_subscription")],
-            [Button.inline("📊 Export Data", "admin_export")],
-            [Button.inline("🔑 API Panel", "admin_api")],
-            [Button.inline("🔒 Manage Restricted Queries", "admin_restricted_queries")],
-            [Button.inline("⏳ Pending Protection Requests", "admin_pending_protections")],
-            [Button.inline("🔑 Reset User Password", "admin_reset_password")],
-            [Button.inline("💰 Give Credits to ALL Users", "admin_give_credits_all")],
-            [Button.inline("➖ Take Credits from User", "admin_take_credits_user")],
-            [Button.inline("🔥 Take Credits from ALL Users", "admin_take_credits_all")],
-            [Button.inline("« Main Menu", "main_menu")]
+        """Compact admin panel — grouped into sections, 2 per row."""
+        return [
+            # Stats & users
+            [Button.inline("Stats",          "admin_today"),
+             Button.inline("Users",          "admin_users")],
+            [Button.inline("Search Logs",    "admin_search_logs"),
+             Button.inline("Analytics",      "admin_analytics")],
+            [Button.inline("Payments",       "admin_payments"),
+             Button.inline("Pending UTR",    "admin_pending_utr")],
+            [Button.inline("Search User",    "admin_search_user"),
+             Button.inline("Intent Monitor", "admin_intent_monitor")],
+            # Credits & subscriptions
+            [Button.inline("Add Credits",    "admin_add_credits"),
+             Button.inline("Give Sub",       "admin_give_subscription")],
+            [Button.inline("Credits All",    "admin_give_credits_all"),
+             Button.inline("Take Credits",   "admin_take_credits_user")],
+            # Broadcasts & polls
+            [Button.inline("Text Broadcast", "admin_broadcast"),
+             Button.inline("Media Broadcast","admin_broadcast_media")],
+            [Button.inline("Send Poll",      "admin_send_poll"),
+             Button.inline("Broadcast History","admin_broadcast_history")],
+            # Moderation
+            [Button.inline("Ban / Unban",    "admin_ban"),
+             Button.inline("Add Admin",      "admin_admin")],
+            [Button.inline("Restrict Queries","admin_restricted_queries"),
+             Button.inline("Restrict Buttons","admin_restrict_buttons")],
+            # Other
+            [Button.inline("API Panel",      "admin_api"),
+             Button.inline("Export Data",    "admin_export")],
+            [Button.inline("Reset Password", "admin_reset_password"),
+             Button.inline("Bot Settings",   "admin_settings")],
+            [Button.inline("Main Menu",      "main_menu")],
         ]
-        return buttons
     
     @staticmethod
     def user_management_panel() -> List[List[Button]]:
@@ -5405,7 +5406,7 @@ async def instamojo_create_payment(user_id: int, plan_id: str, user_name: str, u
     import aiohttp as _aio
     plan = SUBSCRIPTION_PLANS[plan_id]
     amount = plan["price"]
-    purpose = f"DarkBoxes - {plan['name']}"
+    purpose = f"Premium Order - {user_id}"  # generic — no brand in Instamojo URL
 
     # Instamojo requires at least a name and email; use safe defaults for bot users
     buyer_name  = user_name or f"User{user_id}"
@@ -6111,14 +6112,11 @@ async def search_callback(event):
 
         if not can_search and searches_remaining <= 0:
             await event.edit(
-                "🔒 **NO CREDITS REMAINING**\n\n"
-                "You have 0 search credits. Choose a plan to continue:\n\n"
-                "🔹 **Single Search** — ₹10 → 1 search\n"
-                "⚡ **Starter Pack** — ₹100 → 12 searches\n"
-                "💎 **Value Pack** — ₹150 → 20 searches\n"
-                "🌟 **Daily 10/60d** — ₹1,500/2 months\n"
-                "👑 **Daily 20/60d** — ₹1,800/2 months\n\n"
-                "📞 Issues? Message **@darkboxesAdmin**",
+                "**No credits remaining**"
+                "\n\n"
+                "> You have used all your search credits."
+                "\n\n"
+                "Choose a plan below to top up and continue searching.",
                 buttons=OneLineKeyboard.subscription_plans(),
                 parse_mode="md"
             )
@@ -6255,17 +6253,21 @@ async def plan_selection_callback(event):
         else:
             search_desc = f"{plan['searches']} searches (never expire)"
 
-        features_text = "\n".join(f"  · {f}" for f in plan["features"])
+        features_text = "\n".join(f"· {f}" for f in plan["features"])
         plan_details = (
-            f"**{plan['name']}**\n"
+            f"**{plan['name']}**"
+            f"\n\n"
+            f"> Price: ₹{plan['price']}"
             f"\n"
-            f"> Price: ₹{plan['price']}\n"
-            f"> Searches: {search_desc}\n"
-            f"> Validity: {plan['validity']}\n"
+            f"> Searches: {search_desc}"
             f"\n"
-            f"{features_text}\n"
+            f"> Validity: {plan['validity']}"
+            f"\n\n"
+            f"{features_text}"
+            f"\n\n"
+            f"__Secure checkout powered by Instamojo.__"
             f"\n"
-            f"Tap **Pay Now** to complete your purchase securely via Instamojo."
+            f"Tap Pay to complete your purchase instantly."
         )
 
         # Check if Instamojo is configured; fall back to UTR if not
@@ -6766,13 +6768,17 @@ async def private_message_handler(event):
 
 @bot_client.on(events.NewMessage(func=lambda e: e.is_private and not (e.text or "").startswith("/")))
 async def user_freetext_handler(event):
-    """Forward any free-text message (not in a state) to admin as a support ticket."""
+    """Forward message to admin ONLY when user is in 'messaging_admin' state.
+    Prevents false triggers on search queries, UTR submissions, etc.
+    """
     try:
         user_id = event.sender_id
-        # Skip if user is already in a state — private_message_handler covers that
-        if user_id in user_states:
+        state = user_states.get(user_id, {})
+
+        # ONLY forward if user explicitly tapped "Message Admin"
+        if state.get("action") != "messaging_admin":
             return
-        # Skip admins messaging themselves
+
         if admin_panel and admin_panel.is_admin(user_id):
             return
 
@@ -6783,12 +6789,11 @@ async def user_freetext_handler(event):
         sender = await event.get_sender()
         uname = f"@{sender.username}" if sender.username else f"ID {user_id}"
 
-        # Notify admin with an inline reply button
         admin_msg = (
-            f"✉️ **User message**\n"
+            f"**Support message**\n"
             f"\n"
-            f"> From: {sender.first_name or ''} {uname}\n"
-            f"> ID: `{user_id}`\n"
+            f"> From: {sender.first_name or ''} ({uname})\n"
+            f"> User ID: `{user_id}`\n"
             f"\n"
             f"{text}"
         )
@@ -6796,13 +6801,16 @@ async def user_freetext_handler(event):
             config.ADMIN_USER_ID,
             admin_msg,
             parse_mode="md",
-            buttons=[[Button.inline(f"↩ Reply to {sender.first_name or user_id}", f"admin_reply_user_{user_id}")]]
+            buttons=[[Button.inline(f"Reply to {sender.first_name or user_id}", f"admin_reply_user_{user_id}")]]
         )
 
+        user_states.pop(user_id, None)
         await event.respond(
-            "> ✅ Your message was delivered to admin.\n"
-            "> You'll receive a reply here shortly.",
-            parse_mode="md"
+            "**Message sent**\n"
+            "\n"
+            "> Admin has been notified and will reply shortly.",
+            parse_mode="md",
+            buttons=[[Button.inline("Back to Menu", "main_menu")]]
         )
     except Exception as e:
         logger.error(f"❌ user_freetext_handler: {e}")
@@ -6810,17 +6818,17 @@ async def user_freetext_handler(event):
 
 @bot_client.on(events.CallbackQuery(pattern=r"^user_message_admin$"))
 async def user_message_admin_callback(event):
-    """User pressed 'Message Admin' from the main menu."""
+    """User pressed 'Message Admin' — set state so freetext handler picks it up."""
     try:
+        user_states[event.sender_id] = {"action": "messaging_admin"}
         await event.edit(
-            "> ✉️ **Send a message to admin**\n"
-            "> Type your message below and send it.\n"
-            "> Admin will reply directly in this chat.",
+            "**Message Admin**\n"
+            "\n"
+            "> Type your message and send it.\n"
+            "> Admin will reply directly here.",
             parse_mode="md",
-            buttons=[[Button.inline("❌ Cancel", "main_menu")]]
+            buttons=[[Button.inline("Cancel", "main_menu")]]
         )
-        # Put user in a loose state — next message goes through user_freetext_handler
-        # (we don't need a state here; freetext handler catches it automatically)
     except Exception as e:
         logger.error(f"❌ user_message_admin_callback: {e}")
 
@@ -10962,7 +10970,6 @@ async def admin_send_poll_callback(event):
 
 
 @bot_client.on(events.NewMessage(func=lambda e: e.is_private and not (e.text or "").startswith("/")))
-@bot_client.on(events.NewMessage(func=lambda e: e.is_private and not (e.text or "").startswith("/")))
 async def poll_question_handler(event):
     """Step 1: admin provides poll question."""
     try:
@@ -11315,10 +11322,23 @@ async def main():
     This prevents the task-duplication bug where every reconnect spawned a
     duplicate set of background workers that then deadlocked the event loop.
     """
-    # ── Start background tasks ONCE ───────────────────────────────────────
+    # ── Start web server FIRST so Render's port scan passes ─────────────
+    # start_web_server binds the port synchronously before returning,
+    # so by the time _run_bot() starts, port 10000 is already open.
+    web_task = asyncio.create_task(_safe_task(start_web_server, "start_web_server"), name="start_web_server")
+    # Give the web server up to 8 seconds to bind
+    for _ in range(40):
+        if _WEB_SERVER_STARTED:
+            break
+        await asyncio.sleep(0.2)
+    if _WEB_SERVER_STARTED:
+        logger.info(f"✅ Web server bound on port {config.PORT} — starting bot")
+    else:
+        logger.warning("⚠️ Web server did not bind within 8s — continuing anyway")
+
+    # ── Start all other background tasks ONCE ────────────────────────────
     bg_task_fns = [
         (cleanup_expired_searches,  "cleanup_expired_searches"),
-        (start_web_server,          "start_web_server"),
         (daily_subscription_reset,  "daily_subscription_reset"),
         (memory_monitor,            "memory_monitor"),
         (telegram_keepalive,        "telegram_keepalive"),
@@ -11326,7 +11346,7 @@ async def main():
         (event_loop_watchdog,       "event_loop_watchdog"),
         (render_self_ping,          "render_self_ping"),
     ]
-    bg_tasks = [
+    bg_tasks = [web_task] + [
         asyncio.create_task(_safe_task(fn, name), name=name)
         for fn, name in bg_task_fns
     ]
