@@ -81,12 +81,12 @@ class BotConfig:
     UPI_ID: str = os.getenv("UPI_ID", "darkboxes@ybl")
     ADMIN_CONTACT: str = "@darkboxesAdmin"
     
-    # Instamojo payment gateway (no webhook)
-    INSTAMOJO_API_KEY:    str = os.getenv("INSTAMOJO_API_KEY", "").strip()
-    INSTAMOJO_AUTH_TOKEN: str = os.getenv("INSTAMOJO_AUTH_TOKEN", "").strip()
-    INSTAMOJO_BASE_URL:   str = os.getenv("INSTAMOJO_BASE_URL", "https://www.instamojo.com/api/1.1").strip()
-    # redirect_url must be your Render URL + /payment/return
-    PAYMENT_RETURN_URL:   str = os.getenv("PAYMENT_RETURN_URL", "https://relay-wzlz.onrender.com/payment/return").strip()
+    # Payment — UPI only (manual admin approval)
+    # Instamojo removed: credentials were exposed in payment links
+    INSTAMOJO_API_KEY:    str = ""
+    INSTAMOJO_AUTH_TOKEN: str = ""
+    INSTAMOJO_BASE_URL:   str = ""
+    PAYMENT_RETURN_URL:   str = ""
 
     # API Configuration
     API_ENABLED: bool = bool(os.getenv("API_ENABLED", "True"))
@@ -94,7 +94,7 @@ class BotConfig:
     API_PORT: int = int(os.getenv("API_PORT", "8000"))
     API_RATE_LIMIT: int = int(os.getenv("API_RATE_LIMIT", "100"))
     API_SECRET_KEY: str = os.getenv("API_SECRET_KEY", secrets.token_hex(32))
-    API_BASE_URL: str = os.getenv("API_BASE_URL", "https://relay-wzlz.onrender.com")
+    API_BASE_URL: str = os.getenv("API_BASE_URL", "").strip()  # Set via env var
 
 print("[STARTUP] Initialising BotConfig...", flush=True)
 try:
@@ -5398,75 +5398,13 @@ _WEB_SERVER_STARTED = False  # singleton guard — only one instance ever binds
 
 
 # ══════════════════════════════════════════════════════════
-# INSTAMOJO PAYMENT HELPERS  (no webhook — polling verify)
+# PAYMENT HELPERS  (UPI manual flow — Instamojo removed)
+# All payments are now UPI → UTR submission → admin approval.
 # ══════════════════════════════════════════════════════════
 
-async def instamojo_create_payment(user_id: int, plan_id: str, user_name: str, user_email: str = "") -> dict:
-    """Create an Instamojo payment request and return {paymentUrl, requestId} or raise."""
-    import aiohttp as _aio
-    plan = SUBSCRIPTION_PLANS[plan_id]
-    amount = plan["price"]
-    purpose = f"Premium Order - {user_id}"  # generic — no brand in Instamojo URL
-
-    # Instamojo requires at least a name and email; use safe defaults for bot users
-    buyer_name  = user_name or f"User{user_id}"
-    buyer_email = user_email or f"{user_id}@darkboxes.bot"
-
-    params = {
-        "purpose":      purpose,
-        "amount":       str(amount),
-        "buyer_name":   buyer_name,
-        "email":        buyer_email,
-        "redirect_url": config.PAYMENT_RETURN_URL,
-        "send_email":   "false",
-        "send_sms":     "false",
-        "allow_repeated_payments": "false",
-    }
-    headers = {
-        "X-Api-Key":    config.INSTAMOJO_API_KEY,
-        "X-Auth-Token": config.INSTAMOJO_AUTH_TOKEN,
-        "Content-Type": "application/x-www-form-urlencoded",
-    }
-    url = f"{config.INSTAMOJO_BASE_URL}/payment-requests/"
-    async with _aio.ClientSession() as sess:
-        async with sess.post(url, data=params, headers=headers, timeout=_aio.ClientTimeout(total=15)) as resp:
-            data = await resp.json()
-    pr = data.get("payment_request", {})
-    if not pr.get("longurl"):
-        raise RuntimeError(f"Instamojo API error: {data}")
-    return {"paymentUrl": pr["longurl"], "requestId": pr["id"]}
 
 
-async def instamojo_verify_payment(payment_id: str, request_id: str) -> bool:
-    """Verify payment via Instamojo GET — returns True if Credit."""
-    import aiohttp as _aio
-    headers = {
-        "X-Api-Key":    config.INSTAMOJO_API_KEY,
-        "X-Auth-Token": config.INSTAMOJO_AUTH_TOKEN,
-    }
-    url = f"{config.INSTAMOJO_BASE_URL}/payment-requests/{request_id}/"
-    async with _aio.ClientSession() as sess:
-        async with sess.get(url, headers=headers, timeout=_aio.ClientTimeout(total=15)) as resp:
-            data = await resp.json()
-    pr = data.get("payment_request", {})
-    payments = pr.get("payments", [])
-    match = next((p for p in payments if p.get("payment_id") == payment_id), None)
-    return bool(match and match.get("status") == "Credit")
 
-
-async def instamojo_activate_credits(user_id: int, plan_id: str):
-    """Add credits to user after successful payment."""
-    plan = SUBSCRIPTION_PLANS[plan_id]
-    searches = plan.get("searches", 0)
-    await asyncio.get_running_loop().run_in_executor(
-        None, lambda: db_manager.db.users.update_one(
-            {"user_id": user_id},
-            {"$inc": {"searches_remaining": searches},
-             "$set": {"last_payment_plan": plan_id,
-                      "last_payment_at": datetime.now(timezone.utc).isoformat()}}
-        )
-    )
-    logger.info(f"✅ Activated {searches} credits for user {user_id} (plan {plan_id})")
 
 
 async def start_web_server():
@@ -5511,102 +5449,6 @@ async def start_web_server():
     app.router.add_head('/', root_handler)
     app.router.add_get('/health', health_check)
     app.router.add_get('/api/v1/health', health_check)
-
-    # ── Instamojo payment return URL ─────────────────────────────────────────
-    async def payment_return(request):
-        """Instamojo redirects here after payment with ?payment_id=&payment_request_id=&payment_status="""
-        params = request.rel_url.query
-        payment_id  = params.get("payment_id", "")
-        request_id  = params.get("payment_request_id", "")
-        status      = params.get("payment_status", "")
-
-        # Look up pending payment in DB
-        pending = await asyncio.get_running_loop().run_in_executor(
-            None, lambda: db_manager.db.pending_payments.find_one({"instamojo_request_id": request_id})
-        ) if db_manager.db else None
-
-        if not pending:
-            return web.Response(
-                text="<html><body style='font-family:sans-serif;text-align:center;padding:40px'>"
-                     "<h2>⚠️ Payment record not found.</h2>"
-                     "<p>If you paid, please open the bot and tap <b>Verify My Payment</b>.</p>"
-                     "</body></html>",
-                content_type="text/html"
-            )
-
-        user_id = pending.get("user_id")
-        plan_id = pending.get("plan_id")
-
-        try:
-            verified = await instamojo_verify_payment(payment_id, request_id)
-        except Exception as e:
-            logger.error(f"Payment return verify error: {e}")
-            verified = False
-
-        if verified:
-            # Activate credits
-            await instamojo_activate_credits(user_id, plan_id)
-            await asyncio.get_running_loop().run_in_executor(
-                None, lambda: db_manager.db.pending_payments.update_one(
-                    {"instamojo_request_id": request_id},
-                    {"$set": {"status": "paid", "payment_id": payment_id}}
-                )
-            )
-            plan = SUBSCRIPTION_PLANS.get(plan_id, {})
-            # Notify user in Telegram
-            try:
-                await bot_client.send_message(
-                    user_id,
-                    f"**Payment confirmed!**\n"
-                    f"\n"
-                    f"> Plan: {plan.get('name', plan_id)}\n"
-                    f"> Credits added: {plan.get('searches', '?')}\n"
-                    f"> Payment ID: `{payment_id}`\n"
-                    f"\n"
-                    f"Your credits are now active. Tap /start to begin searching.",
-                    parse_mode="md"
-                )
-            except Exception:
-                pass
-            html = (
-                "<html><body style='font-family:sans-serif;text-align:center;padding:40px'>"
-                "<h2 style='color:#27AE60'>✅ Payment Successful!</h2>"
-                f"<p>Your <b>{plan.get('name', '')}</b> credits have been activated.</p>"
-                "<p>Go back to Telegram and start searching.</p>"
-                f"<p style='color:#888;font-size:12px'>Payment ID: {payment_id}</p>"
-                "</body></html>"
-            )
-        else:
-            await asyncio.get_running_loop().run_in_executor(
-                None, lambda: db_manager.db.pending_payments.update_one(
-                    {"instamojo_request_id": request_id},
-                    {"$set": {"status": "failed", "payment_id": payment_id}}
-                )
-            )
-            try:
-                await bot_client.send_message(
-                    user_id,
-                    f"**Payment could not be verified.**\n"
-                    f"\n"
-                    f"> Payment ID: `{payment_id}`\n"
-                    f"> Status returned: {status}\n"
-                    f"\n"
-                    f"If money was deducted, contact @darkboxesAdmin with your payment ID.",
-                    parse_mode="md"
-                )
-            except Exception:
-                pass
-            html = (
-                "<html><body style='font-family:sans-serif;text-align:center;padding:40px'>"
-                "<h2 style='color:#E74C3C'>❌ Payment Not Verified</h2>"
-                "<p>If money was deducted from your account, please contact <b>@darkboxesAdmin</b> "
-                f"with Payment ID: <code>{payment_id}</code></p>"
-                "</body></html>"
-            )
-
-        return web.Response(text=html, content_type="text/html")
-
-    app.router.add_get('/payment/return', payment_return)
 
     # Add API endpoints if enabled
     if config.API_ENABLED:
@@ -6207,19 +6049,23 @@ async def premium_callback(event):
     """Handle premium plans callback"""
     try:
         premium_text = (
-            "💎 **DARKBOXES PLANS & PRICING**\n"
-            "═══════════════════════\n\n"
-            "━━ 🎟️ CREDIT PACKS (Never Expire) ━━\n\n"
-            "🔹 **SINGLE SEARCH** — ₹10\n"
-            "└─ 1 search (no expiry)\n\n"
-            "⚡ **STARTER PACK** — ₹100\n"
-            "└─ 12 searches (no expiry)\n\n"
-            "💎 **VALUE PACK** — ₹150\n"
-            "└─ 20 searches (no expiry) · Best Value 🏆\n\n"
-            "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            "💳 **UPI ID:** `darkboxes@ybl`\n"
-            "📞 **Support:** @darkboxesAdmin\n\n"
-            "👇 Select a plan to pay via screenshot:"
+            "**Credits & Plans**"
+            "\n\n"
+            "> All credits never expire."
+            "\n"
+            "> Pay via UPI — admin activates within 15 min."
+            "\n\n"
+            "🔹 **Single Search** · 1 credit · ₹10"
+            "\n"
+            "⚡ **Starter Pack** · 12 credits · ₹100"
+            "\n"
+            "💎 **Value Pack** · 20 credits · ₹150  _(best value)_"
+            "\n\n"
+            f"> UPI: `{config.UPI_ID}`"
+            "\n"
+            "> Support: @darkboxesAdmin"
+            "\n\n"
+            "_Select a plan below to get payment instructions._"
         )
         
         await event.edit(
@@ -6234,130 +6080,50 @@ async def premium_callback(event):
 
 @bot_client.on(events.CallbackQuery(pattern=r'^plan_(.+)$'))
 async def plan_selection_callback(event):
-    """Handle plan selection - guides user through payment + screenshot flow"""
+    """Handle plan selection — UPI manual payment flow only"""
     try:
         plan_id = event.data.decode().split('_', 1)[1]
-
         if plan_id not in SUBSCRIPTION_PLANS:
             await event.answer("❌ Invalid plan selection", alert=True)
             return
-
         plan = SUBSCRIPTION_PLANS[plan_id]
         user_id = event.sender_id
-
-        # Build search description based on plan type
         plan_type = plan.get("plan_type", "credit")
         daily_limit = plan.get("daily_limit", 0)
         if plan_type == "subscription" and daily_limit > 0:
             search_desc = f"{plan['searches']} searches/day"
         else:
-            search_desc = f"{plan['searches']} searches (never expire)"
-
-        features_text = "\n".join(f"· {f}" for f in plan["features"])
+            search_desc = f"{plan['searches']} searches · no expiry"
         plan_details = (
             f"**{plan['name']}**"
             f"\n\n"
-            f"> Price: ₹{plan['price']}"
+            f"> 💰 Price   : ₹{plan['price']}"
             f"\n"
-            f"> Searches: {search_desc}"
+            f"> 🔍 Searches: {search_desc}"
             f"\n"
-            f"> Validity: {plan['validity']}"
+            f"> 📅 Validity: {plan['validity']}"
             f"\n\n"
-            f"{features_text}"
-            f"\n\n"
-            f"__Secure checkout powered by Instamojo.__"
+            f"**How to pay:**"
             f"\n"
-            f"Tap Pay to complete your purchase instantly."
+            f"> 1️⃣ Open any UPI app (GPay, PhonePe, Paytm…)"
+            f"\n"
+            f"> 2️⃣ Send ₹{plan['price']} to `{config.UPI_ID}`"
+            f"\n"
+            f"> 3️⃣ Note the UTR / Transaction Reference Number"
+            f"\n"
+            f"> 4️⃣ Tap **I've Paid** below and enter it"
+            f"\n\n"
+            f"_Activated within 5–15 min after admin verification._"
         )
-
-        # Check if Instamojo is configured; fall back to UTR if not
-        use_instamojo = bool(config.INSTAMOJO_API_KEY and config.INSTAMOJO_AUTH_TOKEN)
-        if use_instamojo:
-            buttons = [
-                [Button.inline(f"Pay ₹{plan['price']} — Secure Checkout", f"imojo_pay_{plan_id}")],
-                [Button.inline("Back to Plans", "premium"),
-                 Button.inline("Main Menu", "main_menu")]
-            ]
-        else:
-            buttons = [
-                [Button.inline(f"Submit UTR / Transaction No", f"submit_payment_{plan_id}")],
-                [Button.inline("Back to Plans", "premium"),
-                 Button.inline("Main Menu", "main_menu")]
-            ]
-
+        buttons = [
+            [Button.inline(f"✅ I've Paid — Submit UTR", f"submit_payment_{plan_id}")],
+            [Button.inline("« Back to Plans", "premium"),
+             Button.inline("Main Menu", "main_menu")]
+        ]
         await event.edit(plan_details, buttons=buttons, parse_mode="md")
-
     except Exception as e:
         logger.error(f"❌ Error in plan_selection_callback: {e}")
         await event.answer("❌ Error loading plan details", alert=True)
-
-
-@bot_client.on(events.CallbackQuery(pattern=r"^imojo_pay_(.+)$"))
-async def instamojo_pay_callback(event):
-    """Create Instamojo payment and send the secure payment URL to user."""
-    try:
-        plan_id = event.data.decode().split("_", 2)[2]
-        user_id = event.sender_id
-
-        if plan_id not in SUBSCRIPTION_PLANS:
-            await event.answer("Invalid plan", alert=True)
-            return
-
-        if not config.INSTAMOJO_API_KEY:
-            await event.answer("Payment gateway not configured", alert=True)
-            return
-
-        plan = SUBSCRIPTION_PLANS[plan_id]
-        await event.answer("Creating secure payment link…")
-
-        user_doc = await db_manager.get_user(user_id)
-        user_name = (user_doc or {}).get("first_name", f"User{user_id}")
-
-        try:
-            result = await instamojo_create_payment(user_id, plan_id, user_name)
-        except Exception as e:
-            logger.error(f"Instamojo create error: {e}")
-            await event.edit(
-                "Could not create payment link. Please try again or contact @darkboxesAdmin.",
-                buttons=[[Button.inline("Try Again", f"plan_{plan_id}"),
-                          Button.inline("Support", "support")]]
-            )
-            return
-
-        # Store pending payment in DB
-        await asyncio.get_running_loop().run_in_executor(
-            None, lambda: db_manager.db.pending_payments.insert_one({
-                "user_id":               user_id,
-                "plan_id":               plan_id,
-                "amount":                plan["price"],
-                "instamojo_request_id":  result["requestId"],
-                "status":                "pending",
-                "created_at":            datetime.now(timezone.utc).isoformat(),
-            })
-        )
-
-        msg = (
-            f"**Your payment link is ready**\n"
-            f"\n"
-            f"> Plan: {plan['name']}\n"
-            f"> Amount: ₹{plan['price']}\n"
-            f"> Ref: `{result['requestId'][:16]}…`\n"
-            f"\n"
-            f"Tap the button below to pay. You will be redirected back here automatically after payment."
-        )
-
-        await event.edit(
-            msg,
-            buttons=[
-                [Button.url(f"Pay ₹{plan['price']} Securely", result["paymentUrl"])],
-                [Button.inline("Cancel", "main_menu")]
-            ],
-            parse_mode="md"
-        )
-
-    except Exception as e:
-        logger.error(f"instamojo_pay_callback: {e}")
-        await event.answer("Error. Please try again.", alert=True)
 
 
 @bot_client.on(events.CallbackQuery(pattern=r'^submit_payment_(.+)$'))
@@ -6382,18 +6148,23 @@ async def submit_payment_callback(event):
         }
 
         instructions = (
-            f"🏦 **ENTER UTR / TRANSACTION NUMBER**\n\n"
-            f"Plan: **{plan['name']}** — ₹{plan['price']}\n\n"
-            f"After completing your UPI payment, type the **UTR number** or "
-            f"**Transaction Reference Number** shown in your payment app.\n\n"
-            f"📋 Where to find it:\n"
-            f"• PhonePe: History → Tap transaction → UTR No\n"
-            f"• GPay: Activity → Tap transaction → Transaction ID\n"
-            f"• Paytm: History → Tap transaction → Reference No\n"
-            f"• Bank App: Check SMS / Account Statement\n\n"
-            f"**Just type the UTR/Txn number and send it here.**\n\n"
-            f"⏱️ Admin will verify and activate within 5–15 minutes\n"
-            f"Your User ID: `{user_id}`"
+            f"**Submit Payment**"
+            f"\n\n"
+            f"> Plan   : {plan['name']}"
+            f"\n"
+            f"> Amount : ₹{plan['price']}"
+            f"\n"
+            f"> UPI ID : `{config.UPI_ID}`"
+            f"\n\n"
+            f"After paying, type your **UTR** or **Transaction ID** and send it here."
+            f"\n\n"
+            f"> PhonePe: History → transaction → UTR No"
+            f"\n"
+            f"> GPay: Activity → transaction → Transaction ID"
+            f"\n"
+            f"> Paytm: History → Reference No"
+            f"\n\n"
+            f"_Admin will verify and activate within 5–15 min._"
         )
 
         buttons = [[Button.inline("❌ Cancel", "main_menu")]]
@@ -6461,29 +6232,25 @@ async def support_callback(event):
     """Handle support callback"""
     try:
         support_text = (
-            f"🆘 **DARKBOXES SUPPORT**\n"
-            f"═══════════════════════\n\n"
-            f"📞 **Contact Admin:** @darkboxesAdmin\n"
-            f"📧 **Email:** yadiify@gmail.com\n"
-            f"⏰ **Response Time:** Within 1 hour\n"
-            f"🌐 **Official Channel:** @darkboxesv1\n\n"
-            f"❓ **Common Issues:**\n"
-            f"• Payment not processed\n"
-            f"• Search not working\n"
-            f"• Account issues\n"
-            f"• Bug reports\n"
-            f"• Feature requests\n\n"
-            f"⚠️ **Before Contacting:**\n"
-            f"1. Check if you have sufficient credits\n"
-            f"2. Verify your query format\n"
-            f"3. Wait 30 seconds for search results\n"
-            f"4. Check @darkboxesv1 for announcements\n\n"
-            f"💳 **Payment Support:**\n"
-            f"UPI: `{config.UPI_ID}`\n"
-            f"After payment, submit your UTR/Transaction No in the bot\n\n"
-            f"🔒 **Security Notice:**\n"
-            f"Never share passwords or OTPs\n"
-            f"Official admin: @darkboxesAdmin only"
+            "**Support**"
+            "\n\n"
+            "> 📞 Telegram: @darkboxesAdmin"
+            "\n"
+            "> 📢 Channel: @darkboxesv1"
+            "\n"
+            "> ⏰ Response: within 1 hour"
+            "\n\n"
+            "**Common issues**"
+            "\n"
+            "> • Payment not processed → submit your UTR in the bot"
+            "\n"
+            "> • Search not working → check your credit balance"
+            "\n"
+            "> • Account issues → contact @darkboxesAdmin"
+            "\n\n"
+            f"> UPI: `{config.UPI_ID}`"
+            "\n\n"
+            "_Never share your password. Official admin: @darkboxesAdmin only._"
         )
         
         await event.edit(
@@ -6619,27 +6386,25 @@ async def contact_admin_callback(event):
     """Handle contact admin callback"""
     try:
         contact_text = (
-            f"📞 **CONTACT ADMINISTRATOR**\n"
-            f"═══════════════════════\n\n"
-            f"👤 **Official Admin:** @darkboxesAdmin\n\n"
-            f"📧 **Contact Methods:**\n"
-            f"• Telegram: @darkboxesAdmin (Preferred)\n"
-            f"• Email: yadiify@gmail.com\n"
-            f"• Channel: @darkboxesv1\n\n"
-            f"⏰ **Response Time:**\n"
-            f"• General: Within 1 hour\n"
-            f"• Urgent: 15-30 minutes\n"
-            f"• Payment: 5-10 minutes\n\n"
-            f"💳 **Payment Issues:**\n"
-            f"1. Send payment to: `{config.UPI_ID}`\n"
-            f"2. Note your UTR / Transaction Number\n"
-            f"3. Submit it via 💳 Buy Credits in the bot\n"
-            f"4. Include your User ID: `{event.sender_id}`\n\n"
-            f"⚠️ **Important:**\n"
-            f"• Never share passwords/OTPs\n"
-            f"• Official admin ONLY: @darkboxesAdmin\n"
-            f"• Beware of impersonators\n"
-            f"• Report suspicious accounts"
+            "**Contact Admin**"
+            "\n\n"
+            "> 📞 Telegram: @darkboxesAdmin _(preferred)_"
+            "\n"
+            "> 📢 Channel: @darkboxesv1"
+            "\n"
+            "> ⏰ Response: within 1 hour"
+            "\n\n"
+            "**Payment issues**"
+            "\n"
+            f"> 1. Pay to `{config.UPI_ID}`"
+            "\n"
+            "> 2. Note your UTR / Transaction Number"
+            "\n"
+            "> 3. Submit it via 💎 Buy Credits in the bot"
+            f"\n"
+            f"> Your ID: `{event.sender_id}`"
+            "\n\n"
+            "_Official admin: @darkboxesAdmin only. Never share your password._"
         )
         
         buttons = [
@@ -6869,7 +6634,7 @@ async def handle_payment_utr(event, state):
                 "Please enter the exact UTR or Transaction Reference Number "
                 "shown in your UPI payment app.\n\n"
                 "Example: `123456789012` or `T2504201234567890`\n\n"
-                "If you're having trouble, contact @darkboxesAdmin or email yadiify@gmail.com",
+                "If you're having trouble, contact @darkboxesAdmin",
                 parse_mode="md"
             )
             return
@@ -6927,16 +6692,19 @@ async def handle_payment_utr(event, state):
 
         # Confirm to user
         await event.respond(
-            f"✅ **UTR SUBMITTED SUCCESSFULLY!**\n\n"
-            f"📋 Payment ID: `{payment_id}`\n"
-            f"📦 Plan: **{plan_name}**\n"
-            f"💰 Amount: ₹{plan_price}\n"
-            f"🏦 UTR/Txn No: `{utr_text}`\n\n"
-            f"⏳ Admin will verify your payment manually and approve within **5–15 minutes**.\n"
-            f"You will receive a notification once activated.\n\n"
-            f"📞 For urgent help:\n"
-            f"• Telegram: @darkboxesAdmin\n"
-            f"• Email: yadiify@gmail.com",
+            f"**Payment submitted**"
+            f"\n\n"
+            f"> Payment ID: `{payment_id}`"
+            f"\n"
+            f"> Plan: {plan_name}"
+            f"\n"
+            f"> Amount: ₹{plan_price}"
+            f"\n"
+            f"> UTR: `{utr_text}`"
+            f"\n\n"
+            f"_Admin will verify and activate within 5–15 min. You'll get a notification here._"
+            f"\n\n"
+            f"For urgent help: @darkboxesAdmin",
             parse_mode="md"
         )
 
@@ -6946,7 +6714,7 @@ async def handle_payment_utr(event, state):
         logger.error(f"❌ Error handling payment UTR: {e}")
         await event.respond(
             "❌ Error processing your submission. Please try again or contact "
-            "@darkboxesAdmin / yadiify@gmail.com"
+            "@darkboxesAdmin"
         )
         user_states.pop(user_id, None)
 
@@ -7058,12 +6826,13 @@ async def approve_payment_callback(event):
         try:
             await bot_client.send_message(
                 user_id,
-                f"🎉 **PAYMENT APPROVED!**\n\n"
-                f"✅ Your **{plan['name']}** is now active!\n"
-                f"🔍 {search_info}\n\n"
-                f"Thank you for subscribing to DarkBoxes! 🚀\n"
-                f"Use /start to begin searching.\n"
-                f"Issues? @darkboxesAdmin",
+                f"**Credits activated**"
+                f"\n\n"
+                f"> Plan: {plan['name']}"
+                f"\n"
+                f"> {search_info}"
+                f"\n\n"
+                f"Use /start to begin searching. Questions? @darkboxesAdmin",
                 parse_mode="md"
             )
         except Exception as e:
@@ -7109,16 +6878,13 @@ async def reject_payment_callback(event):
         try:
             await bot_client.send_message(
                 user_id,
-                f"❌ **PAYMENT REJECTED**\n\n"
-                f"Payment ID: `{payment_id}`\n\n"
-                f"Your UTR/Transaction number could not be verified.\n\n"
-                f"Possible reasons:\n"
-                f"• UTR number was incorrect\n"
-                f"• Wrong amount paid\n"
-                f"• Wrong UPI ID used\n"
-                f"• Payment was cancelled/failed\n\n"
-                f"📞 Contact @darkboxesAdmin or email yadiify@gmail.com to resolve.\n"
-                f"Please provide your correct UTR number.",
+                f"**Payment not verified**"
+                f"\n\n"
+                f"> Payment ID: `{payment_id}`"
+                f"\n\n"
+                f"Your UTR could not be verified. Common reasons: wrong UTR, wrong amount, or wrong UPI ID."
+                f"\n\n"
+                f"Contact @darkboxesAdmin with your correct UTR number to resolve.",
                 parse_mode="md"
             )
         except Exception as e:
@@ -8437,12 +8203,13 @@ async def main_menu_callback(event):
         sub     = (user_doc.get('subscription') or 'None') if user_doc else 'None'
 
         message = (
-            f"🎭 **DARK BOXES INTELLIGENCE**\n\n"
-            f"📊 **ACCOUNT STATUS**\n"
-            f"├─ Credits: {credits}\n"
-            f"├─ Total Searches: {total}\n"
-            f"└─ Subscription: {sub}\n\n"
-            f"🛠️ **SELECT SERVICE**"
+            f"**DarkBoxes Intelligence**"
+            f"\n\n"
+            f"> Credits: **{credits}**  ·  Searches: {total}"
+            f"\n"
+            f"> Plan: {sub}"
+            f"\n\n"
+            f"Select a tool below."
         )
 
         await event.edit(message, buttons=OneLineKeyboard.main_menu(is_admin), parse_mode="md")
@@ -8501,7 +8268,6 @@ async def report_issue_callback(event):
         "⚠️ **REPORT AN ISSUE**\n\n"
         "Please describe your issue to our support team:\n\n"
         "📬 **Telegram:** @darkboxesAdmin\n"
-        "📧 **Email:** yadiify@gmail.com\n\n"
         "When reporting, include:\n"
         "• Your Account ID (tap 🗝️ Get My Login Credentials)\n"
         "• What you searched for\n"
@@ -10230,7 +9996,7 @@ async def download_client_callback(event):
                     "📖 **DARKBOXES — INSTALLATION & USAGE GUIDE**\n\n"
                     "Read this before running the client.\n"
                     "• Termux (Android), Linux, Kali, Windows, macOS steps included.\n\n"
-                    "❓ Help: @darkboxesAdmin | yadiify@gmail.com"
+                    "❓ Help: @darkboxesAdmin"
                 ),
                 parse_mode="md"
             )
@@ -10250,7 +10016,7 @@ async def download_client_callback(event):
             f"2. Run: `python darkboxes_client.py`\n"
             f"3. Register (option 1) or log in (option 2)\n"
             f"4. Use option 24 inside the client to buy credits\n\n"
-            f"❓ Help: @darkboxesAdmin | yadiify@gmail.com",
+            f"❓ Help: @darkboxesAdmin",
             buttons=[
                 [Button.inline("🗝️ Get My Login Credentials", "get_credentials")],
                 [Button.inline("« Main Menu", "main_menu")]
@@ -10304,7 +10070,7 @@ async def get_credentials_callback(event):
             f"3. Enter Account ID: `{acc_id}`\n"
             f"4. Enter your password\n\n"
             f"🔒 Never share your password with anyone.\n"
-            f"Official support only: @darkboxesAdmin | yadiify@gmail.com"
+            f"Official support: @darkboxesAdmin"
         )
 
         await event.edit(
