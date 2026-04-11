@@ -8,14 +8,14 @@ services:
     healthCheckPath: /
     envVars:
       - key: API_ID
-        value: 36246931
+        value: 
       - key: API_HASH
-        value: e9708f05bedf286d69abed0da7f44580
+        value:
       - key: PHONE
-        value: +917667280752
+        value:
       - key: FIRST_GROUP
-        value: eticalosinter
+        value: 
       - key: SECOND_GROUP
-        value: ethicalosinter23
+        value:
       - key: PYTHON_VERSION
         value: 3.11.0
