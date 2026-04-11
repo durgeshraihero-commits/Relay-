@@ -5421,11 +5421,11 @@ async def start_web_server():
         logger.info("🌐 Web server already running — skipping duplicate start.")
         await asyncio.Event().wait()  # park forever
         return
-    _WEB_SERVER_STARTED = True
 
+    # NOTE: _WEB_SERVER_STARTED is set to True AFTER site.start() succeeds
+    # so the main() wait loop only exits once the port is truly bound.
 
-    # ── Bind port IMMEDIATELY so Render port-scan passes ────────────
-    # API routes that need DB are added after DB connects (background task below).
+    # ── Build app and bind port ────────────────────────────────────
 
 
     app = web.Application()
@@ -5611,6 +5611,7 @@ async def start_web_server():
     
     try:
         await site.start()
+        _WEB_SERVER_STARTED = True  # ← signal main() that port is bound
         logger.info(f"🌐 Web server running on port {config.PORT}")
         if config.API_ENABLED:
             logger.info("🔑 API endpoints active on web server.")
@@ -11092,15 +11093,15 @@ async def main():
     # start_web_server binds the port synchronously before returning,
     # so by the time _run_bot() starts, port 10000 is already open.
     web_task = asyncio.create_task(_safe_task(start_web_server, "start_web_server"), name="start_web_server")
-    # Give the web server up to 8 seconds to bind
-    for _ in range(40):
+    # Give the web server up to 15 seconds to bind (Render health check window)
+    for _ in range(75):
         if _WEB_SERVER_STARTED:
             break
         await asyncio.sleep(0.2)
     if _WEB_SERVER_STARTED:
         logger.info(f"✅ Web server bound on port {config.PORT} — starting bot")
     else:
-        logger.warning("⚠️ Web server did not bind within 8s — continuing anyway")
+        logger.warning("⚠️ Web server did not bind within 15s — continuing anyway")
 
     # ── Start all other background tasks ONCE ────────────────────────────
     bg_task_fns = [
