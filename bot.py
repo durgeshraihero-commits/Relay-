@@ -5428,7 +5428,19 @@ async def start_web_server():
     # ── Build app and bind port ────────────────────────────────────
 
 
-    app = web.Application()
+    # ── CORS middleware (must be passed at construction, not appended after) ──
+    @web.middleware
+    async def cors_middleware(request, handler):
+        if request.method == "OPTIONS":
+            response = web.Response()
+        else:
+            response = await handler(request)
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-API-Key'
+        return response
+
+    app = web.Application(middlewares=[cors_middleware])
 
     # Health check endpoint
     async def health_check(request):
@@ -5439,14 +5451,13 @@ async def start_web_server():
             "timestamp": datetime.now().isoformat()
         })
 
-
-    # Root handler — Render pings GET / and HEAD / to check liveness
+    # Root handler — Render pings GET / to check liveness
+    # NOTE: do NOT add HEAD separately — aiohttp auto-creates HEAD for every GET
     async def root_handler(request):
         return web.json_response({"status": "ok", "service": "DarkBoxes Relay"})
 
     # Basic routes
     app.router.add_get('/',  root_handler)
-    app.router.add_head('/', root_handler)
     app.router.add_get('/health', health_check)
     app.router.add_get('/api/v1/health', health_check)
 
@@ -5590,21 +5601,6 @@ async def start_web_server():
         app.router.add_get('/api/v1/docs', documentation)
         
         # CORS middleware
-        async def cors_middleware(app, handler):
-            async def middleware_handler(request):
-                if request.method == "OPTIONS":
-                    response = web.Response()
-                else:
-                    response = await handler(request)
-                
-                response.headers['Access-Control-Allow-Origin'] = '*'
-                response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-                response.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-API-Key'
-                return response
-            return middleware_handler
-        
-        app.middlewares.append(cors_middleware)
-    
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', config.PORT)
