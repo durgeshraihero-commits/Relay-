@@ -297,7 +297,7 @@ GROUP_PRIORITIES = {
     },
     "secondary": {
         "name": "🌐 IntelX Network",
-        "identifier": "EncoreXgroup",
+        "identifier": "@Ethicalosinterr_bot",
         "timeout": 25,
         "weight": 7,
         "enabled": True,
@@ -317,7 +317,7 @@ GROUP_PRIORITIES = {
     },
     "tertiary": {
         "name": "🔍 Basic Database",
-        "identifier": "RAJIV_THE_LOOKUP_HUB",
+        "identifier": "EncoreXgroup",
         "timeout": 25,
         "weight": 5,
         "enabled": True,
