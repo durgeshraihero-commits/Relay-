@@ -354,49 +354,120 @@ DESTINATION_GROUPS = sorted(
     reverse=True
 )
 
+
+# ================== VALIDITY TYPE DEFINITIONS ==================
+# Each validity type defines what constitutes a "real" result for that command.
+# Admin can assign any of these to any command via the admin panel.
+VALIDITY_TYPES = {
+    "num": {
+        "label": "Phone/NUM (name, address, mobile)",
+        "required_any": [
+            "owner name", "name", "fname", "father name", "mobile no", "mobile",
+            "alt mobile", "address", "circle", "id no",
+        ],
+        "min_fields": 3,
+    },
+    "family": {
+        "label": "Family/Ration (household members)",
+        "required_any": [
+            "card id", "card type", "household", "member", "ration",
+            "full address", "fps name", "e-kyc", "id mask",
+        ],
+        "min_fields": 2,
+    },
+    "vehicle": {
+        "label": "Vehicle (plate, owner, RTO, insurance)",
+        "required_any": [
+            "plate", "vehicle", "vehicle_number", "make", "model", "fuel",
+            "engine", "chassis", "rto", "registration", "insurer", "insurance",
+            "asset_number", "owner_name", "permanent_address",
+        ],
+        "min_fields": 3,
+    },
+    "telegram": {
+        "label": "Telegram (ID, phone, verification)",
+        "required_any": [
+            "telegram id", "telegram_id", "phone number", "country",
+            "verification", "account status", "data source",
+        ],
+        "min_fields": 2,
+    },
+    "generic": {
+        "label": "Generic (any non-empty result)",
+        "required_any": [],
+        "min_fields": 0,
+    },
+}
+
+# ================== FREE USER CONFIGURATION ==================
+# Admin-configurable at runtime via DB; these are boot-time defaults.
+FREE_USER_CONFIG = {
+    "allowed_groups": [],    # Group keys for free users; empty = all groups
+    "allowed_commands": [],  # Command keys for free users; empty = all commands
+}
+
+def _load_free_user_config():
+    global FREE_USER_CONFIG
+    try:
+        client_mg = MongoClient(config.MONGODB_URI, serverSelectionTimeoutMS=3000)
+        db_tmp = client_mg[config.MONGODB_DBNAME]
+        doc = db_tmp.bot_config.find_one({"_id": "free_user_config"})
+        if doc:
+            FREE_USER_CONFIG["allowed_groups"]  = doc.get("allowed_groups", [])
+            FREE_USER_CONFIG["allowed_commands"] = doc.get("allowed_commands", [])
+        client_mg.close()
+    except Exception:
+        pass
+
+_load_free_user_config()
+
+
 # ================== SUBSCRIPTION PLANS ==================
 
 SUBSCRIPTION_PLANS = {
     # ── Credit packs (one-time top-up, credits never expire) ──────────────
-    "credits_1": {
-        "name": "🔹 SINGLE SEARCH",
-        "price": 10,
-        "searches": 1,
+    "credits_5": {
+        "name": "⚡ 5 CREDITS PACK",
+        "price": 200,
+        "searches": 5,
         "validity": "No expiry",
         "validity_days": 0,
         "daily_limit": 0,
         "plan_type": "credit",
-        "features": ["1 Premium Search", "All Databases", "Credits Never Expire", "Email Support"],
-        "icon": "🔹",
-        "color": "#27AE60",
-        "for": "One-off single lookup"
-    },
-    "credits_12": {
-        "name": "⚡ STARTER PACK",
-        "price": 100,
-        "searches": 12,
-        "validity": "No expiry",
-        "validity_days": 0,
-        "daily_limit": 0,
-        "plan_type": "credit",
-        "features": ["12 Premium Searches", "All Databases", "Credits Never Expire", "Email Support"],
+        "features": ["5 Premium Searches", "All Databases", "Credits Never Expire", "Email Support"],
         "icon": "⚡",
-        "color": "#3498DB",
-        "for": "Regular occasional users"
+        "color": "#27AE60",
+        "for": "Occasional searches"
     },
-    "credits_20": {
-        "name": "💎 VALUE PACK",
-        "price": 150,
-        "searches": 20,
-        "validity": "No expiry",
-        "validity_days": 0,
+    # ── Monthly subscriptions ──────────────────────────────────────────────
+    "sub_num_monthly": {
+        "name": "📱 NUM UNLIMITED — Monthly",
+        "price": 300,
+        "searches": 999999,
+        "validity": "30 days",
+        "validity_days": 30,
         "daily_limit": 0,
-        "plan_type": "credit",
-        "features": ["20 Premium Searches", "All Databases", "Credits Never Expire", "Priority Support"],
+        "plan_type": "subscription",
+        "allowed_commands": ["phone"],   # Only phone/num command
+        "features": ["Unlimited Phone Searches", "30-Day Validity", "Priority Processing", "Email Support"],
+        "icon": "📱",
+        "color": "#3498DB",
+        "for": "Phone number lookups"
+    },
+    "sub_all_monthly": {
+        "name": "💎 ALL COMMANDS — Monthly",
+        "price": 499,
+        "searches": 999999,
+        "validity": "30 days",
+        "validity_days": 30,
+        "daily_limit": 0,
+        "plan_type": "subscription",
+        "allowed_commands": [],          # Empty = all commands allowed
+        "features": ["Unlimited All Searches", "All Databases", "30-Day Validity", "Priority Support"],
         "icon": "💎",
         "color": "#9B59B6",
-        "for": "Power users & best value"
-    }
+        "for": "Power users — all commands"
+    },
 }
 
 # ================== SEARCH COMMANDS WITH PRIORITY ==================
@@ -404,7 +475,7 @@ SUBSCRIPTION_PLANS = {
 SEARCH_COMMANDS = {
     "phone": {
         "name": "📱 Phone Intelligence",
-        "description": "📊 **Complete Mobile Intelligence**\n\n🔸 **Input:** 10-digit Indian mobile number\n🔸 **Returns:** Full name • Father's name • Aadhar ID • Complete address • Alternate numbers\n🔸 **Sources:** Government databases • Telecom records • Public directories\n🔸 **Confidence:** 98% accurate",
+        "description": "📊 **Complete Mobile Intelligence**\n\n🔸 **Input:** 10-digit Indian mobile number\n🔸 **Returns:** Full name • Father's name • ID Number • Complete address • Alternate numbers\n🔸 **Sources:** Public databases • Network records • Public directories\n🔸 **Confidence:** 98% accurate",
         "commands": ["/num", "/num", "/num"],
         "example": "9876543210",
         "validation": r"^\d{10,15}$",
@@ -415,7 +486,7 @@ SEARCH_COMMANDS = {
     },
     "family": {
         "name": "👨‍👩‍👧‍👦 Family Network",
-        "description": "🏠 **Complete Family Analysis**\n\n🔸 **Input:** 12-digit Aadhar number\n🔸 **Returns:** All family members • Names • Relations • Ages • Addresses\n🔸 **Sources:** UIDAI database • Family registration • Government records\n🔸 **Depth:** 3-level relationship mapping",
+        "description": "🏠 **Complete Family Analysis**\n\n🔸 **Input:** 12-digit ID number\n🔸 **Returns:** All family members • Names • Relations • Ages • Addresses\n🔸 **Sources:** Basic data • Family records • Public records\n🔸 **Depth:** 3-level relationship mapping",
         "commands": ["/family", "/familyinfo"],
         "example": "123456789012",
         "validation": r"^\d{12}$",
@@ -425,8 +496,8 @@ SEARCH_COMMANDS = {
         "category": "identity"
     },
     "aadhar": {
-        "name": "🆔 Aadhar Comprehensive",
-        "description": "📈 **Complete Aadhar Cross-Reference**\n\n🔸 **Input:** 12-digit Aadhar number\n🔸 **Returns:** All linked numbers • Bank accounts • Addresses • Biometric status • Registration history\n🔸 **Sources:** UIDAI • Bank linkages • Government databases\n🔸 **Scope:** Pan-India coverage",
+        "name": "🆔 ID Comprehensive",
+        "description": "📈 **Complete ID Cross-Reference**\n\n🔸 **Input:** 12-digit ID number\n🔸 **Returns:** All linked numbers • Bank accounts • Addresses • Active status • Registration history\n🔸 **Sources:** Basic data • Bank linkages • Public databases\n🔸 **Scope:** Nationwide coverage",
         "commands": ["/aadhar", "/aadhar", "/aadhar"],
         "example": "123456789012",
         "validation": r"^\d{12}$",
@@ -471,7 +542,7 @@ SEARCH_COMMANDS = {
     },
     "gst": {
         "name": "🏢 Business Intelligence",
-        "description": "📊 **GST Business Comprehensive Analysis**\n\n🔸 **Input:** GST number\n🔸 **Returns:** Business details • Owner information • Financial patterns • Compliance status • Tax history\n🔸 **Sources:** Government registries • Financial databases • Corporate records\n🔸 **Verification:** GST portal integration",
+        "description": "📊 **GST Business Comprehensive Analysis**\n\n🔸 **Input:** GST number\n🔸 **Returns:** Business details • Owner information • Financial patterns • Compliance status • Tax history\n🔸 **Sources:** Basic data • Financial databases • Business records\n🔸 **Verification:** GST data integration",
         "commands": ["/gst", "/gstin"],
         "example": "29ABCDE1234F1Z5",
         "validation": r"^\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}[Z]{1}[A-Z\d]{1}$",
@@ -545,7 +616,7 @@ class PremiumFormatter:
             # Aadhar / UID-like 12-digit numbers → spoiler
             text = _re.sub(r"\b(\d{4}[\s\-]?\d{4}[\s\-]?\d{4})\b",
                            lambda m: f"||{m.group(0)}||", text)
-            # PAN card format → spoiler
+            # Tax ID format → spoiler
             text = _re.sub(r"\b([A-Z]{5}\d{4}[A-Z])\b",
                            lambda m: f"||{m.group(0)}||", text)
             return text
@@ -852,6 +923,78 @@ class TextProcessor:
             chunks.append(text)
         
         return chunks
+
+    @staticmethod
+    def is_valid_result(text: str, search_type: str) -> bool:
+        """Check if the response from a group/bot is actually a valid data result
+        for the given search_type, using VALIDITY_TYPES definitions.
+
+        Returns True if the result looks like real data; False if it appears
+        to be a no-data, error, or format-mismatched response.
+        """
+        if not text or len(text.strip()) < 20:
+            return False
+
+        cmd_info = SEARCH_COMMANDS.get(search_type, {})
+        validity_key = cmd_info.get("validity_type", "generic")
+        vtype = VALIDITY_TYPES.get(validity_key, VALIDITY_TYPES["generic"])
+
+        required = vtype.get("required_any", [])
+        min_fields = vtype.get("min_fields", 0)
+
+        if not required and min_fields == 0:
+            # Generic: just needs any cleaned content
+            return len(text.strip()) >= 20
+
+        text_lower = text.lower()
+        matched = sum(1 for field in required if field in text_lower)
+        return matched >= min_fields
+
+    @staticmethod
+    def mask_result(text: str) -> str:
+        """Mask sensitive data in a result for free/no-credit users.
+
+        Keeps the structure visible but obscures the actual values so the user
+        can see that data exists while being incentivised to purchase.
+        """
+        import random
+
+        def _mask_value(val: str) -> str:
+            """Mask a string value keeping first and last chars."""
+            val = val.strip()
+            if not val or val in ("NA", "N/A", "-", "—"):
+                return val
+            if len(val) <= 3:
+                return val[0] + "█" * (len(val) - 1)
+            # Keep up to 2 chars at start, rest masked
+            visible_start = min(2, len(val) // 4)
+            visible_end = 1 if len(val) > 6 else 0
+            masked_len = len(val) - visible_start - visible_end
+            return val[:visible_start] + "█" * masked_len + (val[-visible_end:] if visible_end else "")
+
+        masked_lines = []
+        for line in text.split("\n"):
+            # Try to detect "KEY : VALUE" or "KEY: VALUE" patterns
+            colon_pos = -1
+            for sep in (" : ", ": ", ":", " = "):
+                idx = line.find(sep)
+                if idx > 0:
+                    colon_pos = idx
+                    sep_used = sep
+                    break
+            if colon_pos > 0:
+                key_part = line[:colon_pos]
+                value_part = line[colon_pos + len(sep_used):]
+                masked_value = _mask_value(value_part)
+                masked_lines.append(f"{key_part}{sep_used}{masked_value}")
+            else:
+                # Non key-value lines: mask most of the content
+                if len(line.strip()) > 10 and not line.strip().startswith("─") \
+                        and not line.strip().startswith("━") and not line.strip().startswith("#"):
+                    masked_lines.append(_mask_value(line) if line.strip() else line)
+                else:
+                    masked_lines.append(line)
+        return "\n".join(masked_lines)
 
 # ================== ADMIN DATABASE MANAGER ==================
 
@@ -1347,8 +1490,9 @@ class DatabaseManager:
             logger.error(f"❌ Error getting user: {e}")
             return None
     
-    async def update_searches(self, user_id: int, search_type: str, query: str, success: bool = True) -> bool:
-        """Update user search count and log search"""
+    async def update_searches(self, user_id: int, search_type: str, query: str,
+                               success: bool = True, response_preview: str = "") -> bool:
+        """Update user search count and log search with response preview for admin monitoring"""
         try:
             user = await self.get_user(user_id)
             if not user:
@@ -1385,7 +1529,8 @@ class DatabaseManager:
                         "success": success,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                         "credits_used": 0,
-                        "subscription_used": subscription
+                        "subscription_used": subscription,
+                        "response_preview": response_preview[:300] if response_preview else "",
                     }
 
                     await asyncio.get_running_loop().run_in_executor(
@@ -1421,7 +1566,8 @@ class DatabaseManager:
                 "success": success,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "credits_used": credits_used,
-                "subscription_used": None
+                "subscription_used": None,
+                "response_preview": response_preview[:300] if response_preview else "",
             }
             
             await asyncio.get_running_loop().run_in_executor(
@@ -1920,7 +2066,7 @@ class OneLineKeyboard:
         search_items = [
             ("phone",    "Phone Lookup"),
             ("family",   "Family Search"),
-            ("aadhar",   "Aadhar Search"),
+            ("aadhar",   "ID Search"),
             ("vehicle",  "Vehicle Info"),
             ("telegram", "Telegram Lookup"),
             ("imei",     "IMEI Trace"),
@@ -1952,12 +2098,11 @@ class OneLineKeyboard:
     
     @staticmethod
     def subscription_plans() -> List[List[Button]]:
-        """Premium plan selection — credit packs + subscriptions"""
+        """Premium plan selection — credit packs + monthly subscriptions"""
         buttons = [
-            # Credit packs
-            [Button.inline("🔹 1 Search  · ₹10", "plan_credits_1")],
-            [Button.inline("⚡ 12 Searches · ₹100", "plan_credits_12")],
-            [Button.inline("💎 20 Searches · ₹150  (Best Value)", "plan_credits_20")],
+            [Button.inline("⚡ 5 Credits · ₹200", "plan_credits_5")],
+            [Button.inline("📱 Unlimited NUM · ₹300/mo", "plan_sub_num_monthly")],
+            [Button.inline("💎 Unlimited ALL · ₹499/mo  (Best Value)", "plan_sub_all_monthly")],
             [Button.inline("« Main Menu", "main_menu")]
         ]
         return buttons
@@ -1990,6 +2135,9 @@ class OneLineKeyboard:
              Button.inline("Add Admin",      "admin_admin")],
             [Button.inline("Restrict Queries","admin_restricted_queries"),
              Button.inline("Restrict Buttons","admin_restrict_buttons")],
+            # Group & Command config (NEW)
+            [Button.inline("⚙️ Groups & Commands", "admin_group_cmd_mgmt"),
+             Button.inline("🆓 Free User Config",  "admin_free_user_config")],
             # Other
             [Button.inline("API Panel",      "admin_api"),
              Button.inline("Export Data",    "admin_export")],
@@ -2246,6 +2394,27 @@ class AdminPanelHandler:
                 await self.show_api_analytics(event)
             elif data == "admin_api_revoke":
                 await self.ask_for_api_revoke(event)
+            elif data == "admin_group_cmd_mgmt":
+                await self.show_group_cmd_mgmt(event)
+            elif data == "admin_free_user_config":
+                await self.show_free_user_config(event)
+            elif data.startswith("admin_gcmd_group_"):
+                await self.show_group_detail(event, data[len("admin_gcmd_group_"):])
+            elif data.startswith("admin_gcmd_setcmd_"):
+                # admin_gcmd_setcmd_<group_key>_<search_type>
+                parts = data[len("admin_gcmd_setcmd_"):].split("_", 1)
+                if len(parts) == 2:
+                    await self.prompt_set_group_cmd(event, parts[0], parts[1])
+            elif data.startswith("admin_gcmd_vtype_"):
+                # admin_gcmd_vtype_<search_type>
+                stype = data[len("admin_gcmd_vtype_"):]
+                await self.prompt_set_validity_type(event, stype)
+            elif data.startswith("admin_freegroup_toggle_"):
+                gkey = data[len("admin_freegroup_toggle_"):]
+                await self.toggle_free_group(event, gkey)
+            elif data.startswith("admin_freecmd_toggle_"):
+                ckey = data[len("admin_freecmd_toggle_"):]
+                await self.toggle_free_command(event, ckey)
             elif data.startswith("confirm_ban_"):
                 target_id = int(data.split("_")[-1])
                 await self.confirm_ban_user(event, target_id)
@@ -3153,6 +3322,188 @@ class AdminPanelHandler:
         )
         user_states[event.sender_id] = {"action": "admin_take_credits_all"}
 
+    async def show_group_cmd_mgmt(self, event):
+        """Show group/bot management panel with command config per group"""
+        try:
+            text = "⚙️ **GROUPS & COMMANDS MANAGEMENT**\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            text += "Select a group to configure its commands:\n\n"
+            for key, g in GROUP_PRIORITIES.items():
+                status = "✅" if g.get("enabled") else "❌"
+                entity = g.get("identifier", "?")
+                text += f"{status} **{g['name']}** (`{key}`)\n└ ID/Username: `{entity}`\n\n"
+            text += "\n📌 Tap a group button to set per-command commands or toggle enabled."
+            buttons = []
+            for key, g in GROUP_PRIORITIES.items():
+                buttons.append([Button.inline(
+                    f"{'✅' if g.get('enabled') else '❌'} {g['name'][:28]}",
+                    f"admin_gcmd_group_{key}"
+                )])
+            text += "\n\n🔧 **Search Command Validity Types:**\n"
+            for stype, cmd in SEARCH_COMMANDS.items():
+                vtype = cmd.get("validity_type", "generic")
+                text += f"• `{stype}` → `{vtype}`\n"
+            buttons.append([Button.inline("🔄 Set Validity Types", "admin_gcmd_vtypes")])
+            buttons.append([Button.inline("« Admin Panel", "admin_panel")])
+            await event.edit(text, buttons=buttons, parse_mode="md")
+        except Exception as e:
+            logger.error(f"show_group_cmd_mgmt: {e}")
+            await event.answer("❌ Error", alert=True)
+
+    async def show_group_detail(self, event, group_key: str):
+        """Show command config for a specific group"""
+        try:
+            g = GROUP_PRIORITIES.get(group_key)
+            if not g:
+                await event.answer("❌ Group not found", alert=True)
+                return
+            text = f"⚙️ **{g['name']}** — Command Config\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            text += f"🔑 Key: `{group_key}`\n"
+            text += f"📡 Entity: `{g.get('identifier', '?')}`\n"
+            text += f"{'✅ Enabled' if g.get('enabled') else '❌ Disabled'}\n\n"
+            text += "**Per-command settings** (tap to change):\n\n"
+            group_cmds = g.get("commands", {})
+            buttons = []
+            for stype in SEARCH_COMMANDS:
+                current = group_cmds.get(stype, "")
+                display = current if current else "(direct / no command)"
+                text += f"• `{stype}`: `{display}`\n"
+                buttons.append([Button.inline(
+                    f"✏️ {stype}: {display[:22]}",
+                    f"admin_gcmd_setcmd_{group_key}_{stype}"
+                )])
+            text += "\n💡 Empty command = send query directly without prefix."
+            buttons.append([Button.inline("« Back", "admin_group_cmd_mgmt")])
+            await event.edit(text, buttons=buttons, parse_mode="md")
+        except Exception as e:
+            logger.error(f"show_group_detail: {e}")
+            await event.answer("❌ Error", alert=True)
+
+    async def prompt_set_group_cmd(self, event, group_key: str, search_type: str):
+        """Prompt admin to type new command for a group+search_type"""
+        try:
+            g = GROUP_PRIORITIES.get(group_key, {})
+            current = g.get("commands", {}).get(search_type, "")
+            await event.edit(
+                f"✏️ **Set command for `{group_key}` → `{search_type}`**\n\n"
+                f"Current: `{current if current else '(none — direct query)'}`\n\n"
+                "Type the new command (e.g. `/num`, `/familyinfo`) or send a single dash `-` to set **no command** (direct query mode):",
+                buttons=[[Button.inline("❌ Cancel", f"admin_gcmd_group_{group_key}")]],
+                parse_mode="md"
+            )
+            user_states[event.sender_id] = {
+                "action": "admin_set_group_cmd",
+                "group_key": group_key,
+                "search_type": search_type,
+            }
+        except Exception as e:
+            logger.error(f"prompt_set_group_cmd: {e}")
+
+    async def prompt_set_validity_type(self, event, search_type: str):
+        """Prompt admin to choose a validity type for a command"""
+        try:
+            current = SEARCH_COMMANDS.get(search_type, {}).get("validity_type", "generic")
+            text = (
+                f"🔧 **Validity Type for `{search_type}`**\n\n"
+                f"Current: `{current}`\n\n"
+                "Select new validity type:\n"
+            )
+            for vkey, vinfo in VALIDITY_TYPES.items():
+                text += f"• `{vkey}` — {vinfo['label']}\n"
+            buttons = [[Button.inline(f"{'✅ ' if vkey == current else ''}{vkey}", f"admin_setvtype_{search_type}_{vkey}")]
+                       for vkey in VALIDITY_TYPES]
+            buttons.append([Button.inline("« Back", "admin_group_cmd_mgmt")])
+            await event.edit(text, buttons=buttons, parse_mode="md")
+        except Exception as e:
+            logger.error(f"prompt_set_validity_type: {e}")
+
+    async def show_free_user_config(self, event):
+        """Show free-user restriction panel"""
+        try:
+            allowed_groups  = FREE_USER_CONFIG.get("allowed_groups", [])
+            allowed_commands = FREE_USER_CONFIG.get("allowed_commands", [])
+
+            text = "🆓 **FREE USER CONFIGURATION**\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            text += "**Groups allowed for free users:**\n"
+            text += "(Empty = all groups; toggle to restrict)\n\n"
+            group_buttons = []
+            for key in ["primary", "secondary", "tertiary"]:
+                g = GROUP_PRIORITIES.get(key)
+                if not g:
+                    continue
+                active = key in allowed_groups if allowed_groups else True
+                text += f"{'✅' if active else '❌'} `{key}` — {g['name']}\n"
+                group_buttons.append([Button.inline(
+                    f"{'✅' if active else '❌'} {g['name'][:28]}",
+                    f"admin_freegroup_toggle_{key}"
+                )])
+
+            text += "\n**Commands allowed for free users:**\n"
+            text += "(Empty = all commands; toggle to restrict)\n\n"
+            cmd_buttons = []
+            for stype in SEARCH_COMMANDS:
+                active = stype in allowed_commands if allowed_commands else True
+                text += f"{'✅' if active else '❌'} `{stype}`\n"
+                cmd_buttons.append([Button.inline(
+                    f"{'✅' if active else '❌'} {stype}",
+                    f"admin_freecmd_toggle_{stype}"
+                )])
+
+            buttons = group_buttons + cmd_buttons + [[Button.inline("« Admin Panel", "admin_panel")]]
+            await event.edit(text, buttons=buttons, parse_mode="md")
+        except Exception as e:
+            logger.error(f"show_free_user_config: {e}")
+            await event.answer("❌ Error", alert=True)
+
+    async def toggle_free_group(self, event, group_key: str):
+        """Toggle whether a group is allowed for free users"""
+        try:
+            allowed = list(FREE_USER_CONFIG.get("allowed_groups", []))
+            if not allowed:
+                # Currently "all allowed" — toggling means restricting to all EXCEPT this one
+                allowed = [k for k in ["primary", "secondary", "tertiary"] if k != group_key]
+            else:
+                if group_key in allowed:
+                    allowed.remove(group_key)
+                else:
+                    allowed.append(group_key)
+            FREE_USER_CONFIG["allowed_groups"] = allowed
+            # Persist to DB
+            await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: db_manager.db.bot_config.update_one(
+                    {"_id": "free_user_config"},
+                    {"$set": {"allowed_groups": allowed}},
+                    upsert=True
+                )
+            )
+            await self.show_free_user_config(event)
+        except Exception as e:
+            logger.error(f"toggle_free_group: {e}")
+
+    async def toggle_free_command(self, event, cmd_key: str):
+        """Toggle whether a command is allowed for free users"""
+        try:
+            allowed = list(FREE_USER_CONFIG.get("allowed_commands", []))
+            if not allowed:
+                allowed = [k for k in SEARCH_COMMANDS if k != cmd_key]
+            else:
+                if cmd_key in allowed:
+                    allowed.remove(cmd_key)
+                else:
+                    allowed.append(cmd_key)
+            FREE_USER_CONFIG["allowed_commands"] = allowed
+            await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: db_manager.db.bot_config.update_one(
+                    {"_id": "free_user_config"},
+                    {"$set": {"allowed_commands": allowed}},
+                    upsert=True
+                )
+            )
+            await self.show_free_user_config(event)
+        except Exception as e:
+            logger.error(f"toggle_free_command: {e}")
+
     async def show_bot_settings(self, event):
         """Show bot settings"""
         settings_text = (
@@ -3417,9 +3768,9 @@ class AdminPanelHandler:
             )
             
             buttons = [
-                [Button.inline("🔹 Single Search (1 credit, ₹10)", f"grant_sub_{user_id}_credits_1")],
-                [Button.inline("⚡ Starter Pack (12 credits, ₹100)", f"grant_sub_{user_id}_credits_12")],
-                [Button.inline("💎 Value Pack (20 credits, ₹150)", f"grant_sub_{user_id}_credits_20")],
+                [Button.inline("⚡ 5 Credits (₹200)", f"grant_sub_{user_id}_credits_5")],
+                [Button.inline("📱 Unlimited NUM Monthly (₹300)", f"grant_sub_{user_id}_sub_num_monthly")],
+                [Button.inline("💎 Unlimited ALL Monthly (₹499)", f"grant_sub_{user_id}_sub_all_monthly")],
                 [Button.inline("« Back", f"user_detail_{user_id}")]
             ]
             
@@ -3596,9 +3947,9 @@ class AdminPanelHandler:
             "**Available plan IDs:**\n"
             f"{plan_lines}\n\n"
             "**Examples:**\n"
-            "`123456789 credits_1`\n"
-            "`@johndoe credits_12`\n"
-            "`DB1A2B3C4D credits_20`",
+            "`123456789 credits_5`\n"
+            "`@johndoe sub_num_monthly`\n"
+            "`DB1A2B3C4D sub_all_monthly`",
             buttons=OneLineKeyboard.back_to_admin(),
             parse_mode="md"
         )
@@ -4113,20 +4464,27 @@ class SearchEngine:
             if future and not future.done():
                 future.cancel()
 
-    def _get_group_command(self, group: Dict, search_type: str) -> str:
+    def _get_group_command(self, group: Dict, search_type: str) -> Optional[str]:
         """Get the correct command for a specific group and search type.
         
         Each group can define its own command map so e.g. one group accepts
         /family and another accepts /familyinfo for the same search type.
         Falls back to the first entry in SEARCH_COMMANDS[type]["commands"].
+
+        Returns None  → send just the query (no command prefix, "no command" mode).
+        Returns ""    → same as None (no command).
+        Returns str   → use that as the command prefix.
         """
         # Per-group override takes priority
         group_cmds = group.get("commands", {})
         if search_type in group_cmds:
-            return group_cmds[search_type]
-        # Fallback: use the global SEARCH_COMMANDS list (index by weight rank)
+            cmd = group_cmds[search_type]
+            # Explicit empty string or None means "no command" — send raw query
+            return cmd if cmd else None
+        # Fallback: use the global SEARCH_COMMANDS list
         cmd_list = SEARCH_COMMANDS.get(search_type, {}).get("commands", ["/search"])
-        return cmd_list[0] if cmd_list else "/search"
+        cmd = cmd_list[0] if cmd_list else "/search"
+        return cmd if cmd else None
 
     async def _search_single_group(
         self,
@@ -4147,9 +4505,11 @@ class SearchEngine:
         POLL_INTERVAL   = 0.25
 
         command = self._get_group_command(group, search_type)
+        # Build message: if command is None/"" send raw query (no command prefix)
+        outgoing_text = f"{command} {query}".strip() if command else query
 
         try:
-            sent_msg = await user_client.send_message(group["entity"], f"{command} {query}")
+            sent_msg = await user_client.send_message(group["entity"], outgoing_text)
         except Exception as e:
             logger.error(f"❌ Could not send to {group['name']}: {e}")
             self._update_group_performance(group["name"], False)
@@ -4245,7 +4605,8 @@ class SearchEngine:
 
         return result
 
-    async def perform_search(self, search_type: str, query: str, user_id: int) -> Dict:
+    async def perform_search(self, search_type: str, query: str, user_id: int,
+                              is_free_user: bool = False) -> Dict:
         """Perform PARALLEL search across all groups simultaneously.
 
         All enabled groups receive the query at the same time.
@@ -4253,13 +4614,15 @@ class SearchEngine:
           remaining group tasks are cancelled immediately.
         • For multi-collect types: all groups collect for MULTI_COLLECT_WINDOW
           seconds, then the richest result across all groups is returned.
+
+        is_free_user: if True, restrict to FREE_USER_CONFIG["allowed_groups"].
         """
         # Guard against runaway memory growth
         if len(self.active_searches) > 200:
             logger.warning("⚠️ active_searches > 200 — clearing to prevent memory leak")
             self.active_searches.clear()
 
-        logger.info(f"🚀 Parallel {search_type} search: {query!r} (user={user_id})")
+        logger.info(f"🚀 Parallel {search_type} search: {query!r} (user={user_id}, free={is_free_user})")
 
         if search_type == "leak":
             return await self.perform_leak_search(query, user_id)
@@ -4268,8 +4631,8 @@ class SearchEngine:
         cmd              = SEARCH_COMMANDS.get(search_type, {})
         preferred_priority = cmd.get("priority", "primary")
 
-        # Collect all valid (unique) groups
-        groups = self._get_priority_groups(preferred_priority)
+        # Collect all valid (unique) groups — respects free-user restriction
+        groups = self._get_priority_groups(preferred_priority, is_free_user=is_free_user)
         if not groups:
             logger.error("❌ No groups available for search")
             return {
@@ -4462,11 +4825,14 @@ class SearchEngine:
                 "error": "❌ Advanced search engine error. Please try again or use specific search types."
             }
     
-    def _get_priority_groups(self, preferred_priority: str) -> List:
+    def _get_priority_groups(self, preferred_priority: str, is_free_user: bool = False) -> List:
         """Get groups sorted in configured priority order: primary → secondary → tertiary.
         The preferred_priority group always goes first, then the remaining keys in order.
         The 'advanced' group is excluded (used only for leak searches).
         Groups sharing the same identifier (same chat) are de-duplicated.
+
+        If is_free_user=True and FREE_USER_CONFIG["allowed_groups"] is set,
+        only the listed group keys are included.
         """
         priority_keys = ["primary", "secondary", "tertiary"]
         # Put preferred priority first
@@ -4474,9 +4840,15 @@ class SearchEngine:
             priority_keys.remove(preferred_priority)
             priority_keys.insert(0, preferred_priority)
 
+        # Free user group restriction
+        free_allowed = FREE_USER_CONFIG.get("allowed_groups", []) if is_free_user else []
+
         seen_identifiers = set()
         sorted_groups = []
         for key in priority_keys:
+            # If free user restriction is active and this key isn't allowed, skip
+            if is_free_user and free_allowed and key not in free_allowed:
+                continue
             group_data = GROUP_PRIORITIES.get(key)
             if not group_data:
                 continue
@@ -5296,18 +5668,29 @@ class SearchEngine:
             if not clean_source:
                 clean_source = "Intelligence Source"
 
+            # Validity check for ENCOREX frame results too
+            if not TextProcessor.is_valid_result(extracted_json, search_info["search_type"]):
+                logger.info(f"⚠️ ENCOREX frame failed validity check for {search_info['search_type']}")
+                return {"success": False}
+
             formatted = PremiumFormatter.format_result(
                 extracted_json,
                 search_info["search_type"],
                 search_info["query"],
                 clean_source
             )
-            return {"success": True, "result": formatted, "has_file": False}
+            return {"success": True, "result": formatted, "raw_result": extracted_json, "has_file": False}
 
         # ── Normal (non-ENCOREX-frame) response ──────────────────────────────
         cleaned = TextProcessor.clean_content(text, search_info["search_type"])
 
         if len(cleaned) < 20:
+            return {"success": False}
+
+        # ── Validity check: ensure response actually contains expected data fields ──
+        search_type = search_info.get("search_type", "")
+        if not TextProcessor.is_valid_result(cleaned, search_type):
+            logger.info(f"⚠️ [{search_info['group']['name']}] Response failed validity check for {search_type}")
             return {"success": False}
 
         # Strip branding from source name for non-frame responses too
@@ -5325,6 +5708,7 @@ class SearchEngine:
         return {
             "success": True,
             "result": formatted,
+            "raw_result": cleaned,   # unformatted — used for masking
             "has_file": False
         }
     
@@ -6048,15 +6432,13 @@ async def premium_callback(event):
         premium_text = (
             "**Credits & Plans**"
             "\n\n"
-            "> All credits never expire."
-            "\n"
             "> Pay via UPI — admin activates within 15 min."
             "\n\n"
-            "🔹 **Single Search** · 1 credit · ₹10"
+            "⚡ **5 Credits** · ₹200 · No expiry (any command)"
             "\n"
-            "⚡ **Starter Pack** · 12 credits · ₹100"
+            "📱 **Unlimited NUM** · ₹300/month (phone searches)"
             "\n"
-            "💎 **Value Pack** · 20 credits · ₹150  _(best value)_"
+            "💎 **Unlimited ALL** · ₹499/month _(best value — all commands)_"
             "\n\n"
             f"> UPI: `{config.UPI_ID}`"
             "\n"
@@ -6207,7 +6589,7 @@ async def referrals_callback(event):
             f"```\n"
             f"🚀 Join DarkBoxes Intelligence System!\n"
             f"🔍 Access powerful OSINT tools\n"
-            f"📊 Phone, Email, Aadhar, Vehicle searches\n"
+            f"📊 Phone, Email, ID, Vehicle searches\n"
             f"💎 Get {config.NEW_USER_CREDITS} free credits\n"
             f"🔗 Sign up: {referral_link}\n"
             f"```\n\n"
@@ -6346,7 +6728,7 @@ async def share_referral_callback(event):
             f"🔍 **Powerful OSINT Tools:**\n"
             f"• Phone Number Lookup\n"
             f"• Email Intelligence\n"
-            f"• Aadhar Information\n"
+            f"• ID Information\n"
             f"• Vehicle Details\n"
             f"• Telegram Analysis\n"
             f"• ADVANCED OSINT TOOL (Search Anything)\n"
@@ -6473,6 +6855,27 @@ async def private_message_handler(event):
 
         elif state.get("action") == "admin_view_user_search_logs":
             await handle_admin_view_user_search_logs(event)
+
+        elif state.get("action") == "admin_set_group_cmd":
+            # Admin typed a new command for a group+search_type
+            group_key   = state.get("group_key", "")
+            search_type = state.get("search_type", "")
+            new_cmd     = event.text.strip()
+            # "-" means "no command" (direct query mode)
+            if new_cmd == "-":
+                new_cmd = ""
+            g = GROUP_PRIORITIES.get(group_key)
+            if g is not None and search_type in SEARCH_COMMANDS:
+                g.setdefault("commands", {})[search_type] = new_cmd
+                display = new_cmd if new_cmd else "(direct / no command)"
+                await event.respond(
+                    f"✅ Updated `{group_key}` → `{search_type}` to `{display}`",
+                    parse_mode="md",
+                    buttons=[[Button.inline("⬅️ Back to Group", f"admin_gcmd_group_{group_key}")]]
+                )
+            else:
+                await event.respond("❌ Invalid group or command key.")
+            user_states.pop(user_id, None)
 
         elif state.get("action") == "admin_restrict_query":
             query = event.text.strip()
@@ -6988,9 +7391,9 @@ async def handle_admin_give_subscription(event):
                 "**Available plan IDs:**\n"
                 f"{plan_ids_list}\n\n"
                 "**Examples:**\n"
-                "`123456789 credits_1`\n"
-                "`@johndoe credits_12`\n"
-                "`DB1A2B3C4D credits_20`",
+                "`123456789 credits_5`\n"
+                "`@johndoe sub_num_monthly`\n"
+                "`DB1A2B3C4D sub_all_monthly`",
                 parse_mode="md"
             )
             return
@@ -7300,16 +7703,16 @@ async def handle_admin_broadcast_media(event):
 
 
 async def handle_search_query(event, state):
-    """Handle search queries"""
+    """Handle search queries with free-user gating, validity checking, and result masking."""
     try:
         user_id = event.sender_id
         search_type = state["type"]
         query = event.text.strip()
-        
+
         if not query:
             await event.respond("❌ Please enter a valid query.")
             return
-        
+
         # Check if query is protected
         is_protected = await db_manager.protected_manager.is_query_protected(query)
         if is_protected:
@@ -7323,118 +7726,167 @@ async def handle_search_query(event, state):
             )
             user_states.pop(user_id, None)
             return
-        
-        # Validate query
-        cmd = SEARCH_COMMANDS[search_type]
+
+        # Validate query format
+        cmd = SEARCH_COMMANDS.get(search_type, {})
         validation = cmd.get("validation")
         if validation and not re.match(validation, query):
-            await event.respond(f"❌ Invalid format. Example: `{cmd['example']}`")
+            await event.respond(f"❌ Invalid format. Example: `{cmd.get('example', 'N/A')}`")
             return
-        
-        # Special handling for leak search
+
+        # ── Determine user access level ───────────────────────────────────────
+        user_doc = await db_manager.get_user(user_id)
+        has_active_sub = False
+        sub_allows_command = True   # does subscription cover this command?
+        has_credits = (user_doc.get("searches_remaining", 0) > 0) if user_doc else False
+
+        if user_doc and user_doc.get("subscription") and user_doc.get("subscription_expiry"):
+            try:
+                expiry_date = datetime.fromisoformat(user_doc["subscription_expiry"])
+                if expiry_date > datetime.now(timezone.utc):
+                    has_active_sub = True
+                    # Check subscription command scope
+                    plan_id = user_doc.get("subscription")
+                    plan = SUBSCRIPTION_PLANS.get(plan_id, {})
+                    allowed_cmds = plan.get("allowed_commands", [])
+                    if allowed_cmds and search_type not in allowed_cmds:
+                        sub_allows_command = False
+            except Exception:
+                pass
+
+        can_search_paid = has_active_sub and sub_allows_command
+        can_search_credit = has_credits and not (has_active_sub and not sub_allows_command)
+
+        # Free-user command restriction check
+        free_cmd_restriction = FREE_USER_CONFIG.get("allowed_commands", [])
+        if not can_search_paid and not can_search_credit and free_cmd_restriction:
+            if search_type not in free_cmd_restriction:
+                await event.respond(
+                    "🔒 **COMMAND RESTRICTED**\n\n"
+                    f"The `{search_type}` search requires a paid plan or credits.\n\n"
+                    "Choose a plan below to unlock this command:",
+                    buttons=OneLineKeyboard.subscription_plans(),
+                    parse_mode="md"
+                )
+                user_states.pop(user_id, None)
+                return
+
+        is_free_user = not can_search_paid and not can_search_credit
+
+        # No credits AND no subscription → show masked result with buy button
+        # We still perform the search but mask the output
+        should_mask = is_free_user
+
+        if not can_search_paid and not can_search_credit and not is_free_user:
+            # has NO access at all and not free either — block
+            await event.respond(
+                "🔒 **INSUFFICIENT CREDITS**\n\n"
+                "You need credits or a subscription to search.\n\n"
+                "📱 **₹300/month** — Unlimited Phone searches\n"
+                "💎 **₹499/month** — Unlimited All commands\n"
+                "⚡ **₹200** — 5 search credits\n\n"
+                "Contact @darkboxesAdmin for assistance.",
+                buttons=OneLineKeyboard.subscription_plans()
+            )
+            user_states.pop(user_id, None)
+            return
+
+        # If subscription is active but doesn't cover this command, fall to credit check
+        if has_active_sub and not sub_allows_command and not has_credits:
+            plan_id = user_doc.get("subscription", "")
+            plan = SUBSCRIPTION_PLANS.get(plan_id, {})
+            await event.respond(
+                f"🔒 **PLAN RESTRICTION**\n\n"
+                f"Your current plan (**{plan.get('name', plan_id)}**) only covers specific commands.\n\n"
+                f"The `{search_type}` command requires the **All Commands** plan or credits.\n\n"
+                f"💎 **₹499/month** — Unlimited All commands\n"
+                f"⚡ **₹200** — 5 credits (works for any command)",
+                buttons=OneLineKeyboard.subscription_plans()
+            )
+            user_states.pop(user_id, None)
+            return
+
+        # Show processing message
         if search_type == "leak":
-            leak_warning = (
+            status = await event.respond(
                 "🚀 **ADVANCED OSINT SEARCH INITIATED**\n\n"
                 f"🔍 **Query:** `{query}`\n"
                 f"⚡ **Processing:** Ultra-fast (5 seconds)\n"
                 f"📁 **Output:** JSON + TXT files\n"
                 f"💎 **Cost:** 3 credits\n\n"
                 f"⚠️ **Note:** For phone numbers, include country code (e.g., 917204764637)\n"
-                f"⏳ Processing your advanced search..."
+                f"⏳ Processing your advanced search...",
+                parse_mode="md"
             )
-            status = await event.respond(leak_warning, parse_mode="md")
         else:
-            # Show premium processing message
-            processing_text = PremiumFormatter.format_processing(search_type, query)
-            status = await event.respond(processing_text, parse_mode="md")
-        
-        # Check access
-        user_doc = await db_manager.get_user(user_id)
-        can_search = False
-        
-        if user_doc.get('subscription') and user_doc.get('subscription_expiry'):
-            expiry_date = datetime.fromisoformat(user_doc['subscription_expiry'])
-            if expiry_date > datetime.now(timezone.utc):
-                can_search = True
-        
-        if not can_search and user_doc.get('searches_remaining', 0) <= 0:
-            await status.delete()
-            await event.respond(
-                "🔒 **INSUFFICIENT CREDITS**\n\n"
-                "Upgrade to Premium for unlimited access:\n\n"
-                "👑 **Premium Tier** - ₹499\n"
-                "• Unlimited searches (30 days)\n"
-                "• All premium databases\n"
-                "• Priority processing\n\n"
-                "Contact @darkboxesAdmin for assistance.",
-                buttons=OneLineKeyboard.subscription_plans()
-            )
-            user_states.pop(user_id, None)
-            return
-        
-        # Perform search
-        result = await search_engine.perform_search(search_type, query, user_id)
-        
-        # Delete status
+            status = await event.respond(PremiumFormatter.format_processing(search_type, query), parse_mode="md")
+
+        # ── Perform the search ────────────────────────────────────────────────
+        result = await search_engine.perform_search(
+            search_type, query, user_id, is_free_user=is_free_user
+        )
+
         try:
             await status.delete()
-        except:
+        except Exception:
             pass
-        
+
         if result["success"]:
-            # Handle multiple files for leak search
-            if result.get("has_multiple_files"):
-                # Send summary first
+            if should_mask:
+                # Mask result and show "Buy Data" button
+                raw = result.get("raw_result") or result.get("result", "")
+                masked_text = TextProcessor.mask_result(raw)
+                buy_buttons = [
+                    [Button.inline("🔓 Buy This Data! — ₹49 or Subscribe", "buy_data_prompt")],
+                    [Button.inline("📋 View Plans", "premium")],
+                ]
+                await event.respond(
+                    "🔍 **RESULT FOUND — PREVIEW (MASKED)**\n\n"
+                    f"Data exists for `{query}`. Unlock to see full details:\n\n"
+                    f"```\n{masked_text}\n```\n\n"
+                    "🔒 _Purchase to reveal complete data_",
+                    buttons=buy_buttons,
+                    parse_mode="md"
+                )
+                # Don't charge credits (free preview)
+                await db_manager.update_searches(user_id, search_type, query, True, response_preview=result.get("raw_result","")[:200])
+
+            elif result.get("has_multiple_files"):
                 try:
                     await event.respond(result["result"], parse_mode="md")
-                except Exception as e:
-                    logger.error(f"Error sending formatted result: {e}")
+                except Exception:
                     await event.respond(result["result"])
-                
-                # Send all files
                 for file_data in result.get("files", []):
                     if file_data.get("raw_bytes"):
                         file_type = file_data.get("file_type", "unknown")
                         caption = f"📁 **{file_type.upper()} DATA**\nQuery: `{query}`"
-                        
-                        # Determine filename
-                        filename = file_data.get("filename", "")
-                        if not filename:
-                            timestamp = int(time.time())
-                            filename = f"leak_{query}_{timestamp}.{file_type}"
-                        
+                        filename = file_data.get("filename") or f"leak_{query}_{int(time.time())}.{file_type}"
                         try:
-                            await event.respond(
-                                file=file_data["raw_bytes"],
-                                caption=caption,
-                                parse_mode="md"
-                            )
-                            logger.info(f"✅ Sent {file_type} file to user")
-                        except Exception as e:
-                            logger.error(f"Error sending file: {e}")
+                            await event.respond(file=file_data["raw_bytes"], caption=caption, parse_mode="md")
+                        except Exception:
                             await event.respond(file=file_data["raw_bytes"], caption=caption)
+                preview = result.get("raw_result", result.get("result",""))[:200]
+                await db_manager.update_searches(user_id, search_type, query, True, response_preview=preview)
+
             else:
                 try:
                     await event.respond(result["result"], parse_mode="md")
                 except Exception as e:
                     logger.error(f"Error sending formatted result: {e}")
                     await event.respond(result["result"])
-            
-            await db_manager.update_searches(user_id, search_type, query, True)
+                preview = result.get("raw_result", result.get("result",""))[:200]
+                await db_manager.update_searches(user_id, search_type, query, True, response_preview=preview)
+
         else:
-            # Send error message to user
+            error_msg = result.get("error", "❌ No results found.")
             try:
-                await event.respond(result["error"], parse_mode="md")
-            except Exception as e:
-                logger.error(f"Error sending error message with markdown: {e}")
-                # Try without markdown
-                await event.respond(result["error"])
-            
-            await db_manager.update_searches(user_id, search_type, query, False)
-        
-        # Clear state
+                await event.respond(error_msg, parse_mode="md")
+            except Exception:
+                await event.respond(error_msg)
+            await db_manager.update_searches(user_id, search_type, query, False, response_preview="")
+
         user_states.pop(user_id, None)
-        
+
     except Exception as e:
         logger.error(f"❌ Error in handle_search_query: {e}")
         logger.error(traceback.format_exc())
@@ -7448,7 +7900,7 @@ async def handle_search_query(event, state):
                 "Please try again or contact @darkboxesAdmin for assistance.",
                 parse_mode="md"
             )
-        except:
+        except Exception:
             await event.respond("❌ An error occurred. Please try again or contact support.")
         finally:
             user_states.pop(user_id, None)
@@ -8150,7 +8602,32 @@ async def buy_credits_callback(event):
         await event.answer("❌ Error", alert=True)
 
 
-@bot_client.on(events.NewMessage(func=lambda e: e.is_private and e.text and '[BC:' in e.text))
+@bot_client.on(events.CallbackQuery(pattern=r'^buy_data_prompt$'))
+async def buy_data_prompt_callback(event):
+    """Show buy options when user taps 'Buy This Data' on a masked result"""
+    try:
+        await event.edit(
+            "🔓 **UNLOCK FULL DATA**\n\n"
+            "Choose how to get the complete unmasked result:\n\n"
+            "⚡ **₹200** → 5 credits (any command, no expiry)\n"
+            "📱 **₹300/month** → Unlimited phone (NUM) searches\n"
+            "💎 **₹499/month** → Unlimited ALL commands _(best value)_\n\n"
+            f"> UPI: `{config.UPI_ID}`\n"
+            "> After payment, contact @darkboxesAdmin with your UTR.\n\n"
+            "_Activated within 5–15 min after admin verification._",
+            buttons=[
+                [Button.inline("⚡ 5 Credits · ₹200", "plan_credits_5")],
+                [Button.inline("📱 Unlimited NUM · ₹300/mo", "plan_sub_num_monthly")],
+                [Button.inline("💎 Unlimited ALL · ₹499/mo", "plan_sub_all_monthly")],
+                [Button.inline("« Main Menu", "main_menu")],
+            ],
+            parse_mode="md"
+        )
+    except Exception as e:
+        logger.error(f"Error in buy_data_prompt_callback: {e}")
+        await event.answer("❌ Error", alert=True)
+
+
 async def track_broadcast_seen(event):
     """Track when users interact with broadcast messages (passive seen tracking)"""
     pass  # Seen tracking happens via read receipts in Telegram naturally
@@ -8367,7 +8844,7 @@ async def approve_client_payment(event):
             return
         acc_id_a, plan_key_a = parts[0].upper(), parts[1]
 
-        CREDIT_PLANS = {"credits_1": 1, "credits_12": 12, "credits_20": 20}
+        CREDIT_PLANS = {"credits_5": 5}
         SUB_PLANS    = {}
         loop = asyncio.get_running_loop()
 
@@ -8874,7 +9351,7 @@ async def api_docs_callback(event):
             "**Search Endpoints:**\n"
             "• `POST /api/v1/search/phone` - Phone search\n"
             "• `POST /api/v1/search/email` - Email search\n"
-            "• `POST /api/v1/search/aadhar` - Aadhar search\n"
+            "• `POST /api/v1/search/aadhar` - ID search\n"
             "• `POST /api/v1/search/vehicle` - Vehicle search\n"
             "• `POST /api/v1/search/leak` - Advanced OSINT\n"
             "• And more...\n\n"
@@ -9343,7 +9820,7 @@ async def protect_query_menu_callback(event):
             "🔐 **PROTECT MY QUERY**\n"
             "═══════════════════════\n\n"
             "🛡️ **What is Query Protection?**\n"
-            "When your query (phone number, Aadhar, etc.) is protected, "
+            "When your query (phone number, ID, etc.) is protected, "
             "no one else can search it through this bot.\n\n"
             "💰 **Cost:** ₹50 per query (one-time)\n\n"
             "📋 **How it works:**\n"
@@ -9378,7 +9855,7 @@ async def protect_query_start_callback(event):
         await event.edit(
             "🔒 **PROTECT YOUR QUERY**\n\n"
             "Please type the query you want to protect.\n"
-            "This can be a phone number, Aadhar, email, vehicle number, etc.\n\n"
+            "This can be a phone number, ID, email, vehicle number, etc.\n\n"
             "📝 **Enter your query:**",
             buttons=[[Button.inline("❌ Cancel", "protect_query_menu")]],
             parse_mode="md"
@@ -10175,7 +10652,7 @@ async def admin_search_logs_callback(event):
             None, lambda: list(db_manager.db.search_logs.find(
                 {},
                 {"user_id": 1, "search_type": 1, "query": 1, "timestamp": 1,
-                 "success": 1, "credits_used": 1}
+                 "success": 1, "credits_used": 1, "response_preview": 1}
             ).sort("timestamp", -1).limit(25))
         )
 
@@ -10196,17 +10673,17 @@ async def admin_search_logs_callback(event):
             ts = log.get('timestamp', '')[:16].replace('T', ' ')
             success = "✅" if log.get('success') else "❌"
             credits = log.get('credits_used', 0)
+            response_preview = log.get('response_preview', '')
 
-            # Mask sensitive query data
-            if len(query) > 12:
-                masked = query[:4] + "****" + query[-3:]
-            else:
-                masked = query[:3] + "****"
-
+            # Admin sees FULL unmasked queries (for monitoring trial accuracy)
             text += (
-                f"{i}. {success} **{stype}** — `{masked}`\n"
-                f"   👤 UID: `{uid}` • 🕐 {ts} • 💳 {credits}cr\n\n"
+                f"{i}. {success} **{stype}** — `{query}`\n"
+                f"   👤 UID: `{uid}` • 🕐 {ts} • 💳 {credits}cr\n"
             )
+            if response_preview:
+                preview_short = response_preview[:120].replace('\n', ' ')
+                text += f"   📄 _Response:_ `{preview_short}...`\n"
+            text += "\n"
 
         await event.edit(
             text,
@@ -10391,7 +10868,8 @@ async def handle_admin_view_user_search_logs(event):
         logs = await loop.run_in_executor(
             None, lambda: list(db_manager.db.search_logs.find(
                 {"user_id": target_uid},
-                {"search_type": 1, "query": 1, "timestamp": 1, "success": 1, "credits_used": 1}
+                {"search_type": 1, "query": 1, "timestamp": 1, "success": 1,
+                 "credits_used": 1, "response_preview": 1}
             ).sort("timestamp", -1).limit(30))
         )
 
@@ -10414,12 +10892,17 @@ async def handle_admin_view_user_search_logs(event):
             ts = log.get('timestamp', '')[:16].replace('T', ' ')
             success = "✅" if log.get('success') else "❌"
             credits = log.get('credits_used', 0)
+            response_preview = log.get('response_preview', '')
 
             text += (
                 f"{i}. {success} **{stype}**\n"
                 f"   Query: `{query}`\n"
-                f"   🕐 {ts} • 💳 {credits}cr\n\n"
+                f"   🕐 {ts} • 💳 {credits}cr\n"
             )
+            if response_preview:
+                preview_short = response_preview[:100].replace('\n', ' ')
+                text += f"   📄 _Response:_ `{preview_short}...`\n"
+            text += "\n"
 
         await event.respond(text, parse_mode="md")
         user_states.pop(event.sender_id, None)
@@ -10987,6 +11470,62 @@ async def delete_broadcast_callback(event):
 
 
 # ══════════════════════════════════════════════════
+# GROUP/COMMAND MANAGEMENT CALLBACKS
+# ══════════════════════════════════════════════════
+
+@bot_client.on(events.CallbackQuery(pattern=r'^admin_gcmd_vtypes$'))
+async def admin_gcmd_vtypes_callback(event):
+    """Show validity type chooser for all commands"""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.answer("❌ Admins only", alert=True)
+            return
+        text = "🔧 **VALIDITY TYPES PER COMMAND**\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        text += "Tap a command to change its validity type:\n\n"
+        for stype, cmd in SEARCH_COMMANDS.items():
+            vtype = cmd.get("validity_type", "generic")
+            text += f"• `{stype}` → `{vtype}`\n"
+        buttons = [[Button.inline(f"✏️ {stype}", f"admin_gcmd_vtype_{stype}")] for stype in SEARCH_COMMANDS]
+        buttons.append([Button.inline("« Back", "admin_group_cmd_mgmt")])
+        await event.edit(text, buttons=buttons, parse_mode="md")
+    except Exception as e:
+        logger.error(f"admin_gcmd_vtypes_callback: {e}")
+        await event.answer("❌ Error", alert=True)
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^admin_setvtype_(.+)_(.+)$'))
+async def admin_setvtype_callback(event):
+    """Set validity type for a command"""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.answer("❌ Admins only", alert=True)
+            return
+        raw = event.data.decode()
+        # Format: admin_setvtype_<search_type>_<vtype>
+        parts = raw[len("admin_setvtype_"):].rsplit("_", 1)
+        if len(parts) != 2:
+            await event.answer("❌ Invalid", alert=True)
+            return
+        search_type, vtype = parts
+        if search_type not in SEARCH_COMMANDS or vtype not in VALIDITY_TYPES:
+            await event.answer("❌ Unknown type", alert=True)
+            return
+        SEARCH_COMMANDS[search_type]["validity_type"] = vtype
+        await event.answer(f"✅ {search_type} → {vtype}", alert=False)
+        # Go back to validity types list
+        text = "🔧 **VALIDITY TYPES PER COMMAND**\n━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        for stype, cmd in SEARCH_COMMANDS.items():
+            vt = cmd.get("validity_type", "generic")
+            text += f"• `{stype}` → `{vt}`\n"
+        buttons = [[Button.inline(f"✏️ {stype}", f"admin_gcmd_vtype_{stype}")] for stype in SEARCH_COMMANDS]
+        buttons.append([Button.inline("« Back", "admin_group_cmd_mgmt")])
+        await event.edit(text, buttons=buttons, parse_mode="md")
+    except Exception as e:
+        logger.error(f"admin_setvtype_callback: {e}")
+        await event.answer("❌ Error", alert=True)
+
+
+# ══════════════════════════════════════════════════
 # RESTRICT MENU BUTTONS (Admin disables search types)
 # ══════════════════════════════════════════════════
 @bot_client.on(events.CallbackQuery(pattern=r"^admin_restrict_buttons$"))
@@ -11003,7 +11542,7 @@ async def admin_restrict_buttons_callback(event):
 
         all_buttons = [
             ("phone", "📱 Phone"), ("family", "👨‍👩‍👧 Family"),
-            ("aadhar", "🆔 Aadhar"), ("vehicle", "🚗 Vehicle"),
+            ("aadhar", "🆔 ID"), ("vehicle", "🚗 Vehicle"),
             ("telegram", "📲 Telegram"), ("imei", "📱 IMEI"),
             ("gst", "🏢 GST"), ("insta", "📸 Instagram"),
             ("ip", "🌍 IP"), ("ifsc", "🏦 IFSC"),
