@@ -274,7 +274,7 @@ class APIResponseFormatter:
 GROUP_PRIORITIES = {
     "primary": {
         "name": "⚡ Premium Database",
-        "identifier": "StarkSpaceX",
+        "identifier": -1003320004816,
         "timeout": 25,
         "weight": 10,
         "enabled": True,
@@ -284,7 +284,7 @@ GROUP_PRIORITIES = {
         # SEARCH_COMMANDS[type]["commands"] is used as fallback.
         "commands": {
             "phone":   "/num",
-            "family":  "/family",
+            "family":  "/familyinfo",
             "aadhar":  "/aadhar",
             "vehicle": "/vnum",
             "telegram": "/tg",
@@ -303,16 +303,16 @@ GROUP_PRIORITIES = {
         "enabled": True,
         "entity": None,
         "commands": {
-            "phone":   "/num",
-            "family":  "/family",
-            "aadhar":  "/aadhar",
-            "vehicle": "/vnum",
-            "telegram": "/tg",
-            "imei":    "/imei",
-            "gst":     "/gstin",
-            "insta":   "/insta",
-            "ip":      "/ip",
-            "ifsc":    "/ifsc",
+            "phone":   "",
+            "family":  "",
+            "aadhar":  "",
+            "vehicle": "",
+            "telegram": "",
+            "imei":    "",
+            "gst":     "",
+            "insta":   "",
+            "ip":      "",
+            "ifsc":    "",
         }
     },
     "tertiary": {
@@ -326,7 +326,7 @@ GROUP_PRIORITIES = {
             "phone":   "/num",
             "family":  "/family",
             "aadhar":  "/aadhar",
-            "vehicle": "/rto",
+            "vehicle": "/vnum",
             "telegram": "/tg",
             "imei":    "/imei",
             "gst":     "/gst",
