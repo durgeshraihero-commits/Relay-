@@ -406,9 +406,10 @@
 
     <!-- ── Logs ── -->
     <div id="page-logs" class="page">
-      <div class="topbar"><h2>Search Logs</h2><button class="btn btn-ghost" onclick="loadLogs()">↻ Refresh</button></div>
+      <div class="topbar"><h2>Search Logs &amp; Analytics</h2><button class="btn btn-ghost" onclick="loadLogs()">↻ Refresh</button></div>
+      <div id="log-analytics" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;padding:20px 28px 0"></div>
       <div class="filter-row">
-        <input type="text"  id="log-uid"   placeholder="User ID filter" style="width:130px">
+        <input type="text"  id="log-uid"   placeholder="User ID filter" style="width:120px">
         <select id="log-type">
           <option value="">All commands</option>
           <option value="phone">phone</option><option value="vehicle">vehicle</option>
@@ -420,18 +421,35 @@
         <select id="log-success">
           <option value="">All results</option>
           <option value="true">✅ Success</option>
-          <option value="false">❌ Failed</option>
+          <option value="false">❌ No Data</option>
         </select>
-        <input type="number" id="log-limit" value="50" style="width:80px" placeholder="Limit">
+        <select id="log-free">
+          <option value="">All users</option>
+          <option value="true">Free/Zero-credit</option>
+          <option value="false">Paid</option>
+        </select>
+        <input type="number" id="log-limit" value="100" style="width:70px" placeholder="Limit">
         <button class="btn btn-primary" onclick="loadLogs()">Filter</button>
       </div>
-      <div class="table-wrap" style="margin:24px">
+      <div class="table-wrap" style="margin:16px 28px">
         <table>
           <thead>
-            <tr><th>Time</th><th>User</th><th>Command</th><th>Query</th><th>Result</th><th>Response Preview</th></tr>
+            <tr>
+              <th>Time</th><th>User ID</th><th>Command</th><th>Query</th>
+              <th>Result</th><th>Type</th><th>Response (click to expand)</th>
+            </tr>
           </thead>
-          <tbody id="logs-tbody"><tr><td colspan="6" class="loading">Loading…</td></tr></tbody>
+          <tbody id="logs-tbody"><tr><td colspan="7" class="loading">Loading…</td></tr></tbody>
         </table>
+      </div>
+      <!-- Full response modal -->
+      <div class="modal-bg" id="resp-modal">
+        <div class="modal" style="width:700px;max-width:95vw">
+          <h3>Full Response</h3>
+          <div id="resp-modal-meta" style="font-size:.75rem;color:var(--muted);font-family:var(--font-mono);margin-bottom:12px"></div>
+          <pre id="resp-modal-body" style="background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:14px;overflow:auto;max-height:60vh;font-size:.78rem;white-space:pre-wrap;word-break:break-all"></pre>
+          <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal('resp-modal')">Close</button></div>
+        </div>
       </div>
     </div>
 
@@ -745,29 +763,62 @@ async function loadLogs() {
   const uid     = document.getElementById('log-uid')?.value.trim() || '';
   const type    = document.getElementById('log-type')?.value || '';
   const success = document.getElementById('log-success')?.value || '';
-  const limit   = document.getElementById('log-limit')?.value || 50;
+  const free    = document.getElementById('log-free')?.value || '';
+  const limit   = document.getElementById('log-limit')?.value || 100;
   let url = `/admin/api/logs?limit=${limit}`;
   if (uid)     url += `&user_id=${encodeURIComponent(uid)}`;
   if (type)    url += `&type=${encodeURIComponent(type)}`;
   if (success) url += `&success=${encodeURIComponent(success)}`;
+  if (free)    url += `&free=${encodeURIComponent(free)}`;
   const data = await api('GET', url);
   const logs = data.logs || [];
+  const an   = data.analytics || {};
+
+  // Analytics bar
+  document.getElementById('log-analytics').innerHTML = [
+    { label:'Total Searches',  value: fnum(an.total||0),           c:'var(--accent)' },
+    { label:'✅ Success',       value: fnum(an.success||0),         c:'var(--green)' },
+    { label:'❌ No Data',       value: fnum(an.failed||0),          c:'var(--accent2)' },
+    { label:'Success Rate',    value: (an.success_rate||0)+'%',    c:'var(--yellow)' },
+    { label:'No-Data Rate',    value: (an.no_data_rate||0)+'%',    c:'#ff9f43' },
+  ].map(c=>`<div class="stat-card" style="--c:${c.c};padding:14px">
+      <div class="label">${c.label}</div>
+      <div class="value" style="font-size:1.4rem">${c.value}</div>
+    </div>`).join('');
+
   const tbody = document.getElementById('logs-tbody');
-  if (!logs.length) { tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No logs found</td></tr>'; return; }
-  tbody.innerHTML = logs.map(l => {
+  if (!logs.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No logs found</td></tr>'; return; }
+  tbody.innerHTML = logs.map((l,i) => {
     const ts   = (l.timestamp||'').slice(0,16).replace('T',' ');
-    const ok   = l.success ? '<span class="badge badge-green">OK</span>' : '<span class="badge badge-red">FAIL</span>';
+    const ok   = l.success ? '<span class="badge badge-green">OK</span>' : '<span class="badge badge-red">NO DATA</span>';
     const tag  = tagForType(l.search_type);
-    const prev = l.response_preview ? esc(l.response_preview.slice(0,100)) + '…' : '<span class="text-muted">—</span>';
+    const freeTag = l.is_free_user ? '<span class="badge badge-yellow" title="Free/zero-credit user">FREE</span>' : '';
+    const hasResp = l.response_preview && l.response_preview.length > 0;
+    const prevShort = hasResp ? esc(l.response_preview.slice(0,80)) + (l.response_preview.length>80?'…':'') : '<span class="text-muted">—</span>';
     return `<tr>
-      <td class="mono text-muted">${ts}</td>
+      <td class="mono text-muted" style="font-size:.72rem;white-space:nowrap">${ts}</td>
       <td class="mono">${l.user_id||'?'}</td>
       <td>${tag}</td>
-      <td class="mono">${esc(l.query||'—')}</td>
+      <td class="mono" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(l.query||'')}">${esc(l.query||'—')}</td>
       <td>${ok}</td>
-      <td class="response-preview">${prev}</td>
+      <td>${freeTag}</td>
+      <td style="max-width:260px;font-size:.75rem;font-family:var(--font-mono);cursor:pointer;color:var(--accent)" 
+          onclick="showFullResponse(${i})" title="Click to view full response">
+        ${prevShort}
+      </td>
     </tr>`;
   }).join('');
+  // Store logs for modal access
+  window._logsCache = logs;
+}
+
+function showFullResponse(idx) {
+  const l = (window._logsCache||[])[idx];
+  if (!l) return;
+  document.getElementById('resp-modal-meta').innerHTML =
+    `User: <b>${l.user_id||'?'}</b>  |  Query: <b>${esc(l.query||'')}</b>  |  Type: <b>${l.search_type||'?'}</b>  |  Time: <b>${(l.timestamp||'').slice(0,16).replace('T',' ')}</b>  |  ${l.success?'✅ SUCCESS':'❌ NO DATA'}${l.is_free_user?' | 🔓 FREE USER':''}`;
+  document.getElementById('resp-modal-body').textContent = l.response_preview || '(no response stored)';
+  document.getElementById('resp-modal').classList.add('open');
 }
 
 function tagForType(t) {
