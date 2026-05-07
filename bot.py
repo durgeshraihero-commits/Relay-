@@ -434,6 +434,91 @@ def _load_free_user_config():
 _load_free_user_config()
 
 
+# ================== FORCE JOIN CHANNELS ==================
+# Stored in DB — admin can add/remove at runtime without restarting.
+# Each entry: {"username": "@channelusername", "title": "Display Name", "url": "https://t.me/..."}
+
+FORCE_JOIN_CHANNELS: List[Dict] = []
+
+
+def _load_force_join_channels():
+    """Load force-join channel list from DB at boot."""
+    global FORCE_JOIN_CHANNELS
+    try:
+        from pymongo import MongoClient as _MC
+        _cl = _MC(config.MONGODB_URI, serverSelectionTimeoutMS=3000)
+        _doc = _cl[config.MONGODB_DBNAME].bot_config.find_one({"_id": "force_join_channels"})
+        if _doc:
+            FORCE_JOIN_CHANNELS = _doc.get("channels", [])
+        _cl.close()
+    except Exception:
+        pass
+
+
+_load_force_join_channels()
+
+
+async def _save_force_join_channels():
+    """Persist FORCE_JOIN_CHANNELS to MongoDB."""
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(
+        None,
+        lambda: db_manager.db.bot_config.update_one(
+            {"_id": "force_join_channels"},
+            {"$set": {"channels": FORCE_JOIN_CHANNELS}},
+            upsert=True,
+        ),
+    )
+
+
+async def check_force_join(user_id: int) -> List[Dict]:
+    """Return channels the user has NOT joined. Empty = all joined / none configured."""
+    if not FORCE_JOIN_CHANNELS:
+        return []
+    not_joined = []
+    for ch in FORCE_JOIN_CHANNELS:
+        try:
+            uname = ch.get("username", "").lstrip("@")
+            entity = await bot_client.get_entity(uname)
+            await bot_client(GetParticipantRequest(entity, user_id))
+        except Exception:
+            not_joined.append(ch)
+    return not_joined
+
+
+def _build_join_keyboard(missing: List[Dict]) -> List[List]:
+    """One join button per missing channel + a verify button."""
+    rows = []
+    for ch in missing:
+        title = ch.get("title") or ch.get("username", "Channel")
+        url = ch.get("url") or ("https://t.me/" + ch.get("username", "").lstrip("@"))
+        rows.append([Button.url("📢 Join  " + title, url)])
+    rows.append([Button.inline("✅  I've Joined — Verify & Continue", "check_join")])
+    return rows
+
+
+async def enforce_force_join(event) -> bool:
+    """Returns True if user may proceed; False if blocked and prompt was shown."""
+    user_id = event.sender_id
+    missing = await check_force_join(user_id)
+    if not missing:
+        return True
+    ch_lines = "\n".join("  ▸ " + (ch.get("title") or ch.get("username", "")) for ch in missing)
+    msg = (
+        "🔐 **ACCESS REQUIRED**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "You must join our official channel(s) to use DarkBoxes:\n\n"
+        + ch_lines +
+        "\n\nTap the buttons below to join, then tap\n"
+        "**✅ I've Joined — Verify & Continue**"
+    )
+    try:
+        await event.edit(msg, buttons=_build_join_keyboard(missing), parse_mode="md")
+    except Exception:
+        await event.respond(msg, buttons=_build_join_keyboard(missing), parse_mode="md")
+    return False
+
+
 # ================== SUBSCRIPTION PLANS ==================
 
 SUBSCRIPTION_PLANS = {
@@ -2224,6 +2309,8 @@ class OneLineKeyboard:
             # Group & Command config (NEW)
             [Button.inline("⚙️ Groups & Commands", "admin_group_cmd_mgmt"),
              Button.inline("🆓 Free User Config",  "admin_free_user_config")],
+            [Button.inline("📢 Force-Join Channels", "admin_force_join"),
+             Button.inline("🤖 Bot Settings",       "admin_settings")],
             # Other
             [Button.inline("API Panel",      "admin_api"),
              Button.inline("Export Data",    "admin_export")],
@@ -6687,198 +6774,206 @@ async def grant_sub_callback(event):
 
 @bot_client.on(events.CallbackQuery(pattern=r'^search_(.+)$'))
 async def search_callback(event):
-    """Handle search type selection"""
+    """Premium search type selection — force-join aware, masked-preview support."""
     try:
         user_id = event.sender_id
         search_type = event.data.decode().split('_', 1)[1]
-        
-        # Check if user is banned
+
+        # ── Force-join gate ──────────────────────────────────────────────────
+        if not await enforce_force_join(event):
+            return
+
         user_doc = await db_manager.get_user(user_id)
         if user_doc and user_doc.get('is_banned'):
-            await event.answer("🚫 Your account has been banned.", alert=True)
+            await event.answer("🚫 Account suspended. Contact @darkboxesAdmin.", alert=True)
             return
-        
         if search_type not in SEARCH_COMMANDS:
-            await event.answer("❌ Invalid selection", alert=True)
+            await event.answer("❌ Invalid command selection.", alert=True)
             return
-        
         if not user_doc:
-            await event.answer("❌ User not found", alert=True)
+            await event.answer("❌ Account not found. Send /start first.", alert=True)
             return
-        
-        # Check access — credit-based or daily-subscription
-        can_search = False
-        searches_remaining = user_doc.get('searches_remaining', 0)
-        subscription = user_doc.get('subscription')
+
+        # ── Access check ─────────────────────────────────────────────────────
+        can_search          = False
+        searches_remaining  = user_doc.get('searches_remaining', 0)
+        subscription        = user_doc.get('subscription')
         subscription_expiry = user_doc.get('subscription_expiry')
-        daily_limit = user_doc.get('subscription_daily_limit', 0)
+        daily_limit         = user_doc.get('subscription_daily_limit', 0)
 
         if subscription and subscription_expiry:
             try:
                 expiry_date = datetime.fromisoformat(subscription_expiry)
                 if expiry_date > datetime.now(timezone.utc):
-                    # Active subscription — check daily limit
-                    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                    today_str  = datetime.now(timezone.utc).strftime("%Y-%m-%d")
                     reset_date = user_doc.get("subscription_reset_date", "")
                     used_today = user_doc.get("subscription_used_today", 0)
-
                     if reset_date != today_str:
-                        # New day — reset counter
                         await asyncio.get_running_loop().run_in_executor(
                             None, lambda: db_manager.db.users.update_one(
                                 {"user_id": user_id},
-                                {"$set": {"subscription_used_today": 0, "subscription_reset_date": today_str}}
+                                {"$set": {"subscription_used_today": 0,
+                                          "subscription_reset_date": today_str}}
                             )
                         )
                         used_today = 0
-
                     if daily_limit == 0 or used_today < daily_limit:
                         can_search = True
                     else:
-                        await event.edit(
-                            f"⏰ **DAILY LIMIT REACHED**\n\n"
-                            f"You've used all {daily_limit} searches for today.\n"
-                            f"Your limit resets at midnight UTC.\n\n"
-                            f"📅 Subscription valid until: {expiry_date.strftime('%d %b %Y')}\n"
-                            f"📊 Used today: {used_today}/{daily_limit}\n\n"
-                            f"Need more? Get a higher plan or credit pack:",
-                            buttons=OneLineKeyboard.subscription_plans(),
-                            parse_mode="md"
+                        exp_fmt  = expiry_date.strftime("%d %b %Y")
+                        limit_txt = (
+                            "⏰ **Daily Search Limit Reached**\n"
+                            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                            "> Used today: **" + str(used_today) + " / " + str(daily_limit) + "**\n"
+                            "> Resets: **midnight UTC**\n"
+                            "> Plan valid till: **" + exp_fmt + "**\n\n"
+                            "Upgrade for higher daily limits or buy extra credits:"
                         )
+                        await event.edit(limit_txt,
+                            buttons=OneLineKeyboard.subscription_plans(), parse_mode="md")
                         return
             except Exception:
                 pass
 
-        # ── Zero-credit / no-sub: allow search but warn result will be masked ──
-        is_free_preview = not can_search and searches_remaining <= 0
+        is_free = not can_search and searches_remaining <= 0
+        cmd  = SEARCH_COMMANDS[search_type]
+        cost = cmd['cost']
+        ICONS = {
+            "phone": "📱", "vehicle": "🚗", "family": "👨‍👩‍👧",
+            "telegram": "✈️", "aadhar": "🪪", "gst": "🏢",
+            "imei": "📲", "ip": "🌐", "ifsc": "🏦",
+            "insta": "📸", "leak": "💾",
+        }
+        icon = ICONS.get(search_type, "🔍")
+        cost_str = str(cost) + " credit" + ("s" if cost != 1 else "")
 
-        cmd = SEARCH_COMMANDS[search_type]
-        cost_word = f"{cmd['cost']} credit{'s' if cmd['cost'] > 1 else ''}"
-
-        if is_free_preview:
-            instruction = (
-                f"**{cmd['name']}**\n"
-                f"\n"
-                f"> ⚠️ **No credits** — result will be **masked preview**\n"
-                f"> Tap 🔓 _Buy This Data_ after search to unlock it.\n"
-                f"\n"
-                f"> Format: `{cmd['example']}`\n"
-                f"\n"
-                f"Type your query below and send it."
+        if is_free:
+            txt = (
+                icon + " **" + cmd['name'] + "**\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                "> ⚠️ **No credits** — you will receive a **masked preview**\n"
+                "> Tap 🔓 **Buy This Data** after results to unlock full info.\n\n"
+                "**Example format:** `" + cmd['example'] + "`\n\n"
+                "✏️ _Type your query and send it:_"
             )
         else:
-            try:
-                returns_line = cmd['description'].split('\n')[2].strip().replace('🔸 **Returns:** ', '').replace('**', '')
-            except Exception:
-                returns_line = "Full details"
-            instruction = (
-                f"**{cmd['name']}**\n"
-                f"\n"
-                f"> What it returns: {returns_line}\n"
-                f"> Format: `{cmd['example']}`\n"
-                f"> Cost: {cost_word}\n"
-                f"\n"
-                f"Type your query below and send it."
+            bal = str(searches_remaining) + " credit" + ("s" if searches_remaining != 1 else "")
+            if can_search and subscription:
+                bal += " + active plan"
+            txt = (
+                icon + " **" + cmd['name'] + "**\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                "> **Format:**  `" + cmd['example'] + "`\n"
+                "> **Cost:**    " + cost_str + "\n"
+                "> **Balance:** " + bal + "\n\n"
+                "✏️ _Type your query and send it:_"
             )
 
-        await event.edit(
-            instruction,
-            buttons=OneLineKeyboard.cancel_button(),
-            parse_mode="md"
-        )
-        
+        await event.edit(txt, buttons=[[Button.inline("✖  Cancel", "main_menu")]], parse_mode="md")
         user_states[user_id] = {"action": "search", "type": search_type}
-        
+
     except Exception as e:
-        logger.error(f"❌ Error in search_callback: {e}")
-        await event.answer("❌ Error", alert=True)
+        logger.error(f"search_callback error: {e}")
+        await event.answer("❌ Error loading search", alert=True)
 
 @bot_client.on(events.CallbackQuery(pattern=r'^profile$'))
 async def profile_callback(event):
-    """Handle profile callback"""
+    """Premium profile view."""
     try:
-        user_id = event.sender_id
+        user_id  = event.sender_id
         user_doc = await db_manager.get_user(user_id)
-        
         if not user_doc:
-            await event.answer("❌ User not found", alert=True)
+            await event.answer("❌ Account not found. Send /start.", alert=True)
             return
-        
-        cred = user_doc.get("searches_remaining", 0)
-        sub  = user_doc.get("subscription")
-        expiry_str = user_doc.get("subscription_expiry", "")
+
+        cred        = user_doc.get("searches_remaining", 0)
+        sub         = user_doc.get("subscription")
+        expiry_str  = user_doc.get("subscription_expiry", "")
+        total       = user_doc.get("total_searches", 0)
+        refs        = user_doc.get("referrals", 0)
+        ref_code    = user_doc.get("referral_code", "N/A")
+        joined      = (user_doc.get("joined_at") or "")[:10] or "N/A"
+        username    = user_doc.get("username") or "—"
+        name        = user_doc.get("first_name") or "User"
+
+        # Build balance line
         if sub and expiry_str:
             try:
-                exp = datetime.fromisoformat(expiry_str)
+                exp       = datetime.fromisoformat(expiry_str)
                 days_left = (exp - datetime.now(timezone.utc)).days
-                credit_line = f"Active plan · {days_left} days left" if days_left > 0 else f"{cred} credits (plan expired)"
+                if days_left > 0:
+                    plan_obj   = SUBSCRIPTION_PLANS.get(sub, {})
+                    plan_name  = plan_obj.get("name", sub)
+                    bal_line   = "✅ " + plan_name + "  (" + str(days_left) + " days left)"
+                    bal_line2  = str(cred) + " bonus credit" + ("s" if cred != 1 else "") + " also available"
+                else:
+                    bal_line  = "⚠️ Subscription expired"
+                    bal_line2 = str(cred) + " credit" + ("s" if cred != 1 else "") + " remaining"
             except Exception:
-                credit_line = f"{cred} credits"
+                bal_line  = str(cred) + " credit" + ("s" if cred != 1 else "")
+                bal_line2 = ""
         else:
-            credit_line = f"{cred} credit{'s' if cred != 1 else ''}"
+            bal_line  = str(cred) + " credit" + ("s" if cred != 1 else "")
+            bal_line2 = "No active subscription"
 
-        referral_link = f"https://t.me/{bot_info.username}?start={user_doc.get('referral_code')}"
+        ref_link = "https://t.me/" + bot_info.username + "?start=" + ref_code
 
-        profile_text = (
-            f"**Your Profile**\n"
-            f"\n"
-            f"> Name: {user_doc.get('first_name', 'N/A')}\n"
-            f"> ID: `{user_id}`\n"
-            f"> Joined: {user_doc.get('joined_at', 'N/A')[:10]}\n"
-            f"\n"
-            f"**Balance**\n"
-            f"> {credit_line}\n"
-            f"\n"
-            f"**Activity**\n"
-            f"> Total searches: {user_doc.get('total_searches', 0)}\n"
-            f"> Referrals made: {user_doc.get('referrals', 0)}\n"
-            f"> Referral code: `{user_doc.get('referral_code', 'N/A')}` · earn 1 credit per signup\n"
-            f"\n"
-            f"Your referral link:\n"
-            f"`{referral_link}`"
+        txt = (
+            "👤 **My Profile**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "> **Name:**     " + name + "\n"
+            "> **Username:** @" + username + "\n"
+            "> **User ID:**  `" + str(user_id) + "`\n"
+            "> **Joined:**   " + joined + "\n\n"
+            "💳 **Balance**\n"
+            "> " + bal_line + "\n"
+            "> " + bal_line2 + "\n\n"
+            "📊 **Activity**\n"
+            "> Total searches:  **" + str(total) + "**\n"
+            "> Referrals made:  **" + str(refs) + "**\n"
+            "> Earn **1 credit** per successful referral\n\n"
+            "🔗 **Your referral link:**\n"
+            "`" + ref_link + "`"
         )
-        
-        await event.edit(
-            profile_text,
-            buttons=OneLineKeyboard.profile_menu(),
-            parse_mode="md"
-        )
-        
+        await event.edit(txt, buttons=OneLineKeyboard.profile_menu(), parse_mode="md")
+
     except Exception as e:
-        logger.error(f"❌ Error in profile_callback: {e}")
+        logger.error(f"profile_callback error: {e}")
         await event.answer("❌ Error loading profile", alert=True)
 
 @bot_client.on(events.CallbackQuery(pattern=r'^premium$'))
 async def premium_callback(event):
-    """Handle premium plans callback"""
+    """Premium plans page — polished UX."""
     try:
-        premium_text = (
-            "**Credits & Plans**"
-            "\n\n"
-            "> Pay via UPI — admin activates within 15 min."
-            "\n\n"
-            "⚡ **5 Credits** · ₹200 · No expiry (any command)"
-            "\n"
-            "📱 **Unlimited NUM** · ₹300/month (phone searches)"
-            "\n"
-            "💎 **Unlimited ALL** · ₹499/month _(best value — all commands)_"
-            "\n\n"
-            f"> UPI: `{config.UPI_ID}`"
-            "\n"
-            "> Support: @darkboxesAdmin"
-            "\n\n"
-            "_Select a plan below to get payment instructions._"
+        user_id  = event.sender_id
+        user_doc = await db_manager.get_user(user_id)
+        cred     = user_doc.get("searches_remaining", 0) if user_doc else 0
+
+        txt = (
+            "💎 **Plans & Credits**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "Your current balance: **" + str(cred) + " credit" + ("s" if cred != 1 else "") + "**\n\n"
+            "**Available Plans**\n\n"
+            "⚡ **5 Credits Pack** — ₹200\n"
+            "> Works on any command · Never expire\n\n"
+            "📱 **NUM Unlimited** — ₹300 / month\n"
+            "> Unlimited phone/number searches · 30 days\n\n"
+            "💎 **All Commands** — ₹499 / month  _(Best Value)_\n"
+            "> Unlimited searches on every command · 30 days\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "**How to buy:**\n"
+            "> 1️⃣ Tap a plan button below\n"
+            "> 2️⃣ Pay via UPI to the shown ID\n"
+            "> 3️⃣ Submit your UTR / Transaction ID\n"
+            "> 4️⃣ Admin activates within **5–15 min**\n\n"
+            "_UPI: `" + config.UPI_ID + "`_\n"
+            "_Support: @darkboxesAdmin_"
         )
-        
-        await event.edit(
-            premium_text,
-            buttons=OneLineKeyboard.subscription_plans(),
-            parse_mode="md"
-        )
-        
+        await event.edit(txt, buttons=OneLineKeyboard.subscription_plans(), parse_mode="md")
+
     except Exception as e:
-        logger.error(f"❌ Error in premium_callback: {e}")
-        await event.answer("❌ Error loading premium plans", alert=True)
+        logger.error(f"premium_callback error: {e}")
+        await event.answer("❌ Error loading plans", alert=True)
 
 @bot_client.on(events.CallbackQuery(pattern=r'^plan_(.+)$'))
 async def plan_selection_callback(event):
@@ -6978,88 +7073,75 @@ async def submit_payment_callback(event):
 
 @bot_client.on(events.CallbackQuery(pattern=r'^referrals$'))
 async def referrals_callback(event):
-    """Handle referrals callback"""
+    """Premium refer & earn page."""
     try:
-        user_id = event.sender_id
+        user_id  = event.sender_id
         user_doc = await db_manager.get_user(user_id)
-        
         if not user_doc:
-            await event.answer("❌ User not found", alert=True)
+            await event.answer("❌ Account not found. Send /start.", alert=True)
             return
-        
-        referral_code = user_doc.get('referral_code', 'N/A')
-        referrals_count = user_doc.get('referrals', 0)
-        referral_credits = user_doc.get('referral_credits', 0)
-        
-        referral_link = f"https://t.me/{bot_info.username}?start={referral_code}"
-        
-        referrals_text = (
-            f"📊 **REFER & EARN PROGRAM**\n"
-            f"═══════════════════════\n\n"
-            f"💰 **How It Works:**\n"
-            f"1. Share your referral link below\n"
-            f"2. When someone signs up using your link\n"
-            f"3. You get **{config.REFERRAL_REWARD} credit** instantly!\n"
-            f"4. They get **{config.NEW_USER_CREDITS} free credits**\n\n"
-            f"📈 **Your Stats:**\n"
-            f"├─ Referral Code: `{referral_code}`\n"
-            f"├─ Total Referrals: {referrals_count}\n"
-            f"├─ Credits Earned: {referral_credits}\n"
-            f"└─ Active Status: ✅\n\n"
-            f"🔗 **Your Referral Link:**\n"
-            f"{referral_link}\n\n"
-            f"📢 **Share Message:**\n"
-            f"```\n"
-            f"🚀 Join DarkBoxes Intelligence System!\n"
-            f"🔍 Access powerful OSINT tools\n"
-            f"📊 Phone, Email, ID, Vehicle searches\n"
-            f"💎 Get {config.NEW_USER_CREDITS} free credits\n"
-            f"🔗 Sign up: {referral_link}\n"
-            f"```\n\n"
-            f"💡 **Tips:** Share in groups, with friends, on social media!"
+
+        ref_code  = user_doc.get('referral_code', 'N/A')
+        ref_count = user_doc.get('referrals', 0)
+        ref_creds = user_doc.get('referral_credits', 0)
+        ref_link  = "https://t.me/" + bot_info.username + "?start=" + ref_code
+
+        txt = (
+            "🎁 **Refer & Earn**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "**How it works:**\n"
+            "> 1️⃣ Share your link below\n"
+            "> 2️⃣ Friend signs up using your link\n"
+            "> 3️⃣ You get **" + str(config.REFERRAL_REWARD) + " credit** instantly\n"
+            "> 4️⃣ They get **" + str(config.NEW_USER_CREDITS) + " free credits** too\n\n"
+            "**Your Stats**\n"
+            "> Referral code:   `" + ref_code + "`\n"
+            "> Total referrals: **" + str(ref_count) + "**\n"
+            "> Credits earned:  **" + str(ref_creds) + "**\n\n"
+            "**Your referral link:**\n"
+            "`" + ref_link + "`\n\n"
+            "**Ready-to-share message:**\n"
+            "```\n"
+            "🔍 DarkBoxes — India's most powerful search tool!\n"
+            "Phone lookups, vehicle info, ID records & more.\n"
+            "Get " + str(config.NEW_USER_CREDITS) + " free credits when you join:\n"
+            + ref_link + "\n"
+            "```"
         )
-        
-        await event.edit(
-            referrals_text,
-            buttons=OneLineKeyboard.referrals_menu(),
-            parse_mode="md"
-        )
-        
+        await event.edit(txt, buttons=OneLineKeyboard.referrals_menu(), parse_mode="md")
+
     except Exception as e:
-        logger.error(f"❌ Error in referrals_callback: {e}")
+        logger.error(f"referrals_callback error: {e}")
         await event.answer("❌ Error loading referrals", alert=True)
 
 @bot_client.on(events.CallbackQuery(pattern=r'^support$'))
 async def support_callback(event):
-    """Handle support callback"""
+    """Premium support page."""
     try:
-        support_text = (
-            "**Support**"
-            "\n\n"
-            "> 📞 Telegram: @darkboxesAdmin"
-            "\n"
-            "> 📢 Channel: @darkboxesv1"
-            "\n"
-            "> ⏰ Response: within 1 hour"
-            "\n\n"
-            "**Common issues**"
-            "\n"
-            "> • Payment not processed → submit your UTR in the bot"
-            "\n"
-            "> • Search not working → check your credit balance"
-            "\n"
-            "> • Account issues → contact @darkboxesAdmin"
-            "\n\n"
-            f"> UPI: `{config.UPI_ID}`"
-            "\n\n"
-            "_Never share your password. Official admin: @darkboxesAdmin only._"
+        txt = (
+            "🛟 **Support Center**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            "**Contact Us**\n"
+            "> 👤 Admin:   @darkboxesAdmin\n"
+            "> 📢 Channel: @darkboxesv1\n"
+            "> ⏰ Response: typically within 1 hour\n\n"
+            "**Common Issues**\n"
+            "> • _Payment not activated_ → submit UTR in the bot\n"
+            "> • _Search not working_ → check credit balance\n"
+            "> • _Wrong / no result_ → try different format\n"
+            "> • _Account banned_ → contact admin\n\n"
+            "**How to Pay**\n"
+            "> UPI ID: `" + config.UPI_ID + "`\n"
+            "> After paying tap **Buy Credits** → **I've Paid**\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "⚠️ _Official admin is @darkboxesAdmin only._\n"
+            "_Never share your password or OTP with anyone._"
         )
-        
-        await event.edit(
-            support_text,
-            buttons=OneLineKeyboard.support_menu(),
-            parse_mode="md"
-        )
+        await event.edit(txt, buttons=OneLineKeyboard.support_menu(), parse_mode="md")
+
+    except Exception as e:
+        logger.error(f"support_callback error: {e}")
+        await event.answer("❌ Error loading support", alert=True)
         
     except Exception as e:
         logger.error(f"❌ Error in support_callback: {e}")
@@ -7272,6 +7354,38 @@ async def private_message_handler(event):
 
         elif state.get("action") == "admin_take_credits_all":
             await handle_admin_take_credits_all(event)
+
+        elif state.get("action") == "admin_fj_add":
+            # Admin typed: "@username  Optional Title"
+            raw   = event.text.strip()
+            parts = raw.split(None, 1)
+            uname = parts[0].lstrip("@") if parts else ""
+            title = parts[1].strip() if len(parts) > 1 else uname
+            if not uname:
+                await event.respond("❌ Invalid format. Use: `@username Title`", parse_mode="md")
+                return
+            url = "https://t.me/" + uname
+            entry = {"username": "@" + uname, "title": title, "url": url}
+            # Check duplicate
+            if any(ch.get("username", "").lstrip("@") == uname for ch in FORCE_JOIN_CHANNELS):
+                await event.respond(
+                    "⚠️ `@" + uname + "` is already in the force-join list.",
+                    parse_mode="md",
+                    buttons=[[Button.inline("« Force-Join Panel", "admin_force_join")]]
+                )
+            else:
+                FORCE_JOIN_CHANNELS.append(entry)
+                await _save_force_join_channels()
+                await event.respond(
+                    "✅ **Channel Added**\n\n"
+                    "> Username: `@" + uname + "`\n"
+                    "> Title:    " + title + "\n"
+                    "> URL:      " + url + "\n\n"
+                    "Users must now join this channel before using the bot.",
+                    parse_mode="md",
+                    buttons=[[Button.inline("« Force-Join Panel", "admin_force_join")]]
+                )
+            user_states.pop(user_id, None)
 
         elif state.get("action") == "enter_account_credentials":
             await handle_account_login(event)
@@ -9092,6 +9206,158 @@ async def noop_callback(event):
         
     except Exception as e:
         logger.error(f"❌ Error in main_menu_callback: {e}")
+
+@bot_client.on(events.CallbackQuery(pattern=r'^check_join$'))
+async def check_join_callback(event):
+    """Verify force-join membership after user taps the button."""
+    try:
+        user_id = event.sender_id
+        missing = await check_force_join(user_id)
+        if missing:
+            await event.answer("❌ You haven't joined all required channels yet!", alert=True)
+            ch_lines = "\n".join(
+                "  ▸ " + (ch.get("title") or ch.get("username", "")) for ch in missing
+            )
+            msg = (
+                "🔐 **Still not joined!**\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                "Please join ALL channels listed below first:\n\n"
+                + ch_lines +
+                "\n\nAfter joining, tap **✅ I've Joined** again."
+            )
+            await event.edit(msg, buttons=_build_join_keyboard(missing), parse_mode="md")
+        else:
+            await event.answer("✅ Verified! Welcome to DarkBoxes.", alert=False)
+            user_doc = await db_manager.get_user(user_id)
+            sender   = await event.get_sender()
+            if not user_doc:
+                await db_manager.create_user(user_id, sender.username, sender.first_name, None)
+                user_doc = await db_manager.get_user(user_id)
+            is_admin = admin_panel.is_admin(user_id) if admin_panel else (user_id == config.ADMIN_USER_ID)
+            welcome  = PremiumFormatter.format_welcome(sender.first_name, user_doc)
+            try:
+                _dis_doc = await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: db_manager.db.settings.find_one({"_id": "disabled_buttons"})
+                )
+                _dis = set(_dis_doc.get("keys", []) if _dis_doc else [])
+            except Exception:
+                _dis = set()
+            await event.edit(welcome, buttons=OneLineKeyboard.main_menu(is_admin, _dis), parse_mode="md")
+    except Exception as e:
+        logger.error(f"check_join_callback error: {e}")
+        await event.answer("❌ Error verifying membership", alert=True)
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^admin_force_join$'))
+async def admin_force_join_callback(event):
+    """Admin panel: manage force-join channels."""
+    try:
+        if not admin_panel.is_admin(event.sender_id):
+            await event.answer("❌ Admin only", alert=True)
+            return
+        await _show_force_join_panel(event)
+    except Exception as e:
+        logger.error(f"admin_force_join_callback error: {e}")
+        await event.answer("❌ Error", alert=True)
+
+
+async def _show_force_join_panel(event):
+    """Render the force-join management panel."""
+    if FORCE_JOIN_CHANNELS:
+        ch_lines = "\n".join(
+            str(i + 1) + ".  " + (ch.get("title") or ch.get("username", "?"))
+            + "  (@" + ch.get("username", "").lstrip("@") + ")"
+            for i, ch in enumerate(FORCE_JOIN_CHANNELS)
+        )
+    else:
+        ch_lines = "_No channels configured yet._"
+
+    txt = (
+        "📢 **Force-Join Channels**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "Users must join these channels before using the bot:\n\n"
+        + ch_lines +
+        "\n\n"
+        "Use the buttons below to add or remove channels.\n"
+        "_Max 5 channels recommended._"
+    )
+    buttons = [
+        [Button.inline("➕ Add Channel", "admin_fj_add"),
+         Button.inline("🗑 Remove Channel", "admin_fj_remove")],
+        [Button.inline("🔄 Reload from DB", "admin_fj_reload")],
+        [Button.inline("« Admin Panel", "admin_panel")],
+    ]
+    try:
+        await event.edit(txt, buttons=buttons, parse_mode="md")
+    except Exception:
+        await event.respond(txt, buttons=buttons, parse_mode="md")
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^admin_fj_add$'))
+async def admin_fj_add_callback(event):
+    if not admin_panel.is_admin(event.sender_id):
+        await event.answer("❌ Admin only", alert=True)
+        return
+    user_states[event.sender_id] = {"action": "admin_fj_add"}
+    await event.edit(
+        "➕ **Add Force-Join Channel**\n\n"
+        "Send the channel **username** (with @) and optionally a display title.\n\n"
+        "**Format:**\n"
+        "> `@username  Display Title`\n\n"
+        "**Examples:**\n"
+        "> `@darkboxesv1  DarkBoxes Official`\n"
+        "> `@darkboxesv1`   _(title auto-set to username)_\n\n"
+        "Type and send now:",
+        buttons=[[Button.inline("✖ Cancel", "admin_force_join")]],
+        parse_mode="md"
+    )
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^admin_fj_remove$'))
+async def admin_fj_remove_callback(event):
+    if not admin_panel.is_admin(event.sender_id):
+        await event.answer("❌ Admin only", alert=True)
+        return
+    if not FORCE_JOIN_CHANNELS:
+        await event.answer("No channels to remove.", alert=True)
+        return
+    buttons = []
+    for i, ch in enumerate(FORCE_JOIN_CHANNELS):
+        label = "🗑 " + str(i + 1) + ". " + (ch.get("title") or ch.get("username", "?"))
+        buttons.append([Button.inline(label, "admin_fj_del_" + str(i))])
+    buttons.append([Button.inline("✖ Cancel", "admin_force_join")])
+    await event.edit(
+        "🗑 **Remove Force-Join Channel**\n\nTap a channel to remove it:",
+        buttons=buttons, parse_mode="md"
+    )
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^admin_fj_del_(\d+)$'))
+async def admin_fj_del_callback(event):
+    if not admin_panel.is_admin(event.sender_id):
+        await event.answer("❌ Admin only", alert=True)
+        return
+    try:
+        idx = int(event.data.decode().split("_")[-1])
+        if 0 <= idx < len(FORCE_JOIN_CHANNELS):
+            removed = FORCE_JOIN_CHANNELS.pop(idx)
+            await _save_force_join_channels()
+            await event.answer("✅ Removed: " + (removed.get("title") or removed.get("username", "")), alert=False)
+        await _show_force_join_panel(event)
+    except Exception as e:
+        logger.error(f"admin_fj_del error: {e}")
+        await event.answer("❌ Error removing channel", alert=True)
+
+
+@bot_client.on(events.CallbackQuery(pattern=r'^admin_fj_reload$'))
+async def admin_fj_reload_callback(event):
+    if not admin_panel.is_admin(event.sender_id):
+        await event.answer("❌ Admin only", alert=True)
+        return
+    _load_force_join_channels()
+    await event.answer("✅ Reloaded from DB", alert=False)
+    await _show_force_join_panel(event)
+
 
 @bot_client.on(events.CallbackQuery(pattern=r'^main_menu$'))
 async def main_menu_callback(event):
