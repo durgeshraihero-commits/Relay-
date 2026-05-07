@@ -95,6 +95,8 @@ class BotConfig:
     API_RATE_LIMIT: int = int(os.getenv("API_RATE_LIMIT", "100"))
     API_SECRET_KEY: str = os.getenv("API_SECRET_KEY", secrets.token_hex(32))
     API_BASE_URL: str = os.getenv("API_BASE_URL", "").strip()  # Set via env var
+    # Web Admin Panel password (set WEB_ADMIN_PASSWORD env var; falls back to API_SECRET_KEY)
+    WEB_ADMIN_PASSWORD: str = os.getenv("WEB_ADMIN_PASSWORD", "").strip()
 
 print("[STARTUP] Initialising BotConfig...", flush=True)
 try:
@@ -365,7 +367,7 @@ VALIDITY_TYPES = {
             "owner name", "name", "fname", "father name", "mobile no", "mobile",
             "alt mobile", "address", "circle", "id no",
         ],
-        "min_fields": 3,
+        "min_fields": 1,
     },
     "family": {
         "label": "Family/Ration (household members)",
@@ -373,7 +375,7 @@ VALIDITY_TYPES = {
             "card id", "card type", "household", "member", "ration",
             "full address", "fps name", "e-kyc", "id mask",
         ],
-        "min_fields": 2,
+        "min_fields": 1,
     },
     "vehicle": {
         "label": "Vehicle (plate, owner, RTO, insurance)",
@@ -382,7 +384,7 @@ VALIDITY_TYPES = {
             "engine", "chassis", "rto", "registration", "insurer", "insurance",
             "asset_number", "owner_name", "permanent_address",
         ],
-        "min_fields": 3,
+        "min_fields": 1,
     },
     "telegram": {
         "label": "Telegram (ID, phone, verification)",
@@ -390,7 +392,7 @@ VALIDITY_TYPES = {
             "telegram id", "telegram_id", "phone number", "country",
             "verification", "account status", "data source",
         ],
-        "min_fields": 2,
+        "min_fields": 1,
     },
     "generic": {
         "label": "Generic (any non-empty result)",
@@ -4404,8 +4406,11 @@ class APIHandler:
 
 
 # Search types that should wait 8s and pick the richest result from multiple responses
-MULTI_COLLECT_TYPES = {"telegram", "insta", "gst", "ip", "ifsc"}
+# ALL search types collect from every group simultaneously.
+# Results from all groups that pass validity check are merged and all sent to user.
+MULTI_COLLECT_TYPES = set()
 MULTI_COLLECT_WINDOW = 8   # seconds to wait for additional results
+COLLECT_ALL_RESULTS = True  # send ALL valid group results to user, not just best
 
 
 def _score_result_richness(text: str) -> int:
@@ -4642,70 +4647,58 @@ class SearchEngine:
 
         logger.info(f"📡 Querying {len(groups)} group(s) in parallel: {[g['name'] for g in groups]}")
 
-        # ── PARALLEL execution ────────────────────────────────────────────────
-        if is_multi_collect:
-            # Multi-collect: run all groups for the full window, then pick best
-            tasks = [
-                asyncio.create_task(
-                    self._search_single_group(
-                        group, search_type, query, user_id,
-                        is_multi_collect=True,
-                        multi_collect_window=MULTI_COLLECT_WINDOW,
-                    )
+        # ── PARALLEL execution — query ALL groups simultaneously ─────────────
+        # Every group is queried at the same time. ALL valid results are
+        # collected and returned together so the user sees data from every
+        # source that has it.
+        tasks = [
+            asyncio.create_task(
+                self._search_single_group(
+                    group, search_type, query, user_id,
+                    is_multi_collect=False,
+                    multi_collect_window=0,
                 )
-                for group in groups
-            ]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            )
+            for group in groups
+        ]
+        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            # Collect valid results and pick the richest one
-            all_candidates: List[Tuple[int, Dict]] = []
-            for r in results:
-                if isinstance(r, Exception) or not isinstance(r, dict):
-                    continue
-                if r.get("success"):
-                    text = r.get("result") or r.get("content") or ""
-                    score = _score_result_richness(text)
-                    all_candidates.append((score, r))
+        valid_results: List[Dict] = []
+        for r in raw_results:
+            if isinstance(r, Exception) or not isinstance(r, dict):
+                continue
+            if r.get("success"):
+                valid_results.append(r)
 
-            if all_candidates:
-                all_candidates.sort(key=lambda x: x[0], reverse=True)
-                best_score, best = all_candidates[0]
-                logger.info(f"🏆 Multi-collect winner: score={best_score} from {len(all_candidates)} valid result(s)")
-                return best
+        if valid_results:
+            # De-duplicate by raw_result content (avoid identical records)
+            seen_hashes: set = set()
+            unique_results: List[Dict] = []
+            for r in valid_results:
+                raw = r.get("raw_result", r.get("result", ""))
+                h = hashlib.md5(raw[:200].encode(errors="ignore")).hexdigest()
+                if h not in seen_hashes:
+                    seen_hashes.add(h)
+                    unique_results.append(r)
 
-        else:
-            # Normal search: race all groups — first valid result wins
-            tasks = {
-                asyncio.create_task(
-                    self._search_single_group(
-                        group, search_type, query, user_id,
-                        is_multi_collect=False,
-                        multi_collect_window=0,
-                    )
-                ): group
-                for group in groups
-            }
+            logger.info(f"✅ {len(unique_results)} unique valid result(s) from {len(valid_results)} group(s)")
 
-            pending = set(tasks.keys())
-            while pending:
-                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
-                for task in done:
-                    try:
-                        result = task.result()
-                    except Exception as e:
-                        logger.error(f"❌ Task error: {e}")
-                        continue
-                    if result.get("success"):
-                        # Cancel remaining group tasks and await them cleanly.
-                        # Without the gather(), Python logs:
-                        # "Task was destroyed but it is pending!" for each
-                        # cancelled task that still holds an awaitable future.
-                        for p in pending:
-                            p.cancel()
-                        if pending:
-                            await asyncio.gather(*pending, return_exceptions=True)
-                        logger.info(f"🎯 Got valid result, cancelled {len(pending)} remaining task(s)")
-                        return result
+            if len(unique_results) == 1:
+                # Single result — return as-is
+                return unique_results[0]
+            else:
+                # Multiple results — combine into multi_results payload
+                combined_raw = "\n\n".join(
+                    r.get("raw_result", r.get("result", "")) for r in unique_results
+                )
+                return {
+                    "success": True,
+                    "multi_results": unique_results,   # list of individual result dicts
+                    "result": unique_results[0].get("result", ""),  # fallback for compat
+                    "raw_result": combined_raw,
+                    "has_file": False,
+                    "result_count": len(unique_results),
+                }
 
         # All groups returned no data
         logger.warning(f"⚠️ All groups returned no data for {search_type}:{query} (user={user_id})")
@@ -5984,6 +5977,298 @@ async def start_web_server():
         app.router.add_get('/api/v1/usage', usage_endpoint)
         app.router.add_get('/api/v1/docs', documentation)
         
+        # ── Web Admin Panel endpoints ────────────────────────────────────────
+        import hashlib as _hashlib
+
+        def _web_admin_auth(request) -> bool:
+            """Check Bearer token or ?token= against WEB_ADMIN_PASSWORD."""
+            pwd = config.WEB_ADMIN_PASSWORD or config.API_SECRET_KEY
+            auth = request.headers.get("Authorization", "")
+            if auth.startswith("Bearer "):
+                return auth[7:] == pwd
+            return request.rel_url.query.get("token", "") == pwd
+
+        async def web_admin_stats(request):
+            if not _web_admin_auth(request):
+                return web.json_response({"error": "unauthorized"}, status=401)
+            try:
+                today_stats   = await db_manager.admin_db.get_today_stats()
+                cmd_stats     = await db_manager.admin_db.get_command_stats()
+                payment_stats = await db_manager.admin_db.get_payment_stats()
+                total_users   = await asyncio.get_running_loop().run_in_executor(
+                    None, db_manager.db.users.count_documents, {}
+                )
+                total_searches = await asyncio.get_running_loop().run_in_executor(
+                    None, db_manager.db.search_logs.count_documents, {}
+                )
+                success_count = await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: db_manager.db.search_logs.count_documents({"success": True})
+                )
+                fail_count = total_searches - success_count
+                return web.json_response({
+                    "today": today_stats,
+                    "commands": cmd_stats,
+                    "payments": payment_stats,
+                    "totals": {
+                        "users": total_users,
+                        "searches": total_searches,
+                        "success": success_count,
+                        "failed": fail_count,
+                        "success_rate": round(success_count / max(total_searches, 1) * 100, 1),
+                    }
+                }, dumps=lambda o: __import__("json").dumps(o, default=str))
+            except Exception as e:
+                return web.json_response({"error": str(e)}, status=500)
+
+        async def web_admin_users(request):
+            if not _web_admin_auth(request):
+                return web.json_response({"error": "unauthorized"}, status=401)
+            try:
+                page  = int(request.rel_url.query.get("page", 1))
+                limit = int(request.rel_url.query.get("limit", 25))
+                q     = request.rel_url.query.get("q", "")
+                if q:
+                    users = await asyncio.get_running_loop().run_in_executor(
+                        None, lambda: list(db_manager.db.users.find(
+                            {"$or": [
+                                {"username": {"$regex": q, "$options": "i"}},
+                                {"first_name": {"$regex": q, "$options": "i"}},
+                            ]},
+                            {"_id": 0, "user_id": 1, "username": 1, "first_name": 1,
+                             "joined_at": 1, "total_searches": 1, "searches_remaining": 1,
+                             "subscription": 1, "subscription_expiry": 1, "is_banned": 1, "is_admin": 1}
+                        ).limit(limit))
+                    )
+                    return web.json_response({"users": users, "total": len(users)},
+                                             dumps=lambda o: __import__("json").dumps(o, default=str))
+                skip  = (page - 1) * limit
+                users = await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: list(db_manager.db.users.find(
+                        {},
+                        {"_id": 0, "user_id": 1, "username": 1, "first_name": 1,
+                         "joined_at": 1, "total_searches": 1, "searches_remaining": 1,
+                         "subscription": 1, "subscription_expiry": 1, "is_banned": 1, "is_admin": 1}
+                    ).sort("joined_at", -1).skip(skip).limit(limit))
+                )
+                total = await asyncio.get_running_loop().run_in_executor(
+                    None, db_manager.db.users.count_documents, {}
+                )
+                return web.json_response(
+                    {"users": users, "total": total, "page": page,
+                     "pages": (total + limit - 1) // limit},
+                    dumps=lambda o: __import__("json").dumps(o, default=str)
+                )
+            except Exception as e:
+                return web.json_response({"error": str(e)}, status=500)
+
+        async def web_admin_user_action(request):
+            if not _web_admin_auth(request):
+                return web.json_response({"error": "unauthorized"}, status=401)
+            try:
+                body   = await request.json()
+                action = body.get("action")
+                uid    = int(body.get("user_id", 0))
+                if not uid:
+                    return web.json_response({"error": "user_id required"}, status=400)
+                if action == "add_credits":
+                    amount = int(body.get("amount", 0))
+                    await asyncio.get_running_loop().run_in_executor(
+                        None, lambda: db_manager.db.users.update_one(
+                            {"user_id": uid}, {"$inc": {"searches_remaining": amount}}
+                        )
+                    )
+                    return web.json_response({"ok": True, "added": amount})
+                elif action == "ban":
+                    await asyncio.get_running_loop().run_in_executor(
+                        None, lambda: db_manager.db.users.update_one(
+                            {"user_id": uid}, {"$set": {"is_banned": True}}
+                        )
+                    )
+                    return web.json_response({"ok": True})
+                elif action == "unban":
+                    await asyncio.get_running_loop().run_in_executor(
+                        None, lambda: db_manager.db.users.update_one(
+                            {"user_id": uid}, {"$set": {"is_banned": False}}
+                        )
+                    )
+                    return web.json_response({"ok": True})
+                elif action == "give_subscription":
+                    plan_id = body.get("plan_id", "sub_all_monthly")
+                    days    = int(body.get("days", 30))
+                    expiry  = (datetime.now(timezone.utc) + __import__("datetime").timedelta(days=days)).isoformat()
+                    await asyncio.get_running_loop().run_in_executor(
+                        None, lambda: db_manager.db.users.update_one(
+                            {"user_id": uid},
+                            {"$set": {"subscription": plan_id, "subscription_expiry": expiry}}
+                        )
+                    )
+                    return web.json_response({"ok": True, "expiry": expiry})
+                elif action == "remove_subscription":
+                    await asyncio.get_running_loop().run_in_executor(
+                        None, lambda: db_manager.db.users.update_one(
+                            {"user_id": uid},
+                            {"$unset": {"subscription": "", "subscription_expiry": ""}}
+                        )
+                    )
+                    return web.json_response({"ok": True})
+                else:
+                    return web.json_response({"error": "unknown action"}, status=400)
+            except Exception as e:
+                return web.json_response({"error": str(e)}, status=500)
+
+        async def web_admin_logs(request):
+            if not _web_admin_auth(request):
+                return web.json_response({"error": "unauthorized"}, status=401)
+            try:
+                limit  = int(request.rel_url.query.get("limit", 50))
+                uid    = request.rel_url.query.get("user_id")
+                stype  = request.rel_url.query.get("type")
+                success_filter = request.rel_url.query.get("success")
+                flt: dict = {}
+                if uid:
+                    flt["user_id"] = int(uid)
+                if stype:
+                    flt["search_type"] = stype
+                if success_filter is not None:
+                    flt["success"] = success_filter.lower() == "true"
+                logs = await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: list(db_manager.db.search_logs.find(
+                        flt,
+                        {"_id": 0, "user_id": 1, "search_type": 1, "query": 1,
+                         "timestamp": 1, "success": 1, "credits_used": 1, "response_preview": 1}
+                    ).sort("timestamp", -1).limit(limit))
+                )
+                return web.json_response({"logs": logs},
+                                         dumps=lambda o: __import__("json").dumps(o, default=str))
+            except Exception as e:
+                return web.json_response({"error": str(e)}, status=500)
+
+        async def web_admin_groups(request):
+            if not _web_admin_auth(request):
+                return web.json_response({"error": "unauthorized"}, status=401)
+            try:
+                groups_out = {}
+                for key, g in GROUP_PRIORITIES.items():
+                    groups_out[key] = {
+                        "name": g.get("name"),
+                        "enabled": g.get("enabled", True),
+                        "identifier": g.get("identifier", ""),
+                        "weight": g.get("weight", 0),
+                        "commands": g.get("commands", {}),
+                    }
+                return web.json_response({
+                    "groups": groups_out,
+                    "validity_types": {k: v["label"] for k, v in VALIDITY_TYPES.items()},
+                    "search_commands": {
+                        k: {"validity_type": v.get("validity_type", "generic"), "cost": v.get("cost", 1)}
+                        for k, v in SEARCH_COMMANDS.items()
+                    },
+                    "free_user_config": FREE_USER_CONFIG,
+                })
+            except Exception as e:
+                return web.json_response({"error": str(e)}, status=500)
+
+        async def web_admin_groups_update(request):
+            if not _web_admin_auth(request):
+                return web.json_response({"error": "unauthorized"}, status=401)
+            try:
+                body = await request.json()
+                action = body.get("action")
+                if action == "set_group_command":
+                    gkey   = body["group_key"]
+                    stype  = body["search_type"]
+                    cmd    = body.get("command", "")
+                    if gkey in GROUP_PRIORITIES and stype in SEARCH_COMMANDS:
+                        GROUP_PRIORITIES[gkey].setdefault("commands", {})[stype] = cmd
+                        return web.json_response({"ok": True})
+                    return web.json_response({"error": "unknown group or type"}, status=400)
+                elif action == "toggle_group":
+                    gkey = body["group_key"]
+                    if gkey in GROUP_PRIORITIES:
+                        GROUP_PRIORITIES[gkey]["enabled"] = not GROUP_PRIORITIES[gkey].get("enabled", True)
+                        return web.json_response({"ok": True, "enabled": GROUP_PRIORITIES[gkey]["enabled"]})
+                    return web.json_response({"error": "unknown group"}, status=400)
+                elif action == "set_validity_type":
+                    stype = body["search_type"]
+                    vtype = body["validity_type"]
+                    if stype in SEARCH_COMMANDS and vtype in VALIDITY_TYPES:
+                        SEARCH_COMMANDS[stype]["validity_type"] = vtype
+                        return web.json_response({"ok": True})
+                    return web.json_response({"error": "unknown type"}, status=400)
+                elif action == "set_free_user_config":
+                    allowed_groups   = body.get("allowed_groups", [])
+                    allowed_commands = body.get("allowed_commands", [])
+                    FREE_USER_CONFIG["allowed_groups"]   = allowed_groups
+                    FREE_USER_CONFIG["allowed_commands"] = allowed_commands
+                    await asyncio.get_running_loop().run_in_executor(
+                        None, lambda: db_manager.db.bot_config.update_one(
+                            {"_id": "free_user_config"},
+                            {"$set": {"allowed_groups": allowed_groups, "allowed_commands": allowed_commands}},
+                            upsert=True
+                        )
+                    )
+                    return web.json_response({"ok": True})
+                else:
+                    return web.json_response({"error": "unknown action"}, status=400)
+            except Exception as e:
+                return web.json_response({"error": str(e)}, status=500)
+
+        async def web_admin_plans(request):
+            if not _web_admin_auth(request):
+                return web.json_response({"error": "unauthorized"}, status=401)
+            return web.json_response({"plans": SUBSCRIPTION_PLANS},
+                                     dumps=lambda o: __import__("json").dumps(o, default=str))
+
+        async def web_admin_plans_update(request):
+            if not _web_admin_auth(request):
+                return web.json_response({"error": "unauthorized"}, status=401)
+            try:
+                body    = await request.json()
+                plan_id = body.get("plan_id")
+                updates = body.get("updates", {})
+                if plan_id not in SUBSCRIPTION_PLANS:
+                    return web.json_response({"error": "unknown plan"}, status=400)
+                SUBSCRIPTION_PLANS[plan_id].update(updates)
+                return web.json_response({"ok": True, "plan": SUBSCRIPTION_PLANS[plan_id]},
+                                         dumps=lambda o: __import__("json").dumps(o, default=str))
+            except Exception as e:
+                return web.json_response({"error": str(e)}, status=500)
+
+        async def web_admin_broadcast(request):
+            if not _web_admin_auth(request):
+                return web.json_response({"error": "unauthorized"}, status=401)
+            try:
+                body = await request.json()
+                msg  = body.get("message", "").strip()
+                if not msg:
+                    return web.json_response({"error": "message required"}, status=400)
+                all_users = await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: list(db_manager.db.users.find({}, {"user_id": 1}))
+                )
+                sent = 0
+                failed = 0
+                for u in all_users:
+                    try:
+                        await bot_client.send_message(u["user_id"], msg, parse_mode="md")
+                        sent += 1
+                        await asyncio.sleep(0.05)
+                    except Exception:
+                        failed += 1
+                return web.json_response({"ok": True, "sent": sent, "failed": failed})
+            except Exception as e:
+                return web.json_response({"error": str(e)}, status=500)
+
+        # ── Register admin API routes ────────────────────────────────────────
+        app.router.add_get ("/admin/api/stats",          web_admin_stats)
+        app.router.add_get ("/admin/api/users",          web_admin_users)
+        app.router.add_post("/admin/api/users/action",   web_admin_user_action)
+        app.router.add_get ("/admin/api/logs",           web_admin_logs)
+        app.router.add_get ("/admin/api/groups",         web_admin_groups)
+        app.router.add_post("/admin/api/groups",         web_admin_groups_update)
+        app.router.add_get ("/admin/api/plans",          web_admin_plans)
+        app.router.add_post("/admin/api/plans",          web_admin_plans_update)
+        app.router.add_post("/admin/api/broadcast",      web_admin_broadcast)
+
         # CORS middleware
     runner = web.AppRunner(app)
     await runner.setup()
@@ -7833,25 +8118,30 @@ async def handle_search_query(event, state):
 
         if result["success"]:
             if should_mask:
-                # Mask result and show "Buy Data" button
-                raw = result.get("raw_result") or result.get("result", "")
-                masked_text = TextProcessor.mask_result(raw)
+                # Zero-credit / free users: show masked preview + buy button
+                raw_for_mask = result.get("raw_result") or result.get("result", "")
+                multi = result.get("multi_results", [])
+                if not raw_for_mask and multi:
+                    raw_for_mask = multi[0].get("raw_result", "")
+                masked_text = TextProcessor.mask_result(raw_for_mask)
                 buy_buttons = [
-                    [Button.inline("🔓 Buy This Data! — ₹49 or Subscribe", "buy_data_prompt")],
+                    [Button.inline("🔓 Buy This Data! — Subscribe or Get Credits", "buy_data_prompt")],
                     [Button.inline("📋 View Plans", "premium")],
                 ]
                 await event.respond(
                     "🔍 **RESULT FOUND — PREVIEW (MASKED)**\n\n"
                     f"Data exists for `{query}`. Unlock to see full details:\n\n"
-                    f"```\n{masked_text}\n```\n\n"
-                    "🔒 _Purchase to reveal complete data_",
+                    f"```\n{masked_text[:800]}\n```\n\n"
+                    "🔒 _Purchase to reveal complete unmasked data_",
                     buttons=buy_buttons,
                     parse_mode="md"
                 )
-                # Don't charge credits (free preview)
-                await db_manager.update_searches(user_id, search_type, query, True, response_preview=result.get("raw_result","")[:200])
+                # Log but don't charge credits for free preview
+                await db_manager.update_searches(user_id, search_type, query, True,
+                    response_preview=raw_for_mask[:200])
 
             elif result.get("has_multiple_files"):
+                # Leak search — send files
                 try:
                     await event.respond(result["result"], parse_mode="md")
                 except Exception:
@@ -7865,16 +8155,36 @@ async def handle_search_query(event, state):
                             await event.respond(file=file_data["raw_bytes"], caption=caption, parse_mode="md")
                         except Exception:
                             await event.respond(file=file_data["raw_bytes"], caption=caption)
-                preview = result.get("raw_result", result.get("result",""))[:200]
+                preview = result.get("raw_result", result.get("result", ""))[:200]
+                await db_manager.update_searches(user_id, search_type, query, True, response_preview=preview)
+
+            elif result.get("multi_results") and len(result["multi_results"]) > 1:
+                # Multiple valid results from different groups — send all
+                multi = result["multi_results"]
+                count = len(multi)
+                await event.respond(
+                    f"📊 **{count} SOURCES FOUND** for `{query}`\n"
+                    f"Sending all results below ↓",
+                    parse_mode="md"
+                )
+                for idx, r in enumerate(multi, 1):
+                    header = f"**━━ Result {idx}/{count} ━━**\n"
+                    body = r.get("result", "")
+                    try:
+                        await event.respond(header + body, parse_mode="md")
+                    except Exception:
+                        await event.respond(header + body)
+                preview = result.get("raw_result", "")[:200]
                 await db_manager.update_searches(user_id, search_type, query, True, response_preview=preview)
 
             else:
+                # Single result
                 try:
                     await event.respond(result["result"], parse_mode="md")
                 except Exception as e:
                     logger.error(f"Error sending formatted result: {e}")
                     await event.respond(result["result"])
-                preview = result.get("raw_result", result.get("result",""))[:200]
+                preview = result.get("raw_result", result.get("result", ""))[:200]
                 await db_manager.update_searches(user_id, search_type, query, True, response_preview=preview)
 
         else:
