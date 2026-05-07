@@ -8180,6 +8180,8 @@ async def handle_search_query(event, state):
         can_search_paid = has_active_sub and sub_allows_command
         can_search_credit = has_credits and not (has_active_sub and not sub_allows_command)
 
+        is_free_user = not can_search_paid and not can_search_credit
+
         # Free-user command restriction check
         free_cmd_restriction = FREE_USER_CONFIG.get("allowed_commands", [])
         if is_free_user and free_cmd_restriction and search_type not in free_cmd_restriction:
@@ -8192,8 +8194,6 @@ async def handle_search_query(event, state):
             )
             user_states.pop(user_id, None)
             return
-
-        is_free_user = not can_search_paid and not can_search_credit
 
         # ── ACCESS POLICY ────────────────────────────────────────────────────
         # ALL users (including zero-credit and expired-sub users) can search.
