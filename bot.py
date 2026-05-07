@@ -6362,6 +6362,33 @@ async def start_web_server():
             except Exception as e:
                 return web.json_response({"error": str(e)}, status=500)
 
+        # ── Serve web admin panel HTML ───────────────────────────────────────
+        async def serve_admin_panel(request):
+            """Serve the admin_panel.html file directly from disk (or embedded)."""
+            import os as _os
+            # Look for admin_panel.html next to bot.py
+            candidates = [
+                _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "admin_panel.html"),
+                _os.path.join(_os.getcwd(), "admin_panel.html"),
+                "/app/admin_panel.html",
+            ]
+            for path in candidates:
+                if _os.path.isfile(path):
+                    with open(path, "r", encoding="utf-8") as f:
+                        html = f.read()
+                    return web.Response(text=html, content_type="text/html")
+            # Fallback — redirect to login instructions
+            return web.Response(
+                text="<h1>Admin Panel</h1><p>admin_panel.html not found. Make sure it is in the same directory as bot.py.</p>",
+                content_type="text/html",
+                status=404
+            )
+
+        app.router.add_get("/admin", serve_admin_panel)
+        app.router.add_get("/admin/", serve_admin_panel)
+        app.router.add_get("/admin_panel.html", serve_admin_panel)
+        app.router.add_get("/panel", serve_admin_panel)
+
         # ── Register admin API routes ────────────────────────────────────────
         app.router.add_get ("/admin/api/stats",          web_admin_stats)
         app.router.add_get ("/admin/api/users",          web_admin_users)
@@ -6722,30 +6749,37 @@ async def search_callback(event):
             except Exception:
                 pass
 
-        if not can_search and searches_remaining <= 0:
-            await event.edit(
-                "**No credits remaining**"
-                "\n\n"
-                "> You have used all your search credits."
-                "\n\n"
-                "Choose a plan below to top up and continue searching.",
-                buttons=OneLineKeyboard.subscription_plans(),
-                parse_mode="md"
-            )
-            return
-        
+        # ── Zero-credit / no-sub: allow search but warn result will be masked ──
+        is_free_preview = not can_search and searches_remaining <= 0
+
         cmd = SEARCH_COMMANDS[search_type]
         cost_word = f"{cmd['cost']} credit{'s' if cmd['cost'] > 1 else ''}"
 
-        instruction = (
-            f"**{cmd['name']}**\n"
-            f"\n"
-            f"> What it returns: {cmd['description'].split(chr(10))[2].strip().replace('🔸 **Returns:** ', '').replace('**', '')}\n"
-            f"> Format: `{cmd['example']}`\n"
-            f"> Cost: {cost_word}\n"
-            f"\n"
-            f"Type your query below and send it."
-        )
+        if is_free_preview:
+            instruction = (
+                f"**{cmd['name']}**\n"
+                f"\n"
+                f"> ⚠️ **No credits** — result will be **masked preview**\n"
+                f"> Tap 🔓 _Buy This Data_ after search to unlock it.\n"
+                f"\n"
+                f"> Format: `{cmd['example']}`\n"
+                f"\n"
+                f"Type your query below and send it."
+            )
+        else:
+            try:
+                returns_line = cmd['description'].split('\n')[2].strip().replace('🔸 **Returns:** ', '').replace('**', '')
+            except Exception:
+                returns_line = "Full details"
+            instruction = (
+                f"**{cmd['name']}**\n"
+                f"\n"
+                f"> What it returns: {returns_line}\n"
+                f"> Format: `{cmd['example']}`\n"
+                f"> Cost: {cost_word}\n"
+                f"\n"
+                f"Type your query below and send it."
+            )
 
         await event.edit(
             instruction,
@@ -9531,17 +9565,8 @@ async def leak_command_handler(event):
                 can_search = True
         
         if not can_search and searches_remaining <= 0:
-            await event.respond(
-                "🔒 **INSUFFICIENT CREDITS**\n\n"
-                "You need 3 credits for advanced search.\n\n"
-                "👑 **Premium Tier** - ₹499\n"
-                "• Unlimited searches (30 days)\n"
-                "• All premium databases\n"
-                "• Priority processing\n\n"
-                "Contact @darkboxesAdmin for assistance.",
-                buttons=OneLineKeyboard.subscription_plans()
-            )
-            return
+            # Allow but warn it will be masked
+            pass  # fall through — handle_search_query will mask the result
         
         # Perform leak search
         leak_warning = (
