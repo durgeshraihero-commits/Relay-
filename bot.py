@@ -364,8 +364,18 @@ VALIDITY_TYPES = {
     "num": {
         "label": "Phone/NUM (name, address, mobile)",
         "required_any": [
-            "owner name", "name", "fname", "father name", "mobile no", "mobile",
-            "alt mobile", "address", "circle", "id no",
+            # Standard formatted results
+            "owner name", "owner_name", "name", "fname", "father name", "father_name",
+            "mobile no", "mobile", "alt mobile", "alt_mobile", "address", "circle",
+            "id no", "id_no", "id_number",
+            # JSON format (BDG / hiteckgroop.in leak format)
+            '"name"', '"father_name"', '"mobile"', '"address"', '"alt_mobile"',
+            '"circle"', '"id_number"',
+            # Hiteckgroop masked format (contains special block characters)
+            "telephone", "adres", "full name", "the name of the father",
+            "region", "hiteckgroop", "hiteck",
+            # Any record-style data
+            "record #",
         ],
         "min_fields": 1,
     },
@@ -647,22 +657,51 @@ class PremiumFormatter:
     @staticmethod
     def format_welcome(user_name: str, user_data: Dict) -> str:
         """Professional welcome message using Telegram quote blocks."""
-        credits = "∞" if user_data.get("subscription") else str(user_data.get("searches_remaining", 0))
+        raw_credits = user_data.get("searches_remaining", 0)
+        subscription = user_data.get("subscription")
+        sub_expiry   = user_data.get("subscription_expiry")
+
+        # Check if subscription is still active
+        sub_active = False
+        if subscription and sub_expiry:
+            try:
+                exp = datetime.fromisoformat(sub_expiry)
+                if exp > datetime.now(timezone.utc):
+                    sub_active = True
+            except Exception:
+                pass
+
+        if sub_active:
+            credits_line = f"Plan: **{subscription}** (active)"
+        elif raw_credits > 0:
+            credits_line = f"Credits: **{raw_credits}**"
+        else:
+            credits_line = "Credits: **0** — _searches return masked preview_"
+
         searches = user_data.get("total_searches", 0)
         ref_code = user_data.get("referral_code", "N/A")
-        refs = user_data.get("referrals", 0)
-        name = user_name
+        refs     = user_data.get("referrals", 0)
+        name     = user_name
+
+        free_note = ""
+        if not sub_active and raw_credits <= 0:
+            free_note = (
+                "\n\n"
+                "> ⚠️ **No credits** — you can still search!\n"
+                "> Results will be **masked**. Tap 🔓 to unlock data."
+            )
 
         return (
             f"**Welcome, {name}**"
             f"\n\n"
             f"__Dark Boxes Intelligence System__"
             f"\n\n"
-            f"> Credits: **{credits}**"
+            f"> {credits_line}"
             f"\n"
             f"> Searches done: **{searches}**"
             f"\n"
             f"> Referral code: `{ref_code}` · {refs} referral{'s' if refs != 1 else ''}"
+            f"{free_note}"
             f"\n\n"
             f"Select a search tool below."
         )
@@ -1493,16 +1532,35 @@ class DatabaseManager:
             return None
     
     async def update_searches(self, user_id: int, search_type: str, query: str,
-                               success: bool = True, response_preview: str = "") -> bool:
-        """Update user search count and log search with response preview for admin monitoring"""
+                               success: bool = True, response_preview: str = "",
+                               is_free_user: bool = False) -> bool:
+        """Update user search count and log search with response for admin monitoring.
+        
+        Free/zero-credit users: log is always written (for admin trail) but no credits deducted.
+        """
         try:
             user = await self.get_user(user_id)
-            if not user:
+            if not user and user_id != 0:
+                # Still log even if user doc missing
+                search_log = {
+                    "user_id": user_id,
+                    "search_type": search_type,
+                    "query": query,
+                    "success": success,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "credits_used": 0,
+                    "subscription_used": None,
+                    "response_preview": response_preview[:2000] if response_preview else "",
+                    "is_free_user": True,
+                }
+                await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: self.db.search_logs.insert_one(search_log)
+                )
                 return False
             
             # Check subscription first
-            subscription = user.get("subscription")
-            subscription_expiry = user.get("subscription_expiry")
+            subscription = user.get("subscription") if user else None
+            subscription_expiry = user.get("subscription_expiry") if user else None
             
             if subscription and subscription_expiry:
                 try:
@@ -1523,7 +1581,7 @@ class DatabaseManager:
                         )
                     )
 
-                    # Log search
+                    # Log search — store full response for admin trail
                     search_log = {
                         "user_id": user_id,
                         "search_type": search_type,
@@ -1532,7 +1590,8 @@ class DatabaseManager:
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                         "credits_used": 0,
                         "subscription_used": subscription,
-                        "response_preview": response_preview[:300] if response_preview else "",
+                        "response_preview": response_preview[:2000] if response_preview else "",
+                        "is_free_user": False,
                     }
 
                     await asyncio.get_running_loop().run_in_executor(
@@ -1541,9 +1600,33 @@ class DatabaseManager:
                     return True
             
             # Use credits
-            searches_remaining = user.get("searches_remaining", 0)
-            if searches_remaining <= 0:
-                return False
+            searches_remaining = user.get("searches_remaining", 0) if user else 0
+            
+            if searches_remaining <= 0 or is_free_user:
+                # Zero-credit / free user: log but don't deduct
+                search_log = {
+                    "user_id": user_id,
+                    "search_type": search_type,
+                    "query": query,
+                    "success": success,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "credits_used": 0,
+                    "subscription_used": None,
+                    "response_preview": response_preview[:2000] if response_preview else "",
+                    "is_free_user": True,
+                }
+                await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: self.db.search_logs.insert_one(search_log)
+                )
+                if user:
+                    await asyncio.get_running_loop().run_in_executor(
+                        None, lambda: self.db.users.update_one(
+                            {"user_id": user_id},
+                            {"$inc": {"total_searches": 1},
+                             "$set": {"last_seen": datetime.now(timezone.utc).isoformat()}}
+                        )
+                    )
+                return True  # log succeeded even though no credits deducted
             
             credits_used = SEARCH_COMMANDS.get(search_type, {}).get("cost", 1)
             
@@ -1560,7 +1643,7 @@ class DatabaseManager:
                 )
             )
             
-            # Log search
+            # Log search — full response for admin trail
             search_log = {
                 "user_id": user_id,
                 "search_type": search_type,
@@ -1569,7 +1652,8 @@ class DatabaseManager:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "credits_used": credits_used,
                 "subscription_used": None,
-                "response_preview": response_preview[:300] if response_preview else "",
+                "response_preview": response_preview[:2000] if response_preview else "",
+                "is_free_user": False,
             }
             
             await asyncio.get_running_loop().run_in_executor(
@@ -6120,10 +6204,11 @@ async def start_web_server():
             if not _web_admin_auth(request):
                 return web.json_response({"error": "unauthorized"}, status=401)
             try:
-                limit  = int(request.rel_url.query.get("limit", 50))
+                limit  = int(request.rel_url.query.get("limit", 100))
                 uid    = request.rel_url.query.get("user_id")
                 stype  = request.rel_url.query.get("type")
                 success_filter = request.rel_url.query.get("success")
+                free_filter    = request.rel_url.query.get("free")
                 flt: dict = {}
                 if uid:
                     flt["user_id"] = int(uid)
@@ -6131,15 +6216,34 @@ async def start_web_server():
                     flt["search_type"] = stype
                 if success_filter is not None:
                     flt["success"] = success_filter.lower() == "true"
+                if free_filter is not None:
+                    flt["is_free_user"] = free_filter.lower() == "true"
                 logs = await asyncio.get_running_loop().run_in_executor(
                     None, lambda: list(db_manager.db.search_logs.find(
                         flt,
                         {"_id": 0, "user_id": 1, "search_type": 1, "query": 1,
-                         "timestamp": 1, "success": 1, "credits_used": 1, "response_preview": 1}
+                         "timestamp": 1, "success": 1, "credits_used": 1,
+                         "response_preview": 1, "is_free_user": 1, "subscription_used": 1}
                     ).sort("timestamp", -1).limit(limit))
                 )
-                return web.json_response({"logs": logs},
-                                         dumps=lambda o: __import__("json").dumps(o, default=str))
+                # Analytics
+                total = await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: db_manager.db.search_logs.count_documents(flt)
+                )
+                success_c = await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: db_manager.db.search_logs.count_documents({**flt, "success": True})
+                )
+                fail_c = total - success_c
+                return web.json_response({
+                    "logs": logs,
+                    "analytics": {
+                        "total": total,
+                        "success": success_c,
+                        "failed": fail_c,
+                        "success_rate": round(success_c / max(total, 1) * 100, 1),
+                        "no_data_rate": round(fail_c / max(total, 1) * 100, 1),
+                    }
+                }, dumps=lambda o: __import__("json").dumps(o, default=str))
             except Exception as e:
                 return web.json_response({"error": str(e)}, status=500)
 
@@ -8044,52 +8148,35 @@ async def handle_search_query(event, state):
 
         # Free-user command restriction check
         free_cmd_restriction = FREE_USER_CONFIG.get("allowed_commands", [])
-        if not can_search_paid and not can_search_credit and free_cmd_restriction:
-            if search_type not in free_cmd_restriction:
-                await event.respond(
-                    "🔒 **COMMAND RESTRICTED**\n\n"
-                    f"The `{search_type}` search requires a paid plan or credits.\n\n"
-                    "Choose a plan below to unlock this command:",
-                    buttons=OneLineKeyboard.subscription_plans(),
-                    parse_mode="md"
-                )
-                user_states.pop(user_id, None)
-                return
+        if is_free_user and free_cmd_restriction and search_type not in free_cmd_restriction:
+            await event.respond(
+                "🔒 **COMMAND RESTRICTED**\n\n"
+                f"The `{search_type}` search requires a paid plan or credits.\n\n"
+                "Choose a plan below to unlock this command:",
+                buttons=OneLineKeyboard.subscription_plans(),
+                parse_mode="md"
+            )
+            user_states.pop(user_id, None)
+            return
 
         is_free_user = not can_search_paid and not can_search_credit
 
-        # No credits AND no subscription → show masked result with buy button
-        # We still perform the search but mask the output
-        should_mask = is_free_user
+        # ── ACCESS POLICY ────────────────────────────────────────────────────
+        # ALL users (including zero-credit and expired-sub users) can search.
+        # Paid users → full unmasked result.
+        # Free / zero-credit / expired-sub users → masked result + buy prompt.
+        # Only exception: if admin has set a free_cmd_restriction and this
+        # command isn't in it, block the search entirely (no masked fallback).
+        # ─────────────────────────────────────────────────────────────────────
+        should_mask = is_free_user  # mask for free/zero-credit users
 
-        if not can_search_paid and not can_search_credit and not is_free_user:
-            # has NO access at all and not free either — block
-            await event.respond(
-                "🔒 **INSUFFICIENT CREDITS**\n\n"
-                "You need credits or a subscription to search.\n\n"
-                "📱 **₹300/month** — Unlimited Phone searches\n"
-                "💎 **₹499/month** — Unlimited All commands\n"
-                "⚡ **₹200** — 5 search credits\n\n"
-                "Contact @darkboxesAdmin for assistance.",
-                buttons=OneLineKeyboard.subscription_plans()
-            )
-            user_states.pop(user_id, None)
-            return
-
-        # If subscription is active but doesn't cover this command, fall to credit check
-        if has_active_sub and not sub_allows_command and not has_credits:
-            plan_id = user_doc.get("subscription", "")
-            plan = SUBSCRIPTION_PLANS.get(plan_id, {})
-            await event.respond(
-                f"🔒 **PLAN RESTRICTION**\n\n"
-                f"Your current plan (**{plan.get('name', plan_id)}**) only covers specific commands.\n\n"
-                f"The `{search_type}` command requires the **All Commands** plan or credits.\n\n"
-                f"💎 **₹499/month** — Unlimited All commands\n"
-                f"⚡ **₹200** — 5 credits (works for any command)",
-                buttons=OneLineKeyboard.subscription_plans()
-            )
-            user_states.pop(user_id, None)
-            return
+        # If subscription covers a command-restricted plan and user has no credits,
+        # we still let them search but mask the result (treat as free user).
+        if has_active_sub and not sub_allows_command:
+            if not has_credits:
+                # subscription doesn't cover this command AND no credits → mask
+                is_free_user = True
+                should_mask = True
 
         # Show processing message
         if search_type == "leak":
@@ -8138,7 +8225,7 @@ async def handle_search_query(event, state):
                 )
                 # Log but don't charge credits for free preview
                 await db_manager.update_searches(user_id, search_type, query, True,
-                    response_preview=raw_for_mask[:200])
+                    response_preview=raw_for_mask[:2000], is_free_user=True)
 
             elif result.get("has_multiple_files"):
                 # Leak search — send files
