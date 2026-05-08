@@ -5691,6 +5691,39 @@ class SearchEngine:
                     f"📥 IntelX data chunk accumulated "
                     f"({len(search_info['intelx_accumulated'])} chars total)"
                 )
+                # ── IntelX inline keyboard pagination ─────────────────
+                # The IntelX bot sends results page-by-page with a ➡️ Next button.
+                # When that button is present, click it to collect all result pages
+                # before resolving. Each page is accumulated into intelx_accumulated.
+                try:
+                    msg_buttons = getattr(message, "buttons", None)
+                    if msg_buttons:
+                        next_btn = None
+                        for row in msg_buttons:
+                            for btn in row:
+                                btn_text = getattr(btn, "text", "") or ""
+                                # Match ➡, ➡️, "Next", or → arrow shapes
+                                if any(arrow in btn_text for arrow in ("➡", "→", "Next", "next")):
+                                    next_btn = btn
+                                    break
+                            if next_btn:
+                                break
+                        if next_btn:
+                            logger.info(
+                                f"⏭️ IntelX pagination — clicking '{next_btn.text}' "
+                                f"for next result page"
+                            )
+                            try:
+                                await next_btn.click()
+                            except Exception as _click_err:
+                                logger.warning(f"⚠️ IntelX next-button click error: {_click_err}")
+                            # Extend wait so the next page has time to arrive
+                            search_info["pending_encorex"]    = True
+                            search_info["encorex_wait_start"] = time.time()
+                            return  # wait for the next page message to arrive
+                except Exception as _btn_err:
+                    logger.warning(f"⚠️ IntelX pagination check failed: {_btn_err}")
+                # ── End pagination ───────────────────────────────
                 # Don't resolve yet — more chunks or the footer may follow
                 # But extend wait window so we don't time out
                 if not search_info.get("pending_encorex"):
