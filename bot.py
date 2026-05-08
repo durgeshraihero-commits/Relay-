@@ -472,17 +472,47 @@ async def _save_force_join_channels():
 
 
 async def check_force_join(user_id: int) -> List[Dict]:
-    """Return channels the user has NOT joined. Empty = all joined / none configured."""
+    """Return list of channels the user has NOT joined.
+
+    Uses the Bot HTTP API getChatMember endpoint — works for ANY public
+    channel/group without the bot needing to be an admin.
+    Returns empty list if all joined or no channels configured.
+    """
     if not FORCE_JOIN_CHANNELS:
         return []
+
+    import aiohttp as _aiohttp
+
+    bot_token  = config.BOT_TOKEN
     not_joined = []
+
     for ch in FORCE_JOIN_CHANNELS:
+        uname = ch.get("username", "").strip().lstrip("@")
+        if not uname:
+            continue
         try:
-            uname = ch.get("username", "").lstrip("@")
-            entity = await bot_client.get_entity(uname)
-            await bot_client(GetParticipantRequest(entity, user_id))
-        except Exception:
+            url = (
+                f"https://api.telegram.org/bot{bot_token}/getChatMember"
+                f"?chat_id=@{uname}&user_id={user_id}"
+            )
+            async with _aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=_aiohttp.ClientTimeout(total=8)) as resp:
+                    data = await resp.json()
+            if not data.get("ok"):
+                # API error — bot probably not in channel; treat as not-joined
+                logger.warning(
+                    f"force_join getChatMember error for @{uname}: {data.get('description','')}"
+                    f" — make sure bot is added to the channel as admin"
+                )
+                not_joined.append(ch)
+                continue
+            status = data.get("result", {}).get("status", "left")
+            if status not in ("member", "administrator", "creator"):
+                not_joined.append(ch)
+        except Exception as e:
+            logger.warning(f"force_join check failed for @{uname}: {e}")
             not_joined.append(ch)
+
     return not_joined
 
 
@@ -814,6 +844,12 @@ class TextProcessor:
 
         Returns True  → ignore this message, wait for the real reply
         Returns False → this is actual data, use it
+
+        CRITICAL: IntelX sends 3 messages in sequence:
+          1. "Breached: 🔎Request: ..." — header/summary — NOT a placeholder
+          2. Masked data with █ chars — real result
+          3. "Subscription is over" — footer — NOT a placeholder
+        None of these should return True.
         """
         if not text:
             return True
@@ -821,21 +857,40 @@ class TextProcessor:
         text_lower = text.lower()
         text_stripped = text.strip()
 
-        # ── EARLY EXIT: known result signals — never treat as processing ──────
+        # ── EARLY EXIT: known result/data signals — never treat as processing ──
         result_signals = [
+            # JSON fields
             '"success":', '"status":', '"result":', '"results":',
-            '"country":', '"number":', '"mobile":', '"name":',
-            '"address":', '"aadhar":', '"msg":', '"_powered_by":',
-            '"email":', '"alt":', '"fname":', '"circle":',
+            '"mobile":', '"name":', '"address":', '"father_name":',
+            '"alt_mobile":', '"circle":', '"id_number":', '"email":',
+            '"aadhar":', '"fname":', '"country":', '"number":',
+            # Formatted fields
+            'owner name', 'father name', 'mobile no', 'alt mobile',
+            'owner_name', 'father_name',
+            # IntelX masked data signals
+            'telephone', 'adres', 'full name', 'the name of the father',
+            'region', 'hiteckgroop', '█',
+            # 1Win / leak breach data
+            'encrypted password', 'date of registration',
+            # Result frames
             '✅ success', '║  ✅', 'encorex osint', 'encorex intelx',
             '╔═══《', '╘══《',
-            # real formatted result dividers from premium groups
-            '━━━', '═══', '▬▬▬', '◆', '●',
+            # Record separators
+            'record #', '━━━', '═══', '▬▬▬',
+            # IntelX header lines — these mean real data is coming next
+            'breached:', '🔎request:', 'subjects made:',
+            'number of results:', 'number of leaks:', 'search time:',
+            # IntelX footer — data already sent before this
+            'subscription is over', 'trial period', '/shop',
+            'free version', 'buying a subscription',
+            # Ration/vehicle data
+            'card id', 'card type', 'household', 'member #',
+            'plate no', 'vehicle_number', 'engine no', 'chassis',
         ]
         if any(sig in text_lower for sig in result_signals):
             return False
 
-        # Real results have JSON-like key:value pairs (3 or more)
+        # Real results have JSON-like key:value pairs
         if text_lower.count('": ') >= 2 or text_lower.count(': ') >= 4:
             return False
 
@@ -843,9 +898,7 @@ class TextProcessor:
         if len(text_stripped) > 300:
             return False
 
-        # ── SHORT messages that look like real data rows ───────────────────────
-        # e.g. "Name: John / Phone: 99393..." - these are results, not placeholders
-
+        # Short messages that look like real data rows
         real_data_patterns = [
             'name:', 'mobile:', 'phone:', 'address:', 'father:', 'dob:',
             'operator:', 'circle:', 'state:', 'district:', 'email:',
@@ -855,28 +908,19 @@ class TextProcessor:
             return False
 
         # ── PLACEHOLDER / CONFIRMATION keywords ───────────────────────────────
-        # These are messages the group bot sends BEFORE the real result arrives.
-        # The actual result comes as the NEXT message (or an edit).
         placeholder_keywords = [
-            # Generic waiting
             'please wait', 'hold on', 'wait a moment', 'in progress',
             'gathering data', 'working on it', 'please wait while',
             'getting information', 'fetching data', 'creating report',
-            # Searching confirmations (the exact messages from your groups)
             'searching...', 'searching mobile', '🔍 searching',
             '🔎 searching', 'search initiated', 'looking up',
             'processing...', 'processing your', '⏳ processing',
             'please wait...', '⏳ please wait',
-            # Scanning / tunnel placeholders
-            'scanning...', 'scanning mobile', '🛰️', 'encorex tunnel',
+            'scanning...', 'scanning mobile', 'encorex tunnel',
             'intelx tunnel',
-            # "Powered by" without data — these are footer-only ack messages
-            'powered by darkboxes',
-            # DarkBoxes own confirmation messages
-            '⚡ powered by darkboxes intelligence system',
+            'powered by darkboxes intelligence system',
             '🔐 developed by',
             '⚠️ confidential',
-            # Common bot ack patterns
             'query received', 'request received', 'fetching result',
             'fetch initiated', 'initiated search', 'initiating',
             'standby', 'one moment', 'just a moment',
@@ -884,17 +928,10 @@ class TextProcessor:
         if any(kw in text_lower for kw in placeholder_keywords):
             return True
 
-        # ── Short messages with only emoji + query text are confirmations ──────
-        # Short messages with only emoji + query text are confirmations
-        # e.g. searching confirmation messages - these are placeholders
-
-        # has no colon-separated data pairs, treat as placeholder.
-        # (Caller passes query via search_info - we do a rough length check here)
+        # Short messages with no data pairs are placeholders
         if len(text_stripped) < 200 and text_stripped.count('\n') <= 5:
-            # If the ONLY content is a header + the query echoed back, it's a placeholder
             lines = [l.strip() for l in text_stripped.split('\n') if l.strip()]
             non_empty = [l for l in lines if l and not l.startswith('─') and not l.startswith('━')]
-            # 3 or fewer meaningful lines and none contain ':' data pairs → placeholder
             if len(non_empty) <= 4 and not any(':' in l and len(l) > 10 for l in non_empty):
                 return True
 
@@ -921,111 +958,175 @@ class TextProcessor:
     
     @staticmethod
     def is_no_info_message(text: str) -> bool:
-        """Check if message indicates no information found.
+        """Check if message truly means no data found.
 
-        Only treat SHORT messages as no-info. Real results often contain
-        phrases like "not available" inside data rows — those must NOT be
-        rejected. Any message with JSON fields or > 200 chars is a result.
+        IMPORTANT rules:
+        - IntelX "subscription over" message is NOT no-info — the real data
+          comes as a SEPARATE message immediately after it. Never reject it.
+        - Any message containing telephone/adres/full name/father fields is data.
+        - Any message > 150 chars with block-char masking (█) is masked data.
+        - Only short, clearly negative phrases qualify as no-info.
         """
         if not text:
             return False
 
         text_lower = text.lower().strip()
 
-        # If message contains data indicators → it is a result, never no-info
-        result_signals = [
+        # ── NEVER reject if message contains real data signals ────────────────
+        always_data_signals = [
+            # JSON fields
             '"success":', '"status":', '"result":', '"results":',
-            '"country":', '"number":', '"mobile":', '"name":',
-            '"address":', '"aadhar":', '"fname":', '"circle":',
-            '"msg":', '"email":', '"alt":', '"_powered_by":',
+            '"mobile":', '"name":', '"address":', '"father_name":',
+            '"alt_mobile":', '"circle":', '"id_number":', '"email":',
+            '"aadhar":', '"fname":', '"country":', '"number":',
+            # Formatted record fields
+            'owner name', 'father name', 'mobile no', 'alt mobile',
+            'owner_name', 'father_name', 'alt_mobile', 'id_number',
+            # IntelX / hiteckgroop masked format
+            'telephone', 'adres', 'full name', 'the name of the father',
+            'region', 'hiteckgroop', 'hiteck',
+            # 1Win / leak format
+            'encrypted password', 'date of registration',
+            # Block-char masked data
+            '█',
+            # Result frames
             '✅ success', '✅ found', '╔═══《', 'encorex osint', 'encorex intelx',
+            # Record separators
+            'record #', '---', '━━━', '═══',
+            # Ration / vehicle
+            'card id', 'card type', 'household', 'member #',
+            'plate no', 'vehicle_number', 'engine no', 'chassis',
         ]
-        if any(sig in text_lower for sig in result_signals):
+        if any(sig in text_lower for sig in always_data_signals):
             return False
 
         # Multiple JSON key-value pairs → definitely a result
         if text_lower.count('": ') >= 2:
             return False
 
-        # Long messages are almost certainly results, not "no info" notices
-        if len(text_lower) > 200:
+        # Long messages with masked chars are data
+        if len(text_lower) > 150 and '█' in text:
             return False
 
-        # Only match clearly negative short phrases
+        # Long messages are almost certainly results
+        if len(text_lower) > 250:
+            return False
+
+        # ── IntelX multi-message pattern ──────────────────────────────────────
+        # Message 1: "Breached:\n🔎Request: ..." — this is a HEADER, not no-info
+        # Message 2: the actual masked data
+        # Message 3: "Your subscription is over!" — also NOT no-info
+        intelx_header_signals = [
+            'breached:', '🔎request:', 'subjects made:', 'number of results:',
+            'number of leaks:', 'search time:', 'free version',
+            'subscription is over', 'trial period', '/shop', '/referral',
+            '/mirrors', 'mirror', 'buying a subscription',
+        ]
+        if any(sig in text_lower for sig in intelx_header_signals):
+            return False  # IntelX header/footer — NOT no-info, real data follows
+
+        # ── Only short clearly-negative phrases count as no-info ──────────────
         strict_phrases = [
             'no info found', 'no information found', 'no result found',
             'no data found', 'no record found', 'no match found',
-            'not found in', 'no results found', 'data not found',
+            'not found in database', 'no results found', 'data not found',
             'record not found', 'details not found', 'does not exist',
             "doesn't exist", 'unable to find', 'could not find',
-            "couldn't find", 'no entry found',
-            'no info', 'not available', 'invalid number',
+            "couldn't find", 'no entry found', 'no info',
+            'invalid number', 'invalid query',
         ]
         return any(phrase in text_lower for phrase in strict_phrases)
 
     @staticmethod
     def clean_content(content: str, search_type: str = None) -> str:
-        """Clean and format content"""
+        """Clean group/bot response — remove branding/promo but PRESERVE all data lines.
+
+        Critical: IntelX masked lines (📞Telephone, 🏘️Adres, 👤Full name, etc.)
+        and block-char masked values (█) must NEVER be stripped — they are the
+        actual data that the user paid to see (or will pay to unlock).
+        """
         if not content:
             return ""
-        
-        # Remove ENCOREX and IntelX branding
-        branding_patterns = [
-            r'ENCOREX\s*TUNNEL',
-            r'ENCOREX',
-            r'IntelX',
-            r'INTELX',
-            r'intelx',
-            r'╔════════════════════════════╗',
-            r'║.*scanning.*║',
-            r'║.*service:.*║',
-            r'║.*node:.*ip-.*║',
-            r'╚════════════════════════════╝',
+
+        lines_in  = content.split('\n')
+        lines_out = []
+
+        # Patterns that identify purely promotional / branding lines to DROP.
+        # We match whole lines only — never strip partial line content.
+        promo_line_patterns = [
+            r'^\s*https?://\S+\s*$',            # bare URL line
+            r'^\s*www\.\S+\s*$',                 # bare www line
+            r'powered by.*darkboxes.*$',
+            r'developed by.*$',
+            r'created by.*$',
+            r'designed by.*$',
+            r'©.*$',
+            r'copyright.*$',
+            r'join.*channel.*$',
+            r'subscribe.*channel.*$',
+            r'auto-delete.*$',
+            r'file generated.*$',
+            r'report_.*\.txt.*$',
+            r'download.*file.*$',
+            r'click.*download.*$',
+            r'designed & powered.*$',
+            # ENCOREX tunnel scanning frame lines only
+            r'╔════════+╗\s*$',
+            r'╚════════+╝\s*$',
+            r'║.*encorex tunnel.*║\s*$',
+            r'║.*intelx tunnel.*║\s*$',
+            r'║.*scanning\.\.\..*║\s*$',
+            r'║.*service:.*node:.*║\s*$',
         ]
-        
-        for pattern in branding_patterns:
-            content = re.sub(pattern, '', content, flags=re.IGNORECASE | re.MULTILINE)
-        
-        # Remove promotional content and personal information
-        patterns = [
-            r'https?://\S+',
-            r'www\.\S+',
-            r't\.me/\S+',
-            r'@\w+',
-            r'tg://\S+',
-            r'powered by.*',
-            r'developed by.*',
-            r'created by.*',
-            r'designed by.*',
-            r'©.*',
-            r'copyright.*',
-            r'join.*channel',
-            r'subscribe.*',
-            r'follow.*',
-            r'contact.*admin',
-            r'admin.*@\w+',
-            r'auto-delete.*',
-            r'file generated.*',
-            r'report_.*\.txt',
-            r'download.*file',
-            r'click.*download',
-            r'designed & powered.*',
-            r'join.*@\w+',
-            r'channel.*@\w+',
-            r'username.*:.*@\w+',
-            r'telegram.*:.*@\w+',
-            r'@\w+.*bot',
-            r'bot.*@\w+'
+        compiled_promo = [re.compile(p, re.IGNORECASE) for p in promo_line_patterns]
+
+        # Lines that contain these strings are ALWAYS kept (data lines)
+        always_keep_signals = [
+            '█',                            # masked data char
+            'telephone', 'adres',           # IntelX masked labels
+            'full name', 'the name of the father', 'region',
+            'hiteckgroop', 'hiteck',
+            'encrypted password', 'date of registration',
+            'owner name', 'father name', 'mobile no', 'alt mobile',
+            '"name"', '"mobile"', '"address"', '"father_name"',
+            '"alt_mobile"', '"circle"', '"id_number"',
+            'record #', '---', '═══', '━━━',
+            'breached:', '🔎request:', 'subjects made:',
+            'number of results:', 'number of leaks:', 'search time:',
+            'card id', 'card type', 'household', 'member #',
+            'plate no', 'engine no', 'chassis',
         ]
-        
-        for pattern in patterns:
-            content = re.sub(pattern, '', content, flags=re.IGNORECASE)
-        
-        # Clean whitespace
-        content = re.sub(r'\n{3,}', '\n\n', content)
-        content = re.sub(r' {2,}', ' ', content)
-        
-        return content.strip()
+
+        for line in lines_in:
+            line_lower = line.lower()
+
+            # Always keep data lines — never apply promo filter to them
+            if any(sig in line_lower for sig in always_keep_signals):
+                lines_out.append(line)
+                continue
+
+            # Skip purely promotional / branding lines
+            if any(pat.search(line) for pat in compiled_promo):
+                continue
+
+            # Drop lines that are ONLY a @username mention with no other content
+            stripped = line.strip()
+            if re.match(r'^@\w+\s*$', stripped):
+                continue
+            # Drop bare t.me links
+            if re.match(r'^t\.me/\S+\s*$', stripped, re.IGNORECASE):
+                continue
+
+            lines_out.append(line)
+
+        cleaned = '\n'.join(lines_out)
+
+        # Collapse 3+ consecutive blank lines to 2
+        cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+        # Collapse multiple spaces
+        cleaned = re.sub(r' {2,}', ' ', cleaned)
+
+        return cleaned.strip()
     
     @staticmethod
     def split_long_text(text: str, max_length: int = 4000) -> List[str]:
@@ -1052,29 +1153,70 @@ class TextProcessor:
 
     @staticmethod
     def is_valid_result(text: str, search_type: str) -> bool:
-        """Check if the response from a group/bot is actually a valid data result
-        for the given search_type, using VALIDITY_TYPES definitions.
+        """Check if the response from a group/bot is actually a valid data result.
 
-        Returns True if the result looks like real data; False if it appears
-        to be a no-data, error, or format-mismatched response.
+        Extended to recognise ALL result formats:
+        - Standard KEY : VALUE  (OWNER NAME, FATHER NAME, etc.)
+        - JSON array/object     (BDG / hiteckgroop leak format)
+        - IntelX masked format  (Telephone: 9██, Adres: ..., Full name: ...)
+        - 1Win / breach format  (Email, Encrypted password, Telephone, ...)
+        - IntelX header message ("Breached: 🔎Request: ..." — valid, data follows)
+        - Block-char masked     (any message containing █ with context)
         """
-        if not text or len(text.strip()) < 20:
+        if not text or len(text.strip()) < 10:
             return False
 
-        cmd_info = SEARCH_COMMANDS.get(search_type, {})
-        validity_key = cmd_info.get("validity_type", "generic")
-        vtype = VALIDITY_TYPES.get(validity_key, VALIDITY_TYPES["generic"])
+        text_lower = text.lower()
 
-        required = vtype.get("required_any", [])
-        min_fields = vtype.get("min_fields", 0)
+        # ── Universal data signals that always mean VALID ────────────────────
+        universal_valid = [
+            # Standard formatted records
+            'owner name', 'father name', 'mobile no', 'alt mobile',
+            'owner_name', 'father_name', 'alt_mobile', 'id_number',
+            'id no', 'circle', 'record #',
+            # JSON field keys
+            '"name"', '"mobile"', '"father_name"', '"address"',
+            '"alt_mobile"', '"circle"', '"id_number"', '"id"',
+            # IntelX masked format (all lowercase for matching)
+            'telephone', 'adres', 'full name', 'the name of the father',
+            'region', 'hiteckgroop', 'hiteck',
+            # 1Win / breach data fields
+            'encrypted password', 'date of registration',
+            # Ration / family
+            'card id', 'card type', 'household', 'member #',
+            'fps name', 'e-kyc', 'id mask',
+            # Vehicle
+            'plate no', 'vehicle_number', 'engine no', 'chassis',
+            'rto', 'registration_date', 'insurer',
+            # Telegram
+            'telegram id', 'telegram_id',
+            # IntelX header message — signals data comes in next message(s)
+            'breached:', '🔎request:', 'subjects made:',
+            'number of results:', 'number of leaks:', 'search time:',
+        ]
+        if any(sig in text_lower for sig in universal_valid):
+            return True
+
+        # ── Block-char masked data (█) with minimum context ─────────────────
+        if '█' in text and len(text.strip()) >= 30:
+            return True
+
+        # ── JSON array with objects containing data fields ───────────────────
+        if text_lower.count('": ') >= 2 or text_lower.count('"mobile"') >= 1:
+            return True
+
+        # ── Fallback to VALIDITY_TYPES config ───────────────────────────────
+        cmd_info     = SEARCH_COMMANDS.get(search_type, {})
+        validity_key = cmd_info.get("validity_type", "generic")
+        vtype        = VALIDITY_TYPES.get(validity_key, VALIDITY_TYPES["generic"])
+        required     = vtype.get("required_any", [])
+        min_fields   = vtype.get("min_fields", 0)
 
         if not required and min_fields == 0:
-            # Generic: just needs any cleaned content
             return len(text.strip()) >= 20
 
-        text_lower = text.lower()
-        matched = sum(1 for field in required if field in text_lower)
-        return matched >= min_fields
+        matched = sum(1 for field in required if field.lower() in text_lower)
+        return matched >= max(min_fields, 1)
 
     @staticmethod
     def mask_result(text: str) -> str:
@@ -5101,7 +5243,7 @@ class SearchEngine:
                     if not text or len(text.strip()) < 5:
                         continue
 
-                    search_type = search_info.get("search_type", "")
+                    search_type    = search_info.get("search_type", "")
                     pending_encorex = bool(search_info.get("pending_encorex"))
 
                     # ─────────────────────────────────────────────────────────────
@@ -5140,6 +5282,7 @@ class SearchEngine:
                         '"circle":', '"country":', '"email":', '"alt":',
                         '"dob":', '"gender":', '"operator":', '"telecom":',
                         '"state":', '"district":', '"uid":', '"pan":',
+                        '"father_name":', '"alt_mobile":', '"id_number":',
                         'name:', 'mobile:', 'number:', 'address:',
                         'operator:', 'circle:', 'state:', 'dob:',
                     ]
@@ -5163,8 +5306,7 @@ class SearchEngine:
                         '✅ result', '✅ found', '✅ success',
                         'name :', 'mobile :', 'address :',
                         'result :', 'info :', 'details :',
-                        '━━━━', '────', '═══',
-                        '║', '╔', '╚',
+                        '━━━━', '────', '═══', '║', '╔', '╚',
                     ]
                     universal_match = (
                         len(text.strip()) >= 20
@@ -5177,6 +5319,24 @@ class SearchEngine:
                         and not TextProcessor.is_processing_message(text)
                     )
 
+                    # G) IntelX / hiteckgroop multi-message pattern ──────────────
+                    # Matches ALL 3 IntelX message types:
+                    #   Msg 1: "Breached: 🔎Request: 91xxx\n📁Number of results: N"
+                    #   Msg 2: masked data with 📞Telephone / 🏘️Adres / 👤Full name
+                    #   Msg 3: "😲 Your subscription is over!" (footer — ignore but don't block)
+                    intelx_signals = [
+                        'breached:', '🔎request:', 'subjects made:',
+                        'number of results:', 'number of leaks:', 'search time:',
+                        'telephone', 'adres', 'full name',
+                        'the name of the father', 'region',
+                        'hiteckgroop', 'hiteck',
+                        'encrypted password', 'date of registration',
+                    ]
+                    is_intelx_message = any(sig in text_lower for sig in intelx_signals)
+
+                    # Block-char masked data — always a valid result
+                    has_masked_data = '█' in text and len(text.strip()) >= 30
+
                     matched = (
                         query_in_message
                         or pending_any_result
@@ -5184,6 +5344,8 @@ class SearchEngine:
                         or looks_like_result
                         or universal_match
                         or large_message_result
+                        or is_intelx_message
+                        or has_masked_data
                     )
 
                     if matched:
@@ -5191,10 +5353,10 @@ class SearchEngine:
                             f"📨 Candidate result in {search_info['group']['name']} "
                             f"(query={query_in_message}, pending={pending_any_result}, "
                             f"encorex={is_encorex_osint_result}, json={looks_like_result}, "
-                            f"universal={universal_match}, large={large_message_result})"
+                            f"universal={universal_match}, large={large_message_result}, "
+                            f"intelx={is_intelx_message}, masked={has_masked_data})"
                         )
                         await self._process_search_response(search_id, search_info, message)
-                        # For multi-collect, keep iterating to catch all results
                         if not search_info.get("multi_collect"):
                             return
 
@@ -5345,22 +5507,101 @@ class SearchEngine:
                 return
             
             if TextProcessor.is_processing_message(text):
-                logger.info(f"⏳ Placeholder/confirmation message detected — waiting for real result: {text[:80]!r}")
-                # Extend the search deadline so we don't time out while waiting
+                logger.info(f"⏳ Placeholder/confirmation detected — waiting for real result: {text[:80]!r}")
                 if not search_info.get("pending_encorex"):
                     search_info["pending_encorex"]    = True
                     search_info["encorex_wait_start"] = time.time()
                 return
-            
-            # ── No-info / result decision ─────────────────────────────────
+
+            # ── IntelX multi-message accumulation ─────────────────────────────
+            # IntelX sends 3 separate messages:
+            #   Msg 1: summary header ("Breached: 🔎Request: ...")  → NOT the data
+            #   Msg 2: masked data lines (Telephone, Adres, Full name, ...)  → DATA
+            #   Msg 3: "Your subscription is over!" footer  → ignore/skip
+            text_lower_ps = text.lower()
+
+            intelx_footer_only = any(sig in text_lower_ps for sig in [
+                'subscription is over', 'trial period lasted',
+                '/shop', '/referral', '/mirrors',
+                'buying a subscription reduces',
+            ])
+            intelx_header_only = any(sig in text_lower_ps for sig in [
+                'breached:', '🔎request:', 'subjects made:',
+                'number of results:', 'number of leaks:', 'search time:',
+                'free version of the bot', 'mirror',
+            ]) and '█' not in text  # header has no masked data
+
+            if intelx_footer_only:
+                # Footer message — the actual data was (or will be) a separate message
+                # If we already have accumulated data, resolve now
+                accumulated = search_info.get("intelx_accumulated", "")
+                if accumulated and search_id in self.active_searches:
+                    logger.info(f"✅ IntelX footer received — resolving with accumulated data")
+                    result = await self._process_text(accumulated, search_info)
+                    future = self.active_searches[search_id]["future"]
+                    if not future.done():
+                        future.set_result(result)
+                    del self.active_searches[search_id]
+                else:
+                    # Footer arrived but no data yet — keep waiting briefly
+                    logger.info(f"⏭️ IntelX footer — no data yet, keep waiting")
+                    if not search_info.get("pending_encorex"):
+                        search_info["pending_encorex"]    = True
+                        search_info["encorex_wait_start"] = time.time()
+                return
+
+            if intelx_header_only:
+                # Header message — mark that IntelX data is coming next
+                logger.info(f"📋 IntelX header received — data message(s) expected next")
+                search_info["intelx_pending"]     = True
+                search_info["intelx_accumulated"] = ""
+                if not search_info.get("pending_encorex"):
+                    search_info["pending_encorex"]    = True
+                    search_info["encorex_wait_start"] = time.time()
+                return
+
+            # If this looks like IntelX masked data, accumulate it
+            is_intelx_data = (
+                '█' in text
+                or any(sig in text_lower_ps for sig in [
+                    'telephone', 'adres', 'full name',
+                    'the name of the father', 'region',
+                    'encrypted password', 'date of registration',
+                ])
+            )
+            if is_intelx_data and search_info.get("intelx_pending"):
+                prev = search_info.get("intelx_accumulated", "")
+                search_info["intelx_accumulated"] = (prev + "\n\n" + text).strip()
+                logger.info(
+                    f"📥 IntelX data chunk accumulated "
+                    f"({len(search_info['intelx_accumulated'])} chars total)"
+                )
+                # Don't resolve yet — more chunks or the footer may follow
+                # But extend wait window so we don't time out
+                if not search_info.get("pending_encorex"):
+                    search_info["pending_encorex"]    = True
+                    search_info["encorex_wait_start"] = time.time()
+                return
+
+            # ── No-info / result decision ──────────────────────────────────────
             came_after_scan = search_info.pop("_came_after_scan", False)
 
-            if TextProcessor.is_no_info_message(text) and not came_after_scan:
-                logger.info(f"🚫 No-info message (came_after_scan={came_after_scan})")
+            # Check if we have accumulated IntelX data to use instead
+            accumulated_intelx = search_info.get("intelx_accumulated", "")
+            if accumulated_intelx and TextProcessor.is_no_info_message(text):
+                logger.info(f"✅ Using accumulated IntelX data instead of no-info message")
+                result = await self._process_text(accumulated_intelx, search_info)
+            elif TextProcessor.is_no_info_message(text) and not came_after_scan:
+                logger.info(f"🚫 No-info message")
                 result = {"success": False}
             elif text and len(text.strip()) > 10:
-                logger.info(f"📝 Processing text response (came_after_scan={came_after_scan})")
-                result = await self._process_text(text, search_info)
+                # If we have IntelX accumulated data AND new data, merge them
+                if accumulated_intelx and is_intelx_data:
+                    merged = accumulated_intelx
+                    logger.info(f"📝 Using accumulated IntelX data ({len(merged)} chars)")
+                else:
+                    merged = text
+                result = await self._process_text(merged, search_info)
             else:
                 logger.info(f"⚠️ Empty or short message, ignoring")
                 return
@@ -6540,31 +6781,61 @@ export_data_storage = {}
 
 @bot_client.on(events.NewMessage(pattern=r'/start(?: (.+))?'))
 async def start_handler(event):
-    """Premium start handler"""
+    """Premium start handler — force-join checked for ALL users before anything else."""
     try:
         user = await event.get_sender()
         user_id = user.id
         referral_code = event.pattern_match.group(1)
-        
-        # Check if user is banned
+
+        # ── STEP 1: Force-join check — runs for EVERY user, new or returning ──
+        # Must happen before creating user or showing menu.
+        if FORCE_JOIN_CHANNELS:
+            missing = await check_force_join(user_id)
+            if missing:
+                ch_lines = "\n".join(
+                    "  ▸ " + (ch.get("title") or ch.get("username", ""))
+                    for ch in missing
+                )
+                msg = (
+                    "👋 **Welcome to DarkBoxes Intelligence!**\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                    "Before you can use this bot, please join our\n"
+                    "official channel(s):\n\n"
+                    + ch_lines +
+                    "\n\n"
+                    "Tap the button(s) below to join, then tap\n"
+                    "**✅ I've Joined — Verify & Continue**"
+                )
+                await event.respond(
+                    msg,
+                    buttons=_build_join_keyboard(missing),
+                    parse_mode="md"
+                )
+                return  # stop here — do not create user or show menu
+
+        # ── STEP 2: Ban check ─────────────────────────────────────────────────
         user_doc = await db_manager.get_user(user_id)
         if user_doc and user_doc.get('is_banned'):
-            await event.respond("🚫 Your account has been banned. Contact @darkboxesAdmin for assistance.")
+            await event.respond(
+                "🚫 **Account Suspended**\n\n"
+                "Your account has been suspended.\n"
+                "Contact @darkboxesAdmin if you believe this is a mistake.",
+                parse_mode="md"
+            )
             return
-        
-        # Get or create user
+
+        # ── STEP 3: Create user if new ────────────────────────────────────────
         if not user_doc:
             await db_manager.create_user(user_id, user.username, user.first_name, referral_code)
             user_doc = await db_manager.get_user(user_id)
-            
-            # Handle referral
+
             if referral_code and referral_code.isdigit():
                 referrer_id = int(referral_code)
                 referrer = await db_manager.get_user(referrer_id)
                 if referrer:
                     await db_manager.add_referral_credit(referrer_id, config.REFERRAL_REWARD)
 
-            # ── Auto-create client account & send credentials ──────────────
+            # Auto-create client account and send credentials
             try:
                 import secrets as _sec, hashlib as _hl
                 loop = asyncio.get_running_loop()
@@ -6573,58 +6844,49 @@ async def start_handler(event):
                 )
                 if not existing_acc:
                     auto_pass = _sec.token_urlsafe(10)
-                    acc_id = f"DB{_sec.token_hex(4).upper()}"
-                    pwd_hash = _hl.sha256(auto_pass.encode()).hexdigest()
-                    new_acc = {
+                    acc_id    = f"DB{_sec.token_hex(4).upper()}"
+                    pwd_hash  = _hl.sha256(auto_pass.encode()).hexdigest()
+                    new_acc   = {
                         "account_id": acc_id,
-                        "telegram_user_id": user_id,  # explicit field for easy lookup
+                        "telegram_user_id": user_id,
                         "username": (user.username or "").lower() or acc_id.lower(),
                         "display_name": user.first_name or "User",
                         "password_hash": pwd_hash,
                         "linked_tg_ids": [user_id],
                         "created_at": datetime.now(timezone.utc).isoformat(),
                         "searches_remaining": config.NEW_USER_CREDITS,
-                        "subscription": None,
-                        "subscription_expiry": None,
-                        "is_banned": False,
-                        "total_searches": 0,
-                        "source": "telegram_start"
+                        "subscription": None, "subscription_expiry": None,
+                        "is_banned": False, "total_searches": 0,
+                        "source": "telegram_start",
                     }
-                    await loop.run_in_executor(
-                        None, lambda: db_manager.db.accounts.insert_one(new_acc)
-                    )
-                    # Also store account_id in users collection for cross-reference
+                    await loop.run_in_executor(None, lambda: db_manager.db.accounts.insert_one(new_acc))
                     await loop.run_in_executor(
                         None, lambda: db_manager.db.users.update_one(
-                            {"user_id": user_id},
-                            {"$set": {"client_account_id": acc_id}}
+                            {"user_id": user_id}, {"$set": {"client_account_id": acc_id}}
                         )
                     )
                     await bot_client.send_message(
                         user_id,
-                        f"🎉 **WELCOME TO DARKBOXES!**\n\n"
-                        f"Your client account has been automatically created.\n\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                        f"🆔 **Account ID:** `{acc_id}`\n"
-                        f"🔐 **Password:** `{auto_pass}`\n"
-                        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                        f"⚠️ **Save these now** — this is the only time your password will be shown.\n\n"
-                        f"Use these to log into the terminal client (`darkboxes_client.py`).\n"
-                        f"If you ever forget your password, contact @darkboxesAdmin.\n\n"
-                        f"🔒 Never share your password with anyone.",
+                        "🎉 **Welcome to DarkBoxes!**\n\n"
+                        "Your account has been created automatically.\n\n"
+                        "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                        "🆔 **Account ID:** `" + acc_id + "`\n"
+                        "🔐 **Password:**   `" + auto_pass + "`\n"
+                        "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                        "⚠️ **Save this now** — password shown only once.\n"
+                        "🔒 Never share your password with anyone.",
                         parse_mode="md"
                     )
             except Exception as _ce:
-                logger.error(f"❌ Auto account creation on /start failed: {_ce}")
+                logger.error(f"Auto account creation failed: {_ce}")
         else:
-            # Returning user — ensure account is still linked (in case it was created separately)
+            # Returning user — sync account link
             try:
                 loop = asyncio.get_running_loop()
                 existing_acc = await loop.run_in_executor(
                     None, lambda: db_manager.db.accounts.find_one({"linked_tg_ids": user_id})
                 )
                 if existing_acc:
-                    # Ensure telegram_user_id field is set and users collection has account_id
                     await loop.run_in_executor(
                         None, lambda: db_manager.db.accounts.update_one(
                             {"_id": existing_acc["_id"]},
@@ -6639,15 +6901,11 @@ async def start_handler(event):
                         )
                     )
             except Exception as _le:
-                logger.warning(f"Could not sync account link on /start for user {user_id}: {_le}")
-        
-        is_admin = admin_panel.is_admin(user_id) if admin_panel else (user_id == config.ADMIN_USER_ID)
-        
-        # Send welcome message
+                logger.warning(f"Account sync failed on /start for {user_id}: {_le}")
+
+        # ── STEP 4: Show welcome menu ─────────────────────────────────────────
+        is_admin     = admin_panel.is_admin(user_id) if admin_panel else (user_id == config.ADMIN_USER_ID)
         welcome_text = PremiumFormatter.format_welcome(user.first_name, user_doc)
-        
-        # Get keyboard - ONE COMMAND PER LINE
-        # Load disabled buttons from DB
         try:
             _dis_doc = await asyncio.get_running_loop().run_in_executor(
                 None, lambda: db_manager.db.settings.find_one({"_id": "disabled_buttons"})
