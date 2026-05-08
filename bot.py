@@ -277,13 +277,10 @@ GROUP_PRIORITIES = {
     "primary": {
         "name": "⚡ Premium Database",
         "identifier": -1003320004816,
-        "timeout": 25,
+        "timeout": 45,
         "weight": 10,
         "enabled": True,
         "entity": None,
-        # Per-group command override: maps search_type → command string.
-        # If a search_type is NOT listed here, the first entry from
-        # SEARCH_COMMANDS[type]["commands"] is used as fallback.
         "commands": {
             "phone":   "/num",
             "family":  "/familyinfo",
@@ -300,7 +297,7 @@ GROUP_PRIORITIES = {
     "secondary": {
         "name": "🌐 IntelX Network",
         "identifier": "@Ethicalosinterr_bot",
-        "timeout": 25,
+        "timeout": 45,
         "weight": 7,
         "enabled": True,
         "entity": None,
@@ -320,7 +317,7 @@ GROUP_PRIORITIES = {
     "tertiary": {
         "name": "🔍 Basic Database",
         "identifier": "EncoreXgroup",
-        "timeout": 25,
+        "timeout": 45,
         "weight": 5,
         "enabled": True,
         "entity": None,
@@ -339,8 +336,8 @@ GROUP_PRIORITIES = {
     },
     "advanced": {
         "name": "🚀 Advanced OSINT Engine",
-        "identifier": "RAJIV_THE_LOOKUP_HUB",  # Replace with your advanced group ID
-        "timeout": 20,
+        "identifier": "RAJIV_THE_LOOKUP_HUB",
+        "timeout": 35,
         "weight": 15,
         "enabled": True,
         "entity": None,
@@ -875,8 +872,10 @@ class TextProcessor:
             # Result frames
             '✅ success', '║  ✅', 'encorex osint', 'encorex intelx',
             '╔═══《', '╘══《',
-            # Record separators
+            # Record-style headers from various group bots
             'record #', '━━━', '═══', '▬▬▬',
+            # "NUMBER TO DETAILS:" style headers
+            'number to details', 'details:', 'result:', 'data:',
             # IntelX header lines — these mean real data is coming next
             'breached:', '🔎request:', 'subjects made:',
             'number of results:', 'number of leaks:', 'search time:',
@@ -987,8 +986,8 @@ class TextProcessor:
             'region', 'hiteckgroop', 'hiteck',
             # 1Win / leak format
             'encrypted password', 'date of registration',
-            # Block-char masked data
-            '█',
+            # "NUMBER TO DETAILS:" style group headers — data follows
+            'number to details', 'details :', 'result :', 'data :',
             # Result frames
             '✅ success', '✅ found', '╔═══《', 'encorex osint', 'encorex intelx',
             # Record separators
@@ -1190,8 +1189,8 @@ class TextProcessor:
             'rto', 'registration_date', 'insurer',
             # Telegram
             'telegram id', 'telegram_id',
-            # IntelX header message — signals data comes in next message(s)
-            'breached:', '🔎request:', 'subjects made:',
+            # "NUMBER TO DETAILS:" / other group-specific headers
+            'number to details',
             'number of results:', 'number of leaks:', 'search time:',
         ]
         if any(sig in text_lower for sig in universal_valid):
@@ -5319,11 +5318,7 @@ class SearchEngine:
                         and not TextProcessor.is_processing_message(text)
                     )
 
-                    # G) IntelX / hiteckgroop multi-message pattern ──────────────
-                    # Matches ALL 3 IntelX message types:
-                    #   Msg 1: "Breached: 🔎Request: 91xxx\n📁Number of results: N"
-                    #   Msg 2: masked data with 📞Telephone / 🏘️Adres / 👤Full name
-                    #   Msg 3: "😲 Your subscription is over!" (footer — ignore but don't block)
+                    # G) IntelX / hiteckgroop / NUMBER TO DETAILS multi-message pattern
                     intelx_signals = [
                         'breached:', '🔎request:', 'subjects made:',
                         'number of results:', 'number of leaks:', 'search time:',
@@ -5331,6 +5326,9 @@ class SearchEngine:
                         'the name of the father', 'region',
                         'hiteckgroop', 'hiteck',
                         'encrypted password', 'date of registration',
+                        # "NUMBER TO DETAILS:" format from third group
+                        'number to details',
+                        '"father_name":', '"alt_mobile":', '"id_number":',
                     ]
                     is_intelx_message = any(sig in text_lower for sig in intelx_signals)
 
