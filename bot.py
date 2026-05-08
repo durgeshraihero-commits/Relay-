@@ -5287,6 +5287,19 @@ class SearchEngine:
                         if not search_info.get("multi_collect") and not has_pending_basic_db:
                             return
             
+            # ── Priority 1.5: Edited IntelX paginated message ──────────────
+            # The IntelX bot paginates by editing its own message in-place.
+            # Route edited messages back to the right search via message_id.
+            incoming_msg_id = getattr(message, "id", None)
+            if incoming_msg_id:
+                for _sid, _sinfo in list(self.active_searches.items()):
+                    if _sinfo.get("intelx_paged_msg_id") == incoming_msg_id:
+                        logger.info(
+                            f"⏭️ IntelX edited page matched (msg_id={incoming_msg_id}) — routing"
+                        )
+                        await self._process_search_response(_sid, _sinfo, message)
+                        break
+
             # ── Priority 2: Any message in the same chat ──────────────────────
             for search_id, search_info in list(self.active_searches.items()):
                 try:
@@ -5437,17 +5450,25 @@ class SearchEngine:
                         and not TextProcessor.is_processing_message(text)
                     )
 
-                    matched = (
-                        query_in_message
-                        or pending_any_result
-                        or is_encorex_osint_result
-                        or looks_like_result
-                        or universal_match
-                        or large_message_result
-                        or is_intelx_message
-                        or has_masked_data
-                        or is_basic_db_match
-                    )
+                    # For basic_db group, ONLY accept if our exact query is present.
+                    # All the broad universal matchers (looks_like_result,
+                    # universal_match, large_message_result, is_intelx_message,
+                    # has_masked_data) would match OTHER users' results posted in
+                    # the shared group. Strict query-match keeps us from stealing
+                    # someone else's result.
+                    if search_info.get("basic_db"):
+                        matched = is_basic_db_match
+                    else:
+                        matched = (
+                            query_in_message
+                            or pending_any_result
+                            or is_encorex_osint_result
+                            or looks_like_result
+                            or universal_match
+                            or large_message_result
+                            or is_intelx_message
+                            or has_masked_data
+                        )
 
                     if matched:
                         logger.info(
@@ -5691,44 +5712,63 @@ class SearchEngine:
                     f"📥 IntelX data chunk accumulated "
                     f"({len(search_info['intelx_accumulated'])} chars total)"
                 )
-                # ── IntelX inline keyboard pagination ─────────────────
-                # The IntelX bot sends results page-by-page with a ➡️ Next button.
-                # When that button is present, click it to collect all result pages
-                # before resolving. Each page is accumulated into intelx_accumulated.
+                # ── IntelX inline keyboard pagination (edit-based) ───────
+                # The IntelX bot paginates by EDITING its own message in-place.
+                # Each edit replaces the text with the next result page.
+                # We track the bot's message_id; MessageEdited events re-enter
+                # this handler.  When the edited message no longer has a ➡️ button
+                # (last page), we stop accumulating and let the footer resolve us.
                 try:
-                    msg_buttons = getattr(message, "buttons", None)
-                    if msg_buttons:
-                        next_btn = None
-                        for row in msg_buttons:
+                    msg_id  = getattr(message, "id", None)
+                    buttons = getattr(message, "buttons", None)
+                    has_next = False
+                    if buttons:
+                        for row in buttons:
                             for btn in row:
                                 btn_text = getattr(btn, "text", "") or ""
-                                # Match ➡, ➡️, "Next", or → arrow shapes
                                 if any(arrow in btn_text for arrow in ("➡", "→", "Next", "next")):
-                                    next_btn = btn
+                                    has_next = True
                                     break
-                            if next_btn:
+                            if has_next:
                                 break
-                        if next_btn:
-                            logger.info(
-                                f"⏭️ IntelX pagination — clicking '{next_btn.text}' "
-                                f"for next result page"
-                            )
-                            try:
-                                await next_btn.click()
-                            except Exception as _click_err:
-                                logger.warning(f"⚠️ IntelX next-button click error: {_click_err}")
-                            # Extend wait so the next page has time to arrive
-                            search_info["pending_encorex"]    = True
-                            search_info["encorex_wait_start"] = time.time()
-                            return  # wait for the next page message to arrive
+                    # Record this message's id so edits are matched back here
+                    if msg_id and not search_info.get("intelx_paged_msg_id"):
+                        search_info["intelx_paged_msg_id"] = msg_id
+                    if has_next:
+                        # More pages coming via future edits — keep waiting
+                        logger.info(
+                            f"⏭️ IntelX page received (msg_id={msg_id}) — "
+                            f"➡️ button present, waiting for next edit"
+                        )
+                        search_info["pending_encorex"]    = True
+                        search_info["encorex_wait_start"] = time.time()
+                        return  # wait for the next edited message
+                    else:
+                        # No ➡️ button — this is the final page; fall through to resolve
+                        logger.info(
+                            f"✅ IntelX final page received (msg_id={msg_id}) — "
+                            f"no more pages, resolving with accumulated data"
+                        )
                 except Exception as _btn_err:
                     logger.warning(f"⚠️ IntelX pagination check failed: {_btn_err}")
-                # ── End pagination ───────────────────────────────
-                # Don't resolve yet — more chunks or the footer may follow
-                # But extend wait window so we don't time out
-                if not search_info.get("pending_encorex"):
-                    search_info["pending_encorex"]    = True
-                    search_info["encorex_wait_start"] = time.time()
+                # ── End pagination ─────────────────────────────
+                # Final page (or no pagination): resolve immediately with all accumulated data
+                all_data = search_info.get("intelx_accumulated", "")
+                if all_data and search_id in self.active_searches:
+                    logger.info(
+                        f"✅ IntelX all pages collected — resolving "
+                        f"({len(all_data)} chars)"
+                    )
+                    result = await self._process_text(all_data, search_info)
+                    future = self.active_searches[search_id]["future"]
+                    if not future.done():
+                        future.set_result(result)
+                    del self.active_searches[search_id]
+                else:
+                    # No accumulated data yet — keep waiting
+                    if not search_info.get("pending_encorex"):
+                        search_info["pending_encorex"]    = True
+                        search_info["encorex_wait_start"] = time.time()
                 return
 
             # ── No-info / result decision ──────────────────────────────────────
