@@ -5437,15 +5437,33 @@ class SearchEngine:
                     # NOTE: query may appear inside JSON quotes e.g. "9939608735"
                     # so we strip non-alphanumeric chars for comparison too.
                     _query_digits = re.sub(r'\D', '', query)  # digits only for phone
-                    _text_nodots  = re.sub(r'["\'\s]', '', text_lower)  # strip quotes/spaces
-                    _query_in_stripped = bool(_query_digits and len(_query_digits) >= 6
-                                              and _query_digits in _text_nodots)
+                    # ── EXACT match only for Basic DB to avoid picking up other
+                    # users' results in the shared group.
+                    # We require the query (or its digit-only form) to appear as a
+                    # whole token — surrounded by non-alphanumeric chars — so that
+                    # query "9876543210" does NOT match "98765432101234" posted by
+                    # a different user.
+                    def _exact_token_match(needle: str, haystack: str) -> bool:
+                        """True only if needle appears as a whole word/token in haystack."""
+                        if not needle or len(needle) < 3:
+                            return False
+                        # Use word-boundary pattern for alphanumeric tokens
+                        pattern = r'(?<![0-9a-zA-Z])' + re.escape(needle) + r'(?![0-9a-zA-Z])'
+                        return bool(re.search(pattern, haystack, re.IGNORECASE))
+
+                    _query_exact        = _exact_token_match(query, text_lower)
+                    _query_digits_exact = (
+                        bool(_query_digits)
+                        and len(_query_digits) >= 6
+                        and _exact_token_match(_query_digits, re.sub(r'["\'\s]', '', text_lower))
+                    )
+                    _query_in_stripped = _query_digits_exact  # keep name for compat
                     is_basic_db_match = (
                         search_info.get("basic_db")
                         and not getattr(message, 'out', False)
                         and query
                         and len(query) >= 3
-                        and (query in text_lower or _query_in_stripped)
+                        and (_query_exact or _query_digits_exact)
                         and len(text.strip()) >= 10
                         and not TextProcessor.is_processing_message(text)
                     )
@@ -5712,52 +5730,75 @@ class SearchEngine:
                     f"📥 IntelX data chunk accumulated "
                     f"({len(search_info['intelx_accumulated'])} chars total)"
                 )
-                # ── IntelX inline keyboard pagination (edit-based) ───────
-                # The IntelX bot paginates by EDITING its own message in-place.
-                # Each edit replaces the text with the next result page.
-                # We track the bot's message_id; MessageEdited events re-enter
-                # this handler.  When the edited message no longer has a ➡️ button
-                # (last page), we stop accumulating and let the footer resolve us.
+                # ── IntelX inline keyboard pagination (CLICK-based) ─────────
+                # IntelX paginates by showing a ➡️ inline button that MUST be
+                # clicked to reveal the next result.  It does NOT auto-edit.
+                # We click the button via the user_client so IntelX sends a NEW
+                # message (or edits the existing one) with the next page.
+                # We keep clicking until no ➡️ button is present, then resolve.
                 try:
                     msg_id  = getattr(message, "id", None)
                     buttons = getattr(message, "buttons", None)
-                    has_next = False
+                    has_next     = False
+                    next_btn_idx = None   # (row, col) of the ➡️ button
+
                     if buttons:
-                        for row in buttons:
-                            for btn in row:
+                        for ri, row in enumerate(buttons):
+                            for ci, btn in enumerate(row):
                                 btn_text = getattr(btn, "text", "") or ""
-                                if any(arrow in btn_text for arrow in ("➡", "→", "Next", "next")):
-                                    has_next = True
+                                if any(arrow in btn_text for arrow in ("➡", "→", "Next", "next", "▶")):
+                                    has_next     = True
+                                    next_btn_idx = (ri, ci)
                                     break
                             if has_next:
                                 break
-                    # Record this message's id so edits are matched back here
+
+                    # Record this message's id so any follow-up edit/message
+                    # is routed back to this search.
                     if msg_id and not search_info.get("intelx_paged_msg_id"):
                         search_info["intelx_paged_msg_id"] = msg_id
+
                     if has_next:
-                        # More pages coming via future edits — keep waiting
                         logger.info(
                             f"⏭️ IntelX page received (msg_id={msg_id}) — "
-                            f"➡️ button present, waiting for next edit"
+                            f"➡️ button found at {next_btn_idx}, clicking it now"
                         )
+                        # Click the button so IntelX sends the next result page
+                        try:
+                            await message.click(next_btn_idx[0], next_btn_idx[1])
+                            logger.info(f"✅ IntelX ➡️ button clicked successfully")
+                        except Exception as _click_err:
+                            logger.warning(f"⚠️ IntelX button click failed: {_click_err} — will try message.click(data)")
+                            # Fallback: try clicking by button data directly
+                            try:
+                                if buttons and next_btn_idx:
+                                    ri, ci = next_btn_idx
+                                    btn_data = getattr(buttons[ri][ci], "data", None)
+                                    if btn_data:
+                                        await message.click(data=btn_data)
+                                        logger.info(f"✅ IntelX button clicked via data fallback")
+                            except Exception as _click_err2:
+                                logger.warning(f"⚠️ IntelX button click fallback also failed: {_click_err2}")
+
+                        # Extend the deadline to allow the next page to arrive
                         search_info["pending_encorex"]    = True
                         search_info["encorex_wait_start"] = time.time()
-                        return  # wait for the next edited message
+                        return  # wait for next message / edit from IntelX
                     else:
                         # No ➡️ button — this is the final page; fall through to resolve
                         logger.info(
                             f"✅ IntelX final page received (msg_id={msg_id}) — "
-                            f"no more pages, resolving with accumulated data"
+                            f"no more pages, resolving with all accumulated data"
                         )
                 except Exception as _btn_err:
                     logger.warning(f"⚠️ IntelX pagination check failed: {_btn_err}")
-                # ── End pagination ─────────────────────────────
-                # Final page (or no pagination): resolve immediately with all accumulated data
+                # ── End pagination ─────────────────────────────────────────────
+                # Final page (or pagination disabled): resolve with all collected data
                 all_data = search_info.get("intelx_accumulated", "")
                 if all_data and search_id in self.active_searches:
                     logger.info(
                         f"✅ IntelX all pages collected — resolving "
-                        f"({len(all_data)} chars)"
+                        f"({len(all_data)} chars, pages accumulated)"
                     )
                     result = await self._process_text(all_data, search_info)
                     future = self.active_searches[search_id]["future"]
