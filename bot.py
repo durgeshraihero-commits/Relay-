@@ -317,10 +317,12 @@ GROUP_PRIORITIES = {
     "tertiary": {
         "name": "🔍 Basic Database",
         "identifier": "EncoreXgroup",
-        "timeout": 45,
+        "timeout": 10,           # Basic DB: only wait 10s for group replies
         "weight": 5,
         "enabled": True,
         "entity": None,
+        "basic_db": True,        # ← SPECIAL: replies go to group, not to our account
+        "basic_db_wait": 10,     # seconds to monitor the group for matching replies
         "commands": {
             "phone":   "/num",
             "family":  "/family",
@@ -4814,15 +4816,24 @@ class SearchEngine:
     ) -> Dict:
         """Send a search command to ONE group and wait for its reply.
 
+        BASIC DB SPECIAL MODE (group["basic_db"] == True):
+          The Basic Database group (EncoreXgroup) does NOT reply to our user
+          account directly — instead its bot posts replies inside the group.
+          For this group we:
+            1. Send the command to the group
+            2. Monitor ALL incoming messages in that group for up to
+               `basic_db_wait` seconds (default 10)
+            3. Accept any message whose text contains the user's query AND
+               passes the validity check as a valid result
+
         Returns a result dict with at least {"success": bool}.
-        This coroutine is meant to be run in parallel with other groups via
-        asyncio.gather / asyncio.wait so all groups are queried simultaneously.
+        This coroutine is run in parallel with other groups via asyncio.gather.
         """
         SCAN_EXTRA_WAIT = 20   # seconds grace after a scanning placeholder
         POLL_INTERVAL   = 0.25
+        is_basic_db     = bool(group.get("basic_db"))
 
         command = self._get_group_command(group, search_type)
-        # Build message: if command is None/"" send raw query (no command prefix)
         outgoing_text = f"{command} {query}".strip() if command else query
 
         try:
@@ -4832,39 +4843,72 @@ class SearchEngine:
             self._update_group_performance(group["name"], False)
             return {"success": False}
 
-        search_id = f"{user_id}_{int(time.time() * 1000)}_{group['name']}"
-        future = asyncio.get_running_loop().create_future()
+        logger.info(f"📤 [{group['name']}] Sent: {outgoing_text!r} (basic_db={is_basic_db})")
+
+        search_id     = f"{user_id}_{int(time.time() * 1000)}_{group['name']}"
+        future        = asyncio.get_running_loop().create_future()
         collect_until = time.time() + multi_collect_window if is_multi_collect else None
+        wait_secs     = group.get("basic_db_wait", 10) if is_basic_db else group["timeout"]
 
         self.active_searches[search_id] = {
-            "user_id":       user_id,
-            "future":        future,
-            "start_time":    time.time(),
-            "group":         group,
-            "message_id":    sent_msg.id,
-            "search_type":   search_type,
-            "query":         query,
-            "chat_id":       group["entity"].id if hasattr(group["entity"], "id") else str(group["entity"]),
+            "user_id":        user_id,
+            "future":         future,
+            "start_time":     time.time(),
+            "group":          group,
+            "message_id":     sent_msg.id,
+            "search_type":    search_type,
+            "query":          query,
+            "chat_id":        group["entity"].id if hasattr(group["entity"], "id") else str(group["entity"]),
             "expecting_file": False,
             "file_wait_start": None,
-            "priority":      group["weight"],
-            "multi_collect": is_multi_collect,
-            "candidates":    [],
-            "collect_until": collect_until,
+            "priority":       group["weight"],
+            "multi_collect":  is_multi_collect,
+            "candidates":     [],
+            "collect_until":  collect_until,
+            # Basic DB flags
+            "basic_db":       is_basic_db,
+            "basic_db_found": False,
         }
-        # Safety net: always remove this entry after 120s regardless
         asyncio.create_task(self._auto_cleanup(search_id))
 
-        deadline  = time.time() + group["timeout"]
+        # ── BASIC DB: poll the group — handle_incoming_message matches replies ─
+        if is_basic_db:
+            deadline = time.time() + wait_secs
+            result   = None
+            logger.info(f"🔍 [{group['name']}] Basic DB mode — watching group for {wait_secs}s")
+
+            while time.time() < deadline:
+                if future.done():
+                    try:
+                        result = future.result()
+                    except Exception:
+                        result = {"success": False}
+                    break
+                await asyncio.sleep(POLL_INTERVAL)
+
+            entry = self.active_searches.pop(search_id, None)
+            if entry and not future.done():
+                future.cancel()
+
+            if result and result.get("success"):
+                self._update_group_performance(group["name"], True)
+                logger.info(f"✅ [{group['name']}] Basic DB valid result")
+                return result
+            else:
+                self._update_group_performance(group["name"], False)
+                logger.info(f"⏱️ [{group['name']}] Basic DB — no result in {wait_secs}s")
+                return {"success": False}
+
+        # ── NORMAL groups: wait for direct reply or matching message ──────────
+        deadline  = time.time() + wait_secs
         result    = None
         timed_out = False
 
         while True:
             now = time.time()
 
-            # ── Multi-collect: once window closes, pick best candidate ────────
             if is_multi_collect:
-                search_ref = self.active_searches.get(search_id, {})
+                search_ref  = self.active_searches.get(search_id, {})
                 collect_end = search_ref.get("collect_until", 0)
                 if collect_end and now >= collect_end:
                     candidates = search_ref.get("candidates", [])
@@ -4880,7 +4924,6 @@ class SearchEngine:
                         timed_out = True
                     break
 
-            # ── Normal: future resolved by handle_incoming_message ────────────
             if future.done():
                 try:
                     result = future.result()
@@ -4888,7 +4931,6 @@ class SearchEngine:
                     result = {"success": False}
                 break
 
-            # ── Extend deadline when a scanning placeholder was seen ──────────
             search_ref = self.active_searches.get(search_id, {})
             if search_ref.get("pending_encorex"):
                 scan_start = search_ref.get("encorex_wait_start", now)
@@ -4903,7 +4945,6 @@ class SearchEngine:
 
             await asyncio.sleep(POLL_INTERVAL)
 
-        # Cleanup this slot
         entry = self.active_searches.pop(search_id, None)
         if entry and not future.done():
             future.cancel()
@@ -5335,6 +5376,20 @@ class SearchEngine:
                     # Block-char masked data — always a valid result
                     has_masked_data = '█' in text and len(text.strip()) >= 30
 
+                    # ── BASIC DB: always accept if query in message text ───────
+                    # The Basic DB group bot replies to the group, not to us.
+                    # So we accept any message containing the query that is
+                    # not our own outgoing command, and passes validity check.
+                    is_basic_db_match = (
+                        search_info.get("basic_db")
+                        and not getattr(message, 'out', False)
+                        and query
+                        and len(query) >= 3
+                        and query in text_lower
+                        and len(text.strip()) >= 10
+                        and not TextProcessor.is_processing_message(text)
+                    )
+
                     matched = (
                         query_in_message
                         or pending_any_result
@@ -5344,12 +5399,14 @@ class SearchEngine:
                         or large_message_result
                         or is_intelx_message
                         or has_masked_data
+                        or is_basic_db_match
                     )
 
                     if matched:
                         logger.info(
                             f"📨 Candidate result in {search_info['group']['name']} "
-                            f"(query={query_in_message}, pending={pending_any_result}, "
+                            f"(query={query_in_message}, basic_db={is_basic_db_match}, "
+                            f"pending={pending_any_result}, "
                             f"encorex={is_encorex_osint_result}, json={looks_like_result}, "
                             f"universal={universal_match}, large={large_message_result}, "
                             f"intelx={is_intelx_message}, masked={has_masked_data})"
