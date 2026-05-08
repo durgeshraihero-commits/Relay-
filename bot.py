@@ -5243,8 +5243,15 @@ class SearchEngine:
                     if reply_to_id == search_info["message_id"]:
                         logger.info(f"📩 Found direct reply to our search message")
                         await self._process_search_response(search_id, search_info, message)
-                        # For multi-collect, don't return — keep listening for more
-                        if not search_info.get("multi_collect"):
+                        # For multi-collect, don't return — keep listening for more.
+                        # Also don't return early if there are still active basic_db
+                        # searches pending — they listen for group-posted replies that
+                        # won't arrive as direct replies to our message.
+                        has_pending_basic_db = any(
+                            si.get("basic_db") and sid != search_id
+                            for sid, si in self.active_searches.items()
+                        )
+                        if not search_info.get("multi_collect") and not has_pending_basic_db:
                             return
             
             # ── Priority 2: Any message in the same chat ──────────────────────
@@ -5380,12 +5387,18 @@ class SearchEngine:
                     # The Basic DB group bot replies to the group, not to us.
                     # So we accept any message containing the query that is
                     # not our own outgoing command, and passes validity check.
+                    # NOTE: query may appear inside JSON quotes e.g. "9939608735"
+                    # so we strip non-alphanumeric chars for comparison too.
+                    _query_digits = re.sub(r'\D', '', query)  # digits only for phone
+                    _text_nodots  = re.sub(r'["\'\s]', '', text_lower)  # strip quotes/spaces
+                    _query_in_stripped = bool(_query_digits and len(_query_digits) >= 6
+                                              and _query_digits in _text_nodots)
                     is_basic_db_match = (
                         search_info.get("basic_db")
                         and not getattr(message, 'out', False)
                         and query
                         and len(query) >= 3
-                        and query in text_lower
+                        and (query in text_lower or _query_in_stripped)
                         and len(text.strip()) >= 10
                         and not TextProcessor.is_processing_message(text)
                     )
@@ -6141,7 +6154,50 @@ class SearchEngine:
             )
             return {"success": True, "result": formatted, "raw_result": extracted_json, "has_file": False}
 
-        # ── Normal (non-ENCOREX-frame) response ──────────────────────────────
+        # ── "NUMBER TO DETAILS:" JSON array format (Basic DB group) ──────────
+        # Format: "NUMBER TO DETAILS:\n[{...}]"  or  "[{...}]" alone
+        # The JSON is an array; extract and pretty-print it.
+        if 'number to details' in text_lower or (text_lower.strip().startswith('[{') and '"mobile"' in text_lower):
+            arr_start = text.find('[')
+            arr_end   = text.rfind(']')
+            if arr_start != -1 and arr_end > arr_start:
+                raw_arr = text[arr_start:arr_end + 1].strip()
+                try:
+                    parsed = json.loads(raw_arr)
+                    # Remove internal/powered_by fields
+                    if isinstance(parsed, list):
+                        for item in parsed:
+                            if isinstance(item, dict):
+                                item.pop('_powered_by', None)
+                                item.pop('powered_by', None)
+                    elif isinstance(parsed, dict):
+                        parsed.pop('_powered_by', None)
+                        parsed.pop('powered_by', None)
+                    extracted_json = json.dumps(parsed, indent=2, ensure_ascii=False)
+                    logger.info(f"✅ Extracted JSON array from NUMBER TO DETAILS format ({len(extracted_json)} chars)")
+                except json.JSONDecodeError:
+                    extracted_json = raw_arr
+                    logger.info(f"⚠️ Raw JSON array from NUMBER TO DETAILS ({len(extracted_json)} chars)")
+
+                if extracted_json and len(extracted_json.strip()) >= 5:
+                    clean_source = _strip_branding(search_info["group"]["name"])
+                    if not clean_source:
+                        clean_source = "Intelligence Source"
+                    if not TextProcessor.is_valid_result(extracted_json, search_info["search_type"]):
+                        # Still valid if it contains mobile/name — force accept
+                        if '"mobile"' in extracted_json or '"name"' in extracted_json:
+                            pass  # proceed
+                        else:
+                            logger.info(f"⚠️ NUMBER TO DETAILS array failed validity check")
+                            return {"success": False}
+                    formatted = PremiumFormatter.format_result(
+                        extracted_json,
+                        search_info["search_type"],
+                        search_info["query"],
+                        clean_source
+                    )
+                    return {"success": True, "result": formatted, "raw_result": extracted_json, "has_file": False}
+
         cleaned = TextProcessor.clean_content(text, search_info["search_type"])
 
         if len(cleaned) < 20:
