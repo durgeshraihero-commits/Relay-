@@ -316,13 +316,13 @@ GROUP_PRIORITIES = {
     },
     "tertiary": {
         "name": "🔍 Basic Database",
-        "identifier": "EncoreXgroup",
-        "timeout": 10,           # Basic DB: only wait 10s for group replies
+        "identifier": "@EncoreXgroup",
+        "timeout": 20,           # Basic DB: wait up to 20s for group replies
         "weight": 5,
         "enabled": True,
         "entity": None,
         "basic_db": True,        # ← SPECIAL: replies go to group, not to our account
-        "basic_db_wait": 10,     # seconds to monitor the group for matching replies
+        "basic_db_wait": 20,     # seconds to monitor the group for matching replies
         "commands": {
             "phone":   "/num",
             "family":  "/family",
@@ -4858,7 +4858,7 @@ class SearchEngine:
             "message_id":     sent_msg.id,
             "search_type":    search_type,
             "query":          query,
-            "chat_id":        group["entity"].id if hasattr(group["entity"], "id") else str(group["entity"]),
+            "chat_id":        self._normalize_chat_id(group["entity"].id) if hasattr(group["entity"], "id") else str(group["entity"]),
             "expecting_file": False,
             "file_wait_start": None,
             "priority":       group["weight"],
@@ -5024,12 +5024,21 @@ class SearchEngine:
                 valid_results.append(r)
 
         if valid_results:
-            # De-duplicate by raw_result content (avoid identical records)
+            # De-duplicate by actual data fingerprint — NOT raw[:200] which causes
+            # false-duplicate collisions when two sources share the same header text
+            # (e.g. two IntelX messages that both start with the HiTeckGroop preamble).
+            def _content_fingerprint(r: Dict) -> str:
+                raw = r.get("raw_result", r.get("result", ""))
+                # Strip all non-alphanumeric chars so formatting differences don't
+                # create false non-duplicates, and hash full content so two results
+                # with even one different data field are treated as distinct.
+                core = re.sub(r"[^a-zA-Z0-9]", "", raw)
+                return hashlib.md5(core.encode(errors="ignore")).hexdigest()
+
             seen_hashes: set = set()
             unique_results: List[Dict] = []
             for r in valid_results:
-                raw = r.get("raw_result", r.get("result", ""))
-                h = hashlib.md5(raw[:200].encode(errors="ignore")).hexdigest()
+                h = _content_fingerprint(r)
                 if h not in seen_hashes:
                     seen_hashes.add(h)
                     unique_results.append(r)
@@ -5222,6 +5231,27 @@ class SearchEngine:
         if success:
             self.group_performance[group_name]["success"] += 1
     
+    @staticmethod
+    def _normalize_chat_id(cid) -> int:
+        """Normalize a Telegram chat ID to its bare positive channel ID.
+
+        Telethon stores Channel entities with their bare positive ID
+        (e.g. 1234567890), but event.chat_id for supergroup messages
+        arrives as the negative -100-prefixed form (e.g. -1001234567890).
+        This helper converts both forms to the same bare integer so they
+        can be compared reliably.
+        """
+        try:
+            cid = int(cid)
+        except (TypeError, ValueError):
+            return 0
+        if cid < 0:
+            s = str(-cid)
+            if s.startswith("100") and len(s) > 3:
+                return int(s[3:])   # strip -100 prefix
+            return -cid             # regular group (no -100 prefix)
+        return cid
+
     async def handle_incoming_message(self, event):
         """Handle incoming messages for search responses"""
         try:
@@ -5235,6 +5265,9 @@ class SearchEngine:
                 return
 
             text = message.text or message.raw_text or ""
+
+            # Normalize incoming chat_id once for all comparisons below
+            incoming_chat_norm = self._normalize_chat_id(event.chat_id)
 
             # ── Priority 1: Direct reply to our sent command ──────────────────
             if message.reply_to:
@@ -5260,9 +5293,9 @@ class SearchEngine:
                     chat_match = False
                     entity = search_info["group"].get("entity")
                     if entity and hasattr(entity, 'id'):
-                        chat_match = event.chat_id == entity.id
+                        chat_match = incoming_chat_norm == self._normalize_chat_id(entity.id)
                     elif search_info.get("chat_id"):
-                        chat_match = str(event.chat_id) == str(search_info["chat_id"])
+                        chat_match = incoming_chat_norm == self._normalize_chat_id(search_info["chat_id"])
                     
                     if not chat_match:
                         continue
@@ -5282,8 +5315,9 @@ class SearchEngine:
                     # ── Skip if this is a scanning placeholder ─────────────
                     if self._is_encorex_scanning_message(text):
                         await self._process_search_response(search_id, search_info, message)
-                        if not search_info.get("multi_collect"):
-                            return
+                        # Use continue — not return — so other active searches
+                        # (especially basic_db) still get a chance to match
+                        # this same message event.
                         continue
 
                     # ── Skip obviously empty / too-short messages ──────────────
@@ -5425,8 +5459,21 @@ class SearchEngine:
                             f"intelx={is_intelx_message}, masked={has_masked_data})"
                         )
                         await self._process_search_response(search_id, search_info, message)
+                        # For basic_db searches, always continue the loop — their
+                        # future is resolved independently and other search_ids
+                        # in the loop may also need this message.
+                        # For normal searches, only return early if NO basic_db
+                        # searches are still pending (otherwise they'd be cut off).
+                        if search_info.get("basic_db"):
+                            continue  # basic_db: never return early, keep looping
                         if not search_info.get("multi_collect"):
-                            return
+                            has_pending_basic_db = any(
+                                si.get("basic_db")
+                                for si in self.active_searches.values()
+                            )
+                            if not has_pending_basic_db:
+                                return
+                        # else: multi_collect or pending basic_db — continue loop
 
                 except Exception:
                     continue
