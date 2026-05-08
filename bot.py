@@ -5730,6 +5730,34 @@ class SearchEngine:
                     f"📥 IntelX data chunk accumulated "
                     f"({len(search_info['intelx_accumulated'])} chars total)"
                 )
+                # ── Auto-click "Download" button to fetch full HTML file ──────
+                # IntelX data messages carry a "Download" button that, when clicked,
+                # causes IntelX to send an HTML file with ALL result sources.
+                # We click it once per search so the HTML arrives as a file event
+                # which _process_file → _parse_intelx_html will handle.
+                if not search_info.get("intelx_download_clicked"):
+                    try:
+                        dl_buttons = getattr(message, "buttons", None)
+                        dl_row_i, dl_col_i = None, None
+                        if dl_buttons:
+                            for _ri, _row in enumerate(dl_buttons):
+                                for _ci, _btn in enumerate(_row):
+                                    _bt = getattr(_btn, "text", "") or ""
+                                    if "download" in _bt.lower():
+                                        dl_row_i, dl_col_i = _ri, _ci
+                                        break
+                                if dl_row_i is not None:
+                                    break
+                        if dl_row_i is not None:
+                            await message.click(dl_row_i, dl_col_i)
+                            search_info["intelx_download_clicked"] = True
+                            logger.info("✅ IntelX 'Download' button clicked — HTML file incoming")
+                            # Extend deadline so HTML file has time to arrive
+                            search_info["pending_encorex"]    = True
+                            search_info["encorex_wait_start"] = time.time()
+                    except Exception as _dl_err:
+                        logger.warning(f"⚠️ IntelX Download click failed: {_dl_err}")
+                # ── End Download auto-click ───────────────────────────────────
                 # ── IntelX inline keyboard pagination (CLICK-based) ─────────
                 # IntelX paginates by showing a ➡️ inline button that MUST be
                 # clicked to reveal the next result.  It does NOT auto-edit.
@@ -6163,8 +6191,214 @@ class SearchEngine:
                     future.set_result({"success": False})
                 del self.active_searches[search_id]
     
+    @staticmethod
+    def _parse_intelx_html(html_content: str, search_type: str, query: str) -> Optional[Dict]:
+        """Universal IntelX / LeakBase HTML parser.
+
+        Handles ALL HTML formats that IntelX / @Ethicalosinterr_bot can send,
+        regardless of which database the results come from.  Two formats are known:
+
+        FORMAT A — LeakBase results file (Download button on a result message):
+            <div id='p1' class='block'>
+              <div class='block-title'><b>💾HiTeckGroop.in</b></div>
+              <div class='block-text'>
+                <b>📞Telephone: </b><code>9██████████7</code><br>
+                <b>👤Full name: </b> B██v R█i<br>
+              </div>
+            </div>
+
+        FORMAT B — Database list / search-result dump:
+            <div id='database_1' class="database">
+              <h2>📱 LeoPays.com</h2>
+              <p>Description text...</p>
+              <span><strong>📩Email:</strong> 76,861</span>
+            </div>
+
+        Any other HTML with <strong>/<b> labelled field rows is handled via a
+        generic fallback so future IntelX format changes are automatically covered.
+
+        Returns a multi_results-style dict (one entry per source block) or
+        None if the content does not look like an IntelX HTML file at all.
+        """
+        import re as _re
+
+        # ── Shared helpers ────────────────────────────────────────────────────
+
+        def _strip_tags(s):
+            s = _re.sub(r"<br\s*/?>", "\n", s, flags=_re.IGNORECASE)
+            s = _re.sub(r"<[^>]+>", "", s)
+            s = (s.replace("&nbsp;", " ").replace("&amp;", "&")
+                  .replace("&lt;", "<").replace("&gt;", ">")
+                  .replace("&quot;", '"').replace("&#39;", "'"))
+            s = _re.sub(r"\n{3,}", "\n\n", s)
+            return s.strip()
+
+        def _clean_title(raw):
+            t = _strip_tags(raw).strip().strip("\"'[]")
+            return t or "Intelligence Source"
+
+        def _extract_fields(block_html):
+            fields = []
+            # Pattern 1: <b>Label:</b>[optional space]<code>value</code> or plain value
+            # Handles both:  <b>📞Telephone: </b> <code>9███7</code><br>
+            #            and: <b>👤Full name: </b> B██v R█i<br>
+            for m in _re.finditer(
+                r"<(?:b|strong)[^>]*>(.*?)</(?:b|strong)>\s*(?:<code[^>]*>(.*?)</code>|([^<\n]{1,200}))\s*(?:<br|$)",
+                block_html, _re.DOTALL | _re.IGNORECASE
+            ):
+                label = _strip_tags(m.group(1)).rstrip(": ").strip()
+                # group(2) = value inside <code>; group(3) = plain text value
+                value = _strip_tags((m.group(2) or m.group(3) or "")).strip()
+                if label and value and 2 <= len(label) < 60:
+                    fields.append(f"{label}: {value}")
+            # Pattern 2: <span><strong>Label:</strong> value</span>  (database list)
+            for m in _re.finditer(
+                r"<span[^>]*>\s*<strong[^>]*>(.*?)</strong>\s*(.*?)\s*</span>",
+                block_html, _re.DOTALL | _re.IGNORECASE
+            ):
+                label = _strip_tags(m.group(1)).rstrip(": ").strip()
+                value = _strip_tags(m.group(2)).strip()
+                if label and value and 2 <= len(label) < 60:
+                    fields.append(f"{label}: {value}")
+            return fields
+
+        def _extract_description(block_html):
+            p = _re.search(r"<p[^>]*>(.*?)</p>", block_html, _re.DOTALL | _re.IGNORECASE)
+            if p:
+                d = _strip_tags(p.group(1)).strip()
+                if d and len(d) > 20:
+                    return d
+            bt = _re.search(
+                r"<div[^>]*class=['\"]block-text['\"][^>]*>(.*?)</div>",
+                block_html, _re.DOTALL | _re.IGNORECASE
+            )
+            if bt:
+                raw = _strip_tags(bt.group(1))
+                for chunk in raw.split("\n"):
+                    c = chunk.strip()
+                    if c and len(c) > 30 and ":" not in c[:40]:
+                        return c
+            return ""
+
+        # ── Block extraction — three strategies, most-specific first ──────────
+
+        # Strategy A: id='pN' class='block'  (LeakBase results)
+        raw_blocks = _re.findall(
+            r"<div\s[^>]*id=['\"]p\d+['\"][^>]*class=['\"]block['\"][^>]*>(.*?)</div>\s*</div>",
+            html_content, _re.DOTALL | _re.IGNORECASE
+        )
+        fmt = "A"
+
+        if not raw_blocks:
+            raw_blocks = _re.findall(
+                r"<div\s[^>]*class=['\"]block['\"][^>]*id=['\"]p\d+['\"][^>]*>(.*?)</div>\s*</div>",
+                html_content, _re.DOTALL | _re.IGNORECASE
+            )
+
+        # Strategy B: id='database_N' class='database'  (database list)
+        if not raw_blocks:
+            raw_blocks = _re.findall(
+                r"<div\s[^>]*id=['\"]database_\d+['\"][^>]*class=['\"]database['\"][^>]*>(.*?)</div>",
+                html_content, _re.DOTALL | _re.IGNORECASE
+            )
+            fmt = "B"
+
+        if not raw_blocks:
+            raw_blocks = _re.findall(
+                r"<div\s[^>]*class=['\"]database['\"][^>]*id=['\"]database_\d+['\"][^>]*>(.*?)</div>",
+                html_content, _re.DOTALL | _re.IGNORECASE
+            )
+            fmt = "B"
+
+        # Strategy C: generic — any named div containing labelled fields
+        if not raw_blocks:
+            fmt = "generic"
+            for m in _re.finditer(
+                r"<div\s[^>]*id=['\"][^'\"]+['\"][^>]*>(.*?)</div>",
+                html_content, _re.DOTALL | _re.IGNORECASE
+            ):
+                inner = m.group(1)
+                if _re.search(r"<(?:strong|b)[^>]*>[^<]{2,}</(?:strong|b)>", inner, _re.IGNORECASE):
+                    raw_blocks.append(inner)
+
+        if not raw_blocks:
+            logger.warning("⚠️ _parse_intelx_html: no recognisable block structure")
+            return None
+
+        logger.info(f"📋 HTML parser [{fmt}]: {len(raw_blocks)} block(s) found")
+
+        # ── Parse each block ──────────────────────────────────────────────────
+        parsed_results = []
+        for block_html in raw_blocks:
+            # Title
+            if fmt == "A":
+                tm = _re.search(
+                    r"<div[^>]*class=['\"]block-title['\"][^>]*>(.*?)</div>",
+                    block_html, _re.DOTALL | _re.IGNORECASE
+                )
+                source_title = _clean_title(tm.group(1)) if tm else "Intelligence Source"
+            elif fmt == "B":
+                tm = _re.search(r"<h2[^>]*>(.*?)</h2>", block_html, _re.DOTALL | _re.IGNORECASE)
+                source_title = _clean_title(tm.group(1)) if tm else "Intelligence Source"
+            else:
+                tm = _re.search(r"<h[123][^>]*>(.*?)</h[123]>", block_html, _re.DOTALL | _re.IGNORECASE)
+                if tm:
+                    source_title = _clean_title(tm.group(1))
+                else:
+                    bm = _re.search(r"<(?:b|strong)[^>]*>(.*?)</(?:b|strong)>", block_html, _re.DOTALL | _re.IGNORECASE)
+                    source_title = _clean_title(bm.group(1)) if bm else "Intelligence Source"
+
+            description = _extract_description(block_html)
+            fields = _extract_fields(block_html)
+
+            if not fields and not description:
+                continue
+
+            parts = []
+            if description and len(description) > 20:
+                parts.append(description)
+            if fields:
+                parts.append("\n".join(fields))
+
+            formatted_text = "\n\n".join(parts).strip()
+            if not formatted_text:
+                continue
+
+            formatted_result = PremiumFormatter.format_result(
+                formatted_text, search_type, query, source_title
+            )
+            parsed_results.append({
+                "success":    True,
+                "result":     formatted_result,
+                "raw_result": formatted_text,
+                "source":     source_title,
+                "has_file":   False,
+            })
+            logger.info(
+                f"✅ HTML block [{fmt}]: {source_title!r} "
+                f"— {len(fields)} field(s), {len(formatted_text)} chars"
+            )
+
+        if not parsed_results:
+            logger.warning("⚠️ _parse_intelx_html: blocks found but all empty/invalid")
+            return None
+
+        if len(parsed_results) == 1:
+            return parsed_results[0]
+
+        combined_raw = "\n\n".join(r["raw_result"] for r in parsed_results)
+        return {
+            "success":          True,
+            "multi_results":    parsed_results,
+            "result":           parsed_results[0].get("result", ""),
+            "raw_result":       combined_raw,
+            "has_file":         False,
+            "result_count":     len(parsed_results),
+            "from_intelx_html": True,
+        }
+
     async def _process_file(self, message, search_info: Dict) -> Dict:
-        """Process file message"""
+        """Process file message — handles IntelX HTML downloads and plain text/binary files."""
         try:
             if hasattr(message.file, 'size') and message.file.size > config.MAX_FILE_SIZE_MB * 1024 * 1024:
                 logger.warning(f"📁 File too large: {message.file.size} bytes")
@@ -6191,7 +6425,60 @@ class SearchEngine:
             if not content:
                 logger.error("❌ Could not decode file with any encoding")
                 return {"success": False}
-            
+
+            # ── IntelX HTML download (any database, any format) ──────────────
+            # When the "Download" button in IntelX is clicked the bot sends an
+            # HTML file.  It can come in many formats (LeakBase result blocks,
+            # database-list dumps, etc.).  We try to parse ALL of them.
+            filename = ""
+            if hasattr(message, 'file') and message.file:
+                filename = getattr(message.file, 'name', '') or ''
+            if not filename and hasattr(message, 'document') and message.document:
+                attrs = getattr(message.document, 'attributes', [])
+                for attr in attrs:
+                    fn = getattr(attr, 'file_name', None)
+                    if fn:
+                        filename = fn
+                        break
+            filename = (filename or "").lower()
+
+            is_html = (
+                filename.endswith('.html') or filename.endswith('.htm')
+                or content.lstrip()[:15].lower().startswith('<!doctype html')
+                or '<html' in content[:300].lower()
+            )
+            # Trigger the parser for any HTML that came from a known IntelX bot
+            # or that contains structural markers from either known format.
+            # We deliberately do NOT gatekeep on specific class names here —
+            # that's the parser's job.
+            html_has_data = (
+                'block-title' in content or 'block-text' in content
+                or 'class="database"' in content or "class='database'" in content
+                or 'id="database_' in content or "id='database_" in content
+                or 'id="p1"' in content or "id='p1'" in content
+                or 'leakbase' in content.lower()
+                or '@ethicalosinterr_bot' in content.lower()
+                # Generic: any HTML with labelled strong/b fields
+                or bool(_re_check := __import__('re').search(
+                    r'<(?:strong|b)[^>]*>[^<]{2,60}:</(?:strong|b)>',
+                    content, __import__('re').IGNORECASE
+                ))
+            )
+            if is_html and html_has_data:
+                logger.info(f"📄 Detected IntelX HTML file — running universal parser")
+                html_result = self._parse_intelx_html(
+                    content,
+                    search_info["search_type"],
+                    search_info["query"],
+                )
+                if html_result and html_result.get("success"):
+                    count = html_result.get("result_count", 1)
+                    logger.info(f"✅ HTML parsed: {count} source(s) extracted")
+                    return html_result
+                else:
+                    logger.warning("⚠️ HTML parser returned no results — falling through to raw text")
+            # ── End HTML handling ──────────────────────────────────────────────
+
             # Clean content - remove usernames and links
             cleaned_content = TextProcessor.clean_content(content, search_info["search_type"])
             
@@ -8934,11 +9221,16 @@ async def handle_search_query(event, state):
                 )
                 for idx, r in enumerate(multi, 1):
                     header = f"**━━ Result {idx}/{count} ━━**\n"
-                    body = r.get("result", "")
+                    body = r.get("result") or r.get("raw_result") or ""
+                    if not body:
+                        continue  # skip empty entries — don't crash
                     try:
                         await event.respond(header + body, parse_mode="md")
                     except Exception:
-                        await event.respond(header + body)
+                        try:
+                            await event.respond(header + body)
+                        except Exception as _send_err:
+                            logger.error(f"❌ Could not send result {idx}: {_send_err}")
                 preview = result.get("raw_result", "")[:200]
                 await db_manager.update_searches(user_id, search_type, query, True, response_preview=preview)
 
