@@ -1059,6 +1059,8 @@ class TextProcessor:
             r'^\s*https?://\S+\s*$',            # bare URL line
             r'^\s*www\.\S+\s*$',                 # bare www line
             r'powered by.*darkboxes.*$',
+            r'powered by\s+@\w+.*$',         # Powered by @AnyUsername
+            r'powered by\s+\w.*$',            # Powered by AnythingElse
             r'developed by.*$',
             r'created by.*$',
             r'designed by.*$',
