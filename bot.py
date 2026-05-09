@@ -877,8 +877,10 @@ class TextProcessor:
             '╔═══《', '╘══《',
             # Record-style headers from various group bots
             'record #', '━━━', '═══', '▬▬▬',
-            # "NUMBER TO DETAILS:" style headers
-            'number to details', 'details:', 'result:', 'data:',
+            # Basic DB group headers (any variant)
+            'number to details', 'aadhar info', 'mobile info',
+            'vehicle info', 'family info', 'voter info', 'pan info',
+            'details:', 'result:', 'data:',
             # IntelX header lines — these mean real data is coming next
             'breached:', '🔎request:', 'subjects made:',
             'number of results:', 'number of leaks:', 'search time:',
@@ -989,8 +991,10 @@ class TextProcessor:
             'region', 'hiteckgroop', 'hiteck',
             # 1Win / leak format
             'encrypted password', 'date of registration',
-            # "NUMBER TO DETAILS:" style group headers — data follows
-            'number to details', 'details :', 'result :', 'data :',
+            # Basic DB group headers — data follows
+            'number to details', 'aadhar info', 'mobile info',
+            'vehicle info', 'family info', 'voter info', 'pan info',
+            'details :', 'result :', 'data :',
             # Result frames
             '✅ success', '✅ found', '╔═══《', 'encorex osint', 'encorex intelx',
             # Record separators
@@ -1194,8 +1198,9 @@ class TextProcessor:
             'rto', 'registration_date', 'insurer',
             # Telegram
             'telegram id', 'telegram_id',
-            # "NUMBER TO DETAILS:" / other group-specific headers
-            'number to details',
+            # Basic DB group headers (any variant)
+            'number to details', 'aadhar info', 'mobile info',
+            'vehicle info', 'family info', 'voter info', 'pan info',
             'number of results:', 'number of leaks:', 'search time:',
         ]
         if any(sig in text_lower for sig in universal_valid):
@@ -5433,7 +5438,7 @@ class SearchEngine:
                         and not TextProcessor.is_processing_message(text)
                     )
 
-                    # G) IntelX / hiteckgroop / NUMBER TO DETAILS multi-message pattern
+                    # G) IntelX / hiteckgroop / Basic DB multi-message pattern
                     intelx_signals = [
                         'breached:', '🔎request:', 'subjects made:',
                         'number of results:', 'number of leaks:', 'search time:',
@@ -5441,8 +5446,9 @@ class SearchEngine:
                         'the name of the father', 'region',
                         'hiteckgroop', 'hiteck',
                         'encrypted password', 'date of registration',
-                        # "NUMBER TO DETAILS:" format from third group
-                        'number to details',
+                        # Basic DB group headers (any variant)
+                        'number to details', 'aadhar info', 'mobile info',
+                        'vehicle info', 'family info', 'voter info', 'pan info',
                         '"father_name":', '"alt_mobile":', '"id_number":',
                     ]
                     is_intelx_message = any(sig in text_lower for sig in intelx_signals)
@@ -6173,16 +6179,34 @@ class SearchEngine:
                 return {"success": False}
             
             content = None
-            encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1']
-            
-            for encoding in encodings:
+            # Only try true text encodings — latin-1/cp1252 accept ANY byte so
+            # they must NOT be used here: binary files (zip, pdf, compressed data)
+            # would decode as garbage and get sent to the user as garbled text.
+            for encoding in ['utf-8', 'utf-8-sig']:
                 try:
                     content = file_bytes.decode(encoding)
                     logger.info(f"✅ Decoded with {encoding}")
                     break
-                except UnicodeDecodeError:
+                except (UnicodeDecodeError, ValueError):
                     continue
-            
+
+            if not content:
+                # Heuristic: if more than 5% of bytes are non-printable this is
+                # binary data (compressed, encrypted, etc.) — reject it outright.
+                non_printable = sum(1 for b in file_bytes if b < 9 or (14 <= b <= 31) or b > 126)
+                if non_printable / max(len(file_bytes), 1) > 0.05:
+                    logger.warning(
+                        f"⚠️ File appears to be binary ({non_printable}/{len(file_bytes)} non-printable bytes) — skipping"
+                    )
+                    return {"success": False}
+                # Last resort: latin-1 (but only after the binary check passes)
+                try:
+                    content = file_bytes.decode('latin-1')
+                    logger.info("✅ Decoded with latin-1 (fallback)")
+                except Exception:
+                    logger.error("❌ Could not decode file with any encoding")
+                    return {"success": False}
+
             if not content:
                 logger.error("❌ Could not decode file with any encoding")
                 return {"success": False}
@@ -6310,10 +6334,23 @@ class SearchEngine:
             )
             return {"success": True, "result": formatted, "raw_result": extracted_json, "has_file": False}
 
-        # ── "NUMBER TO DETAILS:" JSON array format (Basic DB group) ──────────
-        # Format: "NUMBER TO DETAILS:\n[{...}]"  or  "[{...}]" alone
-        # The JSON is an array; extract and pretty-print it.
-        if 'number to details' in text_lower or (text_lower.strip().startswith('[{') and '"mobile"' in text_lower):
+        # ── Basic DB group JSON array format ─────────────────────────────────
+        # The group uses various headers before the JSON array:
+        #   "NUMBER TO DETAILS:\n[{...}]"  /  "AADHAR INFO:\n[{...}]"
+        #   "MOBILE INFO:\n[{...}]"  /  "[{...}]" alone (no header)
+        # Detect by: known header OR message contains a JSON array with data fields.
+        _basic_db_headers = [
+            'number to details', 'aadhar info', 'mobile info',
+            'vehicle info', 'family info', 'voter info', 'pan info',
+            'imei info', 'gst info', 'ip info', 'ifsc info',
+        ]
+        _has_basic_db_header = any(h in text_lower for h in _basic_db_headers)
+        _has_json_array = (
+            '[{' in text
+            and ('"mobile"' in text_lower or '"id_number"' in text_lower
+                 or '"father_name"' in text_lower or '"name"' in text_lower)
+        )
+        if _has_basic_db_header or _has_json_array:
             arr_start = text.find('[')
             arr_end   = text.rfind(']')
             if arr_start != -1 and arr_end > arr_start:
