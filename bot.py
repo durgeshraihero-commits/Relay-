@@ -5024,46 +5024,49 @@ class SearchEngine:
                 valid_results.append(r)
 
         if valid_results:
-            # Flatten any inner multi_results (e.g. from IntelX HTML parser) so
-            # that a single group returning N HTML blocks is treated identically
-            # to N groups each returning one block.
-            flat_results: List[Dict] = []
+            # Flatten: if any group returned multi_results (e.g. IntelX paged records),
+            # expand them into individual result dicts so dedup and display work correctly.
+            flattened: List[Dict] = []
             for r in valid_results:
-                inner = r.get("multi_results")
-                if inner and isinstance(inner, list):
-                    flat_results.extend(inner)
+                if r.get("multi_results"):
+                    flattened.extend(r["multi_results"])
                 else:
-                    flat_results.append(r)
+                    flattened.append(r)
+            valid_results = flattened
 
             # De-duplicate by actual data fingerprint — NOT raw[:200] which causes
-            # false-duplicate collisions when two sources share the same header text.
+            # false-duplicate collisions when two sources share the same header text
+            # (e.g. two IntelX messages that both start with the HiTeckGroop preamble).
             def _content_fingerprint(r: Dict) -> str:
                 raw = r.get("raw_result", r.get("result", ""))
+                # Strip all non-alphanumeric chars so formatting differences don't
+                # create false non-duplicates, and hash full content so two results
+                # with even one different data field are treated as distinct.
                 core = re.sub(r"[^a-zA-Z0-9]", "", raw)
                 return hashlib.md5(core.encode(errors="ignore")).hexdigest()
 
             seen_hashes: set = set()
             unique_results: List[Dict] = []
-            for r in flat_results:
+            for r in valid_results:
                 h = _content_fingerprint(r)
                 if h not in seen_hashes:
                     seen_hashes.add(h)
                     unique_results.append(r)
 
-            logger.info(f"✅ {len(unique_results)} unique valid result(s) from {len(valid_results)} source(s)")
+            logger.info(f"✅ {len(unique_results)} unique valid result(s) from {len(valid_results)} group(s)")
 
             if len(unique_results) == 1:
-                # Single result — return as-is (handle_search_query will send it)
+                # Single result — return as-is
                 return unique_results[0]
             else:
-                # Multiple results — always use multi_results path so ALL are sent
+                # Multiple results — combine into multi_results payload
                 combined_raw = "\n\n".join(
                     r.get("raw_result", r.get("result", "")) for r in unique_results
                 )
                 return {
                     "success": True,
-                    "multi_results": unique_results,
-                    "result": unique_results[0].get("result", ""),  # fallback
+                    "multi_results": unique_results,   # list of individual result dicts
+                    "result": unique_results[0].get("result", ""),  # fallback for compat
                     "raw_result": combined_raw,
                     "has_file": False,
                     "result_count": len(unique_results),
@@ -5276,6 +5279,29 @@ class SearchEngine:
             # Normalize incoming chat_id once for all comparisons below
             incoming_chat_norm = self._normalize_chat_id(event.chat_id)
 
+            # ── Priority 0: Edited message matching IntelX pagination ─────────
+            # When we click ➡️, IntelX *edits* its original message with the next
+            # page. The edited message has the same message.id as the original.
+            # Match by (chat_id + message_id) to route it to the right search.
+            is_edited = getattr(event, 'message_edited', False) or hasattr(event, 'edit_date') and getattr(message, 'edit_date', None)
+            if is_edited:
+                for search_id, search_info in list(self.active_searches.items()):
+                    paged_msg_id = search_info.get("intelx_paged_msg_id")
+                    if paged_msg_id and paged_msg_id == message.id:
+                        entity = search_info["group"].get("entity")
+                        chat_match = False
+                        if entity and hasattr(entity, 'id'):
+                            chat_match = incoming_chat_norm == self._normalize_chat_id(entity.id)
+                        elif search_info.get("chat_id"):
+                            chat_match = incoming_chat_norm == self._normalize_chat_id(search_info["chat_id"])
+                        if chat_match:
+                            logger.info(
+                                f"🔄 IntelX edited message (pagination) matched "
+                                f"search_id={search_id} msg_id={message.id}"
+                            )
+                            await self._process_search_response(search_id, search_info, message)
+                            return
+
             # ── Priority 1: Direct reply to our sent command ──────────────────
             if message.reply_to:
                 reply_to_id = message.reply_to.reply_to_msg_id
@@ -5294,19 +5320,6 @@ class SearchEngine:
                         if not search_info.get("multi_collect") and not has_pending_basic_db:
                             return
             
-            # ── Priority 1.5: Edited IntelX paginated message ──────────────
-            # The IntelX bot paginates by editing its own message in-place.
-            # Route edited messages back to the right search via message_id.
-            incoming_msg_id = getattr(message, "id", None)
-            if incoming_msg_id:
-                for _sid, _sinfo in list(self.active_searches.items()):
-                    if _sinfo.get("intelx_paged_msg_id") == incoming_msg_id:
-                        logger.info(
-                            f"⏭️ IntelX edited page matched (msg_id={incoming_msg_id}) — routing"
-                        )
-                        await self._process_search_response(_sid, _sinfo, message)
-                        break
-
             # ── Priority 2: Any message in the same chat ──────────────────────
             for search_id, search_info in list(self.active_searches.items()):
                 try:
@@ -5355,11 +5368,8 @@ class SearchEngine:
                     query_in_message = bool(query and len(query) >= 4 and query in text_lower)
 
                     # B) After a scanning placeholder, accept ANY substantive non-scanning msg
-                    # IMPORTANT: Never apply to basic_db — the shared group has other
-                    # users posting results, so accepting any message would grab theirs.
                     pending_any_result = (
                         pending_encorex
-                        and not search_info.get('basic_db')
                         and len(text.strip()) >= 15
                     )
 
@@ -5447,71 +5457,30 @@ class SearchEngine:
                     # NOTE: query may appear inside JSON quotes e.g. "9939608735"
                     # so we strip non-alphanumeric chars for comparison too.
                     _query_digits = re.sub(r'\D', '', query)  # digits only for phone
-                    # ── EXACT match only for Basic DB to avoid picking up other
-                    # users' results in the shared group.
-                    # We require the query (or its digit-only form) to appear as a
-                    # whole token — surrounded by non-alphanumeric chars — so that
-                    # query "9876543210" does NOT match "98765432101234" posted by
-                    # a different user.
-                    def _exact_token_match(needle: str, haystack: str) -> bool:
-                        """True only if needle appears as a whole word/token in haystack."""
-                        if not needle or len(needle) < 3:
-                            return False
-                        # Use word-boundary pattern for alphanumeric tokens
-                        pattern = r'(?<![0-9a-zA-Z])' + re.escape(needle) + r'(?![0-9a-zA-Z])'
-                        return bool(re.search(pattern, haystack, re.IGNORECASE))
-
-                    _query_exact        = _exact_token_match(query, text_lower)
-
-                    # Strip all non-digit chars from text for JSON-format matching.
-                    # EncoreX sends: "mobile": "7600383050" — digits-only match
-                    # handles this without being confused by quote boundaries.
-                    _text_digits_only = re.sub(r'\D', '', text)
-                    _query_digits_exact = (
-                        bool(_query_digits)
-                        and len(_query_digits) >= 6
-                        and (
-                            _exact_token_match(_query_digits, re.sub(r'["\'\s]', '', text_lower))
-                            or _query_digits in _text_digits_only
-                        )
-                    )
-                    # Explicit JSON string value match: "7600383050" in message
-                    _query_in_json = (
-                        (f'"{query}"' in text)
-                        or (f"'{query}'" in text)
-                        or (bool(_query_digits) and f'"{_query_digits}"' in text)
-                    )
-
-                    _query_in_stripped = _query_digits_exact  # keep name for compat
+                    _text_nodots  = re.sub(r'["\'\s]', '', text_lower)  # strip quotes/spaces
+                    _query_in_stripped = bool(_query_digits and len(_query_digits) >= 6
+                                              and _query_digits in _text_nodots)
                     is_basic_db_match = (
                         search_info.get("basic_db")
                         and not getattr(message, 'out', False)
                         and query
                         and len(query) >= 3
-                        and (_query_exact or _query_digits_exact or _query_in_json)
+                        and (query in text_lower or _query_in_stripped)
                         and len(text.strip()) >= 10
                         and not TextProcessor.is_processing_message(text)
                     )
 
-                    # For basic_db group, ONLY accept if our exact query is present.
-                    # All the broad universal matchers (looks_like_result,
-                    # universal_match, large_message_result, is_intelx_message,
-                    # has_masked_data) would match OTHER users' results posted in
-                    # the shared group. Strict query-match keeps us from stealing
-                    # someone else's result.
-                    if search_info.get("basic_db"):
-                        matched = is_basic_db_match
-                    else:
-                        matched = (
-                            query_in_message
-                            or pending_any_result
-                            or is_encorex_osint_result
-                            or looks_like_result
-                            or universal_match
-                            or large_message_result
-                            or is_intelx_message
-                            or has_masked_data
-                        )
+                    matched = (
+                        query_in_message
+                        or pending_any_result
+                        or is_encorex_osint_result
+                        or looks_like_result
+                        or universal_match
+                        or large_message_result
+                        or is_intelx_message
+                        or has_masked_data
+                        or is_basic_db_match
+                    )
 
                     if matched:
                         logger.info(
@@ -5639,22 +5608,97 @@ class SearchEngine:
 
             if search_info.get("pending_encorex"):
                 logger.info(
-                    f"✅ Result received after scanning/intelx wait "
-                    f"from {search_info['group']['name']} "
-                    f"(msg_id={message.id})"
+                    f"✅ Result received after scanning wait from {search_info['group']['name']} "
+                    f"(msg_id={message.id}, scanning_msg_id={search_info.get('scanning_message_id')})"
                 )
-                # Only clear pending_encorex if we are NOT still waiting for:
-                #   • an IntelX HTML file (intelx_waiting_for_html)
-                #   • more IntelX data pages (intelx_pending)
-                # Those handlers will clear the flag themselves when done.
-                still_waiting = (
-                    search_info.get("intelx_waiting_for_html")
-                    or search_info.get("intelx_pending")
-                )
-                if not still_waiting:
-                    search_info["pending_encorex"] = False
+                search_info["pending_encorex"]  = False
                 search_info["_came_after_scan"] = True
             # ===== END SCANNING FILTER =====
+
+            # ===== INTELX PAGINATION: auto-click ➡️ to collect ALL pages =====
+            # IntelX bot sends paged results with inline ←/→ buttons.
+            # When a navigation keyboard is present we:
+            #   1. Accumulate the current page's text
+            #   2. Click the ➡️ (next) button via user_client
+            #   3. IntelX edits the same message → handle_edited_messages fires
+            #   4. Repeat until the last page (no ➡️ button)
+            #   5. Resolve with all pages concatenated
+            try:
+                has_next_btn = False
+                next_btn_obj = None
+                if message.buttons:
+                    for row in message.buttons:
+                        for btn in row:
+                            label = (btn.text or "").strip()
+                            # Match ➡️ or → or "next" style labels
+                            if label in ("➡️", "→", "▶️", ">", ">>") or label.endswith("➡️") or label.endswith("→"):
+                                has_next_btn = True
+                                next_btn_obj = btn
+                            # Also detect page indicator like "1\2" or "1/2" meaning multi-page
+                if has_next_btn and next_btn_obj is not None:
+                    # Accumulate this page
+                    prev_pages = search_info.get("intelx_pages", [])
+                    if text.strip() and text.strip() not in prev_pages:
+                        prev_pages.append(text.strip())
+                    search_info["intelx_pages"] = prev_pages
+                    search_info["intelx_paged_msg_id"] = message.id
+                    # Mark as pending so timeout is extended
+                    if not search_info.get("pending_encorex"):
+                        search_info["pending_encorex"]    = True
+                        search_info["encorex_wait_start"] = time.time()
+                    logger.info(
+                        f"📄 IntelX page {len(prev_pages)} collected "
+                        f"({len(text)} chars) — clicking ➡️ for next page"
+                    )
+                    # Click the next button using user_client
+                    try:
+                        await next_btn_obj.click()
+                        logger.info(f"✅ Clicked ➡️ button on IntelX message {message.id}")
+                    except Exception as click_err:
+                        logger.error(f"❌ Failed to click ➡️: {click_err}")
+                        # Fall through — resolve with what we have
+                        all_pages = search_info.pop("intelx_pages", [text.strip()])
+                        combined = "\n\n━━━━━━━━━━━━━━━━━━━━━━\n\n".join(
+                            p for p in all_pages if p
+                        )
+                        result = await self._process_text(combined, search_info)
+                        search_info["pending_encorex"] = False
+                        if search_id in self.active_searches:
+                            future = self.active_searches[search_id]["future"]
+                            if not future.done():
+                                future.set_result(result)
+                            del self.active_searches[search_id]
+                    return  # Wait for the edited message (next page) to arrive
+
+                elif search_info.get("intelx_pages") is not None:
+                    # Last page — no ➡️ button (or it disappeared)
+                    # This could be: (a) an edited message that is now the last page,
+                    #                (b) a fresh message that has no pagination at all
+                    prev_pages = search_info.get("intelx_pages", [])
+                    if text.strip() and text.strip() not in prev_pages:
+                        prev_pages.append(text.strip())
+                    search_info["intelx_pages"] = prev_pages
+                    logger.info(
+                        f"📄 IntelX last page collected "
+                        f"(total {len(prev_pages)} pages)"
+                    )
+                    # Combine all pages and resolve
+                    combined = "\n\n━━━━━━━━━━━━━━━━━━━━━━\n\n".join(
+                        p for p in prev_pages if p
+                    )
+                    search_info.pop("intelx_pages", None)
+                    search_info["pending_encorex"] = False
+                    result = await self._process_text(combined, search_info)
+                    if search_id in self.active_searches:
+                        future = self.active_searches[search_id]["future"]
+                        if not future.done():
+                            future.set_result(result)
+                        del self.active_searches[search_id]
+                    return
+            except Exception as page_err:
+                logger.error(f"❌ IntelX pagination error: {page_err}")
+                # Fall through to normal processing
+            # ===== END INTELX PAGINATION =====
             
             # Special handling for leak search
             if search_info["search_type"] == "leak":
@@ -5662,11 +5706,7 @@ class SearchEngine:
             
             file_result = await self._check_and_process_file(message, search_info)
             if file_result is not None:
-                logger.info(f"✅ Processing file from message (intelx_html={search_info.get('intelx_waiting_for_html')})")
-                # Clear IntelX HTML wait flags so search is cleanly finalised
-                search_info.pop("intelx_waiting_for_html", None)
-                search_info.pop("intelx_pending", None)
-                search_info.pop("pending_encorex", None)
+                logger.info(f"✅ Processing file from message")
                 if search_id in self.active_searches:
                     future = self.active_searches[search_id]["future"]
                     if not future.done():
@@ -5769,121 +5809,11 @@ class SearchEngine:
                     f"📥 IntelX data chunk accumulated "
                     f"({len(search_info['intelx_accumulated'])} chars total)"
                 )
-
-                msg_id  = getattr(message, "id", None)
-                # Telethon requires await to fetch inline keyboard buttons;
-                # getattr(message, "buttons") is always None without this call.
-                try:
-                    buttons = await message.get_buttons()
-                except Exception:
-                    buttons = getattr(message, "buttons", None)
-
-                # Record message id so edits are routed back to this search.
-                if msg_id and not search_info.get("intelx_paged_msg_id"):
-                    search_info["intelx_paged_msg_id"] = msg_id
-
-                # ── Strategy 1: Click "Download" button (highest priority) ────
-                # The Download button triggers IntelX to send an HTML file that
-                # contains ALL sources with full data.  We click it and then keep
-                # the search alive (intelx_pending + intelx_waiting_for_html) so
-                # that when the HTML file message arrives it is routed here and
-                # processed by _process_file → _parse_intelx_html.
-                # We do NOT resolve the future here — the HTML handler does that.
-                if not search_info.get("intelx_download_clicked") and buttons:
-                    dl_row_i, dl_col_i = None, None
-                    for _ri, _row in enumerate(buttons):
-                        for _ci, _btn in enumerate(_row):
-                            _bt = getattr(_btn, "text", "") or ""
-                            if "download" in _bt.lower():
-                                dl_row_i, dl_col_i = _ri, _ci
-                                break
-                        if dl_row_i is not None:
-                            break
-                    if dl_row_i is not None:
-                        try:
-                            await message.click(dl_row_i, dl_col_i)
-                            search_info["intelx_download_clicked"]  = True
-                            search_info["intelx_waiting_for_html"]  = True
-                            # Keep search alive while HTML file travels to us
-                            search_info["intelx_pending"]     = True
-                            search_info["pending_encorex"]    = True
-                            search_info["encorex_wait_start"] = time.time()
-                            logger.info("✅ IntelX 'Download' clicked — keeping search alive for HTML file")
-                            return  # wait for HTML file; do NOT resolve yet
-                        except Exception as _dl_err:
-                            logger.warning(f"⚠️ IntelX Download click failed: {_dl_err}")
-                # ── End Download auto-click ───────────────────────────────────
-
-                # ── Strategy 2: ➡️ pagination (next result pages) ────────────
-                # IntelX paginates by showing a ➡️ button.  Clicking it causes
-                # IntelX to send the next page as a NEW message.  We accumulate
-                # every page keeping intelx_pending=True so successive pages are
-                # also accumulated, then resolve when no ➡️ button remains.
-                try:
-                    has_next     = False
-                    next_btn_idx = None
-
-                    if buttons:
-                        for ri, row in enumerate(buttons):
-                            for ci, btn in enumerate(row):
-                                btn_text = getattr(btn, "text", "") or ""
-                                if any(arrow in btn_text for arrow in ("➡", "→", "Next", "next", "▶")):
-                                    has_next     = True
-                                    next_btn_idx = (ri, ci)
-                                    break
-                            if has_next:
-                                break
-
-                    if has_next:
-                        logger.info(
-                            f"⏭️ IntelX page (msg_id={msg_id}) — "
-                            f"➡️ at {next_btn_idx}, clicking for next page"
-                        )
-                        # Keep intelx_pending=True so the next arriving message
-                        # is also accumulated (not discarded).
-                        search_info["intelx_pending"]     = True
-                        search_info["pending_encorex"]    = True
-                        search_info["encorex_wait_start"] = time.time()
-                        try:
-                            await message.click(next_btn_idx[0], next_btn_idx[1])
-                            logger.info(f"✅ IntelX ➡️ clicked")
-                        except Exception as _click_err:
-                            logger.warning(f"⚠️ IntelX ➡️ click failed: {_click_err} — trying data fallback")
-                            try:
-                                ri, ci = next_btn_idx
-                                btn_data = getattr(buttons[ri][ci], "data", None)
-                                if btn_data:
-                                    await message.click(data=btn_data)
-                                    logger.info(f"✅ IntelX ➡️ clicked via data fallback")
-                            except Exception as _click_err2:
-                                logger.warning(f"⚠️ IntelX ➡️ data fallback also failed: {_click_err2}")
-                        return  # wait for next page message
-                    else:
-                        logger.info(
-                            f"✅ IntelX final page (msg_id={msg_id}) — "
-                            f"no more pages, resolving with all accumulated data"
-                        )
-                except Exception as _btn_err:
-                    logger.warning(f"⚠️ IntelX pagination check failed: {_btn_err}")
-                # ── End pagination ─────────────────────────────────────────────
-
-                # Final page (no ➡️, no Download): resolve with all collected data
-                all_data = search_info.get("intelx_accumulated", "")
-                if all_data and search_id in self.active_searches:
-                    logger.info(
-                        f"✅ IntelX all pages collected — resolving "
-                        f"({len(all_data)} chars)"
-                    )
-                    result = await self._process_text(all_data, search_info)
-                    future = self.active_searches[search_id]["future"]
-                    if not future.done():
-                        future.set_result(result)
-                    del self.active_searches[search_id]
-                else:
-                    # No accumulated data yet — keep waiting
-                    if not search_info.get("pending_encorex"):
-                        search_info["pending_encorex"]    = True
-                        search_info["encorex_wait_start"] = time.time()
+                # Don't resolve yet — more chunks or the footer may follow
+                # But extend wait window so we don't time out
+                if not search_info.get("pending_encorex"):
+                    search_info["pending_encorex"]    = True
+                    search_info["encorex_wait_start"] = time.time()
                 return
 
             # ── No-info / result decision ──────────────────────────────────────
@@ -6237,214 +6167,8 @@ class SearchEngine:
                     future.set_result({"success": False})
                 del self.active_searches[search_id]
     
-    @staticmethod
-    def _parse_intelx_html(html_content: str, search_type: str, query: str) -> Optional[Dict]:
-        """Universal IntelX / LeakBase HTML parser.
-
-        Handles ALL HTML formats that IntelX / @Ethicalosinterr_bot can send,
-        regardless of which database the results come from.  Two formats are known:
-
-        FORMAT A — LeakBase results file (Download button on a result message):
-            <div id='p1' class='block'>
-              <div class='block-title'><b>💾HiTeckGroop.in</b></div>
-              <div class='block-text'>
-                <b>📞Telephone: </b><code>9██████████7</code><br>
-                <b>👤Full name: </b> B██v R█i<br>
-              </div>
-            </div>
-
-        FORMAT B — Database list / search-result dump:
-            <div id='database_1' class="database">
-              <h2>📱 LeoPays.com</h2>
-              <p>Description text...</p>
-              <span><strong>📩Email:</strong> 76,861</span>
-            </div>
-
-        Any other HTML with <strong>/<b> labelled field rows is handled via a
-        generic fallback so future IntelX format changes are automatically covered.
-
-        Returns a multi_results-style dict (one entry per source block) or
-        None if the content does not look like an IntelX HTML file at all.
-        """
-        import re as _re
-
-        # ── Shared helpers ────────────────────────────────────────────────────
-
-        def _strip_tags(s):
-            s = _re.sub(r"<br\s*/?>", "\n", s, flags=_re.IGNORECASE)
-            s = _re.sub(r"<[^>]+>", "", s)
-            s = (s.replace("&nbsp;", " ").replace("&amp;", "&")
-                  .replace("&lt;", "<").replace("&gt;", ">")
-                  .replace("&quot;", '"').replace("&#39;", "'"))
-            s = _re.sub(r"\n{3,}", "\n\n", s)
-            return s.strip()
-
-        def _clean_title(raw):
-            t = _strip_tags(raw).strip().strip("\"'[]")
-            return t or "Intelligence Source"
-
-        def _extract_fields(block_html):
-            fields = []
-            # Pattern 1: <b>Label:</b>[optional space]<code>value</code> or plain value
-            # Handles both:  <b>📞Telephone: </b> <code>9███7</code><br>
-            #            and: <b>👤Full name: </b> B██v R█i<br>
-            for m in _re.finditer(
-                r"<(?:b|strong)[^>]*>(.*?)</(?:b|strong)>\s*(?:<code[^>]*>(.*?)</code>|([^<\n]{1,200}))\s*(?:<br|$)",
-                block_html, _re.DOTALL | _re.IGNORECASE
-            ):
-                label = _strip_tags(m.group(1)).rstrip(": ").strip()
-                # group(2) = value inside <code>; group(3) = plain text value
-                value = _strip_tags((m.group(2) or m.group(3) or "")).strip()
-                if label and value and 2 <= len(label) < 60:
-                    fields.append(f"{label}: {value}")
-            # Pattern 2: <span><strong>Label:</strong> value</span>  (database list)
-            for m in _re.finditer(
-                r"<span[^>]*>\s*<strong[^>]*>(.*?)</strong>\s*(.*?)\s*</span>",
-                block_html, _re.DOTALL | _re.IGNORECASE
-            ):
-                label = _strip_tags(m.group(1)).rstrip(": ").strip()
-                value = _strip_tags(m.group(2)).strip()
-                if label and value and 2 <= len(label) < 60:
-                    fields.append(f"{label}: {value}")
-            return fields
-
-        def _extract_description(block_html):
-            p = _re.search(r"<p[^>]*>(.*?)</p>", block_html, _re.DOTALL | _re.IGNORECASE)
-            if p:
-                d = _strip_tags(p.group(1)).strip()
-                if d and len(d) > 20:
-                    return d
-            bt = _re.search(
-                r"<div[^>]*class=['\"]block-text['\"][^>]*>(.*?)</div>",
-                block_html, _re.DOTALL | _re.IGNORECASE
-            )
-            if bt:
-                raw = _strip_tags(bt.group(1))
-                for chunk in raw.split("\n"):
-                    c = chunk.strip()
-                    if c and len(c) > 30 and ":" not in c[:40]:
-                        return c
-            return ""
-
-        # ── Block extraction — three strategies, most-specific first ──────────
-
-        # Strategy A: id='pN' class='block'  (LeakBase results)
-        raw_blocks = _re.findall(
-            r"<div\s[^>]*id=['\"]p\d+['\"][^>]*class=['\"]block['\"][^>]*>(.*?)</div>\s*</div>",
-            html_content, _re.DOTALL | _re.IGNORECASE
-        )
-        fmt = "A"
-
-        if not raw_blocks:
-            raw_blocks = _re.findall(
-                r"<div\s[^>]*class=['\"]block['\"][^>]*id=['\"]p\d+['\"][^>]*>(.*?)</div>\s*</div>",
-                html_content, _re.DOTALL | _re.IGNORECASE
-            )
-
-        # Strategy B: id='database_N' class='database'  (database list)
-        if not raw_blocks:
-            raw_blocks = _re.findall(
-                r"<div\s[^>]*id=['\"]database_\d+['\"][^>]*class=['\"]database['\"][^>]*>(.*?)</div>",
-                html_content, _re.DOTALL | _re.IGNORECASE
-            )
-            fmt = "B"
-
-        if not raw_blocks:
-            raw_blocks = _re.findall(
-                r"<div\s[^>]*class=['\"]database['\"][^>]*id=['\"]database_\d+['\"][^>]*>(.*?)</div>",
-                html_content, _re.DOTALL | _re.IGNORECASE
-            )
-            fmt = "B"
-
-        # Strategy C: generic — any named div containing labelled fields
-        if not raw_blocks:
-            fmt = "generic"
-            for m in _re.finditer(
-                r"<div\s[^>]*id=['\"][^'\"]+['\"][^>]*>(.*?)</div>",
-                html_content, _re.DOTALL | _re.IGNORECASE
-            ):
-                inner = m.group(1)
-                if _re.search(r"<(?:strong|b)[^>]*>[^<]{2,}</(?:strong|b)>", inner, _re.IGNORECASE):
-                    raw_blocks.append(inner)
-
-        if not raw_blocks:
-            logger.warning("⚠️ _parse_intelx_html: no recognisable block structure")
-            return None
-
-        logger.info(f"📋 HTML parser [{fmt}]: {len(raw_blocks)} block(s) found")
-
-        # ── Parse each block ──────────────────────────────────────────────────
-        parsed_results = []
-        for block_html in raw_blocks:
-            # Title
-            if fmt == "A":
-                tm = _re.search(
-                    r"<div[^>]*class=['\"]block-title['\"][^>]*>(.*?)</div>",
-                    block_html, _re.DOTALL | _re.IGNORECASE
-                )
-                source_title = _clean_title(tm.group(1)) if tm else "Intelligence Source"
-            elif fmt == "B":
-                tm = _re.search(r"<h2[^>]*>(.*?)</h2>", block_html, _re.DOTALL | _re.IGNORECASE)
-                source_title = _clean_title(tm.group(1)) if tm else "Intelligence Source"
-            else:
-                tm = _re.search(r"<h[123][^>]*>(.*?)</h[123]>", block_html, _re.DOTALL | _re.IGNORECASE)
-                if tm:
-                    source_title = _clean_title(tm.group(1))
-                else:
-                    bm = _re.search(r"<(?:b|strong)[^>]*>(.*?)</(?:b|strong)>", block_html, _re.DOTALL | _re.IGNORECASE)
-                    source_title = _clean_title(bm.group(1)) if bm else "Intelligence Source"
-
-            description = _extract_description(block_html)
-            fields = _extract_fields(block_html)
-
-            if not fields and not description:
-                continue
-
-            parts = []
-            if description and len(description) > 20:
-                parts.append(description)
-            if fields:
-                parts.append("\n".join(fields))
-
-            formatted_text = "\n\n".join(parts).strip()
-            if not formatted_text:
-                continue
-
-            formatted_result = PremiumFormatter.format_result(
-                formatted_text, search_type, query, source_title
-            )
-            parsed_results.append({
-                "success":    True,
-                "result":     formatted_result,
-                "raw_result": formatted_text,
-                "source":     source_title,
-                "has_file":   False,
-            })
-            logger.info(
-                f"✅ HTML block [{fmt}]: {source_title!r} "
-                f"— {len(fields)} field(s), {len(formatted_text)} chars"
-            )
-
-        if not parsed_results:
-            logger.warning("⚠️ _parse_intelx_html: blocks found but all empty/invalid")
-            return None
-
-        if len(parsed_results) == 1:
-            return parsed_results[0]
-
-        combined_raw = "\n\n".join(r["raw_result"] for r in parsed_results)
-        return {
-            "success":          True,
-            "multi_results":    parsed_results,
-            "result":           parsed_results[0].get("result", ""),
-            "raw_result":       combined_raw,
-            "has_file":         False,
-            "result_count":     len(parsed_results),
-            "from_intelx_html": True,
-        }
-
     async def _process_file(self, message, search_info: Dict) -> Dict:
-        """Process file message — handles IntelX HTML downloads and plain text/binary files."""
+        """Process file message"""
         try:
             if hasattr(message.file, 'size') and message.file.size > config.MAX_FILE_SIZE_MB * 1024 * 1024:
                 logger.warning(f"📁 File too large: {message.file.size} bytes")
@@ -6471,60 +6195,7 @@ class SearchEngine:
             if not content:
                 logger.error("❌ Could not decode file with any encoding")
                 return {"success": False}
-
-            # ── IntelX HTML download (any database, any format) ──────────────
-            # When the "Download" button in IntelX is clicked the bot sends an
-            # HTML file.  It can come in many formats (LeakBase result blocks,
-            # database-list dumps, etc.).  We try to parse ALL of them.
-            filename = ""
-            if hasattr(message, 'file') and message.file:
-                filename = getattr(message.file, 'name', '') or ''
-            if not filename and hasattr(message, 'document') and message.document:
-                attrs = getattr(message.document, 'attributes', [])
-                for attr in attrs:
-                    fn = getattr(attr, 'file_name', None)
-                    if fn:
-                        filename = fn
-                        break
-            filename = (filename or "").lower()
-
-            is_html = (
-                filename.endswith('.html') or filename.endswith('.htm')
-                or content.lstrip()[:15].lower().startswith('<!doctype html')
-                or '<html' in content[:300].lower()
-            )
-            # Trigger the parser for any HTML that came from a known IntelX bot
-            # or that contains structural markers from either known format.
-            # We deliberately do NOT gatekeep on specific class names here —
-            # that's the parser's job.
-            html_has_data = (
-                'block-title' in content or 'block-text' in content
-                or 'class="database"' in content or "class='database'" in content
-                or 'id="database_' in content or "id='database_" in content
-                or 'id="p1"' in content or "id='p1'" in content
-                or 'leakbase' in content.lower()
-                or '@ethicalosinterr_bot' in content.lower()
-                # Generic: any HTML with labelled strong/b fields
-                or bool(_re_check := __import__('re').search(
-                    r'<(?:strong|b)[^>]*>[^<]{2,60}:</(?:strong|b)>',
-                    content, __import__('re').IGNORECASE
-                ))
-            )
-            if is_html and html_has_data:
-                logger.info(f"📄 Detected IntelX HTML file — running universal parser")
-                html_result = self._parse_intelx_html(
-                    content,
-                    search_info["search_type"],
-                    search_info["query"],
-                )
-                if html_result and html_result.get("success"):
-                    count = html_result.get("result_count", 1)
-                    logger.info(f"✅ HTML parsed: {count} source(s) extracted")
-                    return html_result
-                else:
-                    logger.warning("⚠️ HTML parser returned no results — falling through to raw text")
-            # ── End HTML handling ──────────────────────────────────────────────
-
+            
             # Clean content - remove usernames and links
             cleaned_content = TextProcessor.clean_content(content, search_info["search_type"])
             
@@ -6582,7 +6253,50 @@ class SearchEngine:
             s = re.sub(r'\s{2,}', ' ', s).strip(' -|:')
             return s
 
-        # ── Detect ENCOREX OSINT / INTELX result frame ───────────────────────
+        # ── Multi-page IntelX: text contains ━━━ page separators ─────────────
+        # When IntelX sends paged results (1\2, 2\2 …) we accumulate all pages
+        # joined with ━━━━━━━━━━━━━━━━━━━━━━. Split them out, process each page
+        # as a separate result record, then return them all as multi_results.
+        PAGE_SEP = "━━━━━━━━━━━━━━━━━━━━━━"
+        if PAGE_SEP in text:
+            pages = [p.strip() for p in text.split(PAGE_SEP) if p.strip()]
+            if len(pages) > 1:
+                logger.info(f"📚 Processing {len(pages)} IntelX pages as separate records")
+                clean_source = _strip_branding(search_info["group"]["name"]) or "Intelligence Source"
+                page_results = []
+                for i, page_text in enumerate(pages, 1):
+                    cleaned = TextProcessor.clean_content(page_text, search_info["search_type"])
+                    if not cleaned or len(cleaned.strip()) < 20:
+                        continue
+                    if not TextProcessor.is_valid_result(cleaned, search_info["search_type"]):
+                        continue
+                    formatted = PremiumFormatter.format_result(
+                        cleaned,
+                        search_info["search_type"],
+                        search_info["query"],
+                        f"{clean_source} · Record {i}/{len(pages)}"
+                    )
+                    page_results.append({
+                        "success": True,
+                        "result": formatted,
+                        "raw_result": cleaned,
+                        "has_file": False,
+                    })
+                if page_results:
+                    if len(page_results) == 1:
+                        return page_results[0]
+                    combined_raw = "\n\n".join(r["raw_result"] for r in page_results)
+                    return {
+                        "success": True,
+                        "multi_results": page_results,
+                        "result": page_results[0]["result"],
+                        "raw_result": combined_raw,
+                        "has_file": False,
+                        "result_count": len(page_results),
+                    }
+                # Fall through if no valid pages
+
+
         # Frame format:
         #   🛡️ ENCOREX OSINT  ← header line (branding — strip this)
         #   ╔═══《 CMD 》═══╗
@@ -9256,35 +8970,22 @@ async def handle_search_query(event, state):
                 preview = result.get("raw_result", result.get("result", ""))[:200]
                 await db_manager.update_searches(user_id, search_type, query, True, response_preview=preview)
 
-            elif result.get("multi_results") and len(result["multi_results"]) >= 1:
-                # Multiple results (from IntelX HTML or different groups) — send ALL
+            elif result.get("multi_results") and len(result["multi_results"]) > 1:
+                # Multiple valid results from different groups — send all
                 multi = result["multi_results"]
                 count = len(multi)
-                # Show header only when multiple results
-                if count > 1:
-                    try:
-                        await event.respond(
-                            f"📊 **{count} SOURCES FOUND** for `{query}`\n"
-                            f"Sending all results below ↓",
-                            parse_mode="md"
-                        )
-                    except Exception:
-                        pass
+                await event.respond(
+                    f"📊 **{count} SOURCES FOUND** for `{query}`\n"
+                    f"Sending all results below ↓",
+                    parse_mode="md"
+                )
                 for idx, r in enumerate(multi, 1):
-                    header = f"**━━ Result {idx}/{count} ━━**\n" if count > 1 else ""
-                    body = r.get("result") or r.get("raw_result") or ""
-                    if not body:
-                        logger.warning(f"⚠️ Result {idx}/{count} has no body — skipping")
-                        continue
-                    full_msg = header + body
+                    header = f"**━━ Result {idx}/{count} ━━**\n"
+                    body = r.get("result", "")
                     try:
-                        await event.respond(full_msg, parse_mode="md")
+                        await event.respond(header + body, parse_mode="md")
                     except Exception:
-                        try:
-                            await event.respond(full_msg)
-                        except Exception as _send_err:
-                            logger.error(f"❌ Could not send result {idx}: {_send_err}")
-                    await asyncio.sleep(0.3)  # small delay between messages
+                        await event.respond(header + body)
                 preview = result.get("raw_result", "")[:200]
                 await db_manager.update_searches(user_id, search_type, query, True, response_preview=preview)
 
