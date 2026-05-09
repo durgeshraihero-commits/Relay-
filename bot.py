@@ -1066,6 +1066,7 @@ class TextProcessor:
             r'powered by\s+@\w+.*$',         # Powered by @AnyUsername
             r'powered by\s+\w.*$',            # Powered by AnythingElse
             r'developed by.*$',
+            r'powered by\s+@\w+.*$',
             r'created by.*$',
             r'designed by.*$',
             r'©.*$',
