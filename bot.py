@@ -5024,39 +5024,46 @@ class SearchEngine:
                 valid_results.append(r)
 
         if valid_results:
+            # Flatten any inner multi_results (e.g. from IntelX HTML parser) so
+            # that a single group returning N HTML blocks is treated identically
+            # to N groups each returning one block.
+            flat_results: List[Dict] = []
+            for r in valid_results:
+                inner = r.get("multi_results")
+                if inner and isinstance(inner, list):
+                    flat_results.extend(inner)
+                else:
+                    flat_results.append(r)
+
             # De-duplicate by actual data fingerprint — NOT raw[:200] which causes
-            # false-duplicate collisions when two sources share the same header text
-            # (e.g. two IntelX messages that both start with the HiTeckGroop preamble).
+            # false-duplicate collisions when two sources share the same header text.
             def _content_fingerprint(r: Dict) -> str:
                 raw = r.get("raw_result", r.get("result", ""))
-                # Strip all non-alphanumeric chars so formatting differences don't
-                # create false non-duplicates, and hash full content so two results
-                # with even one different data field are treated as distinct.
                 core = re.sub(r"[^a-zA-Z0-9]", "", raw)
                 return hashlib.md5(core.encode(errors="ignore")).hexdigest()
 
             seen_hashes: set = set()
             unique_results: List[Dict] = []
-            for r in valid_results:
+            for r in flat_results:
                 h = _content_fingerprint(r)
                 if h not in seen_hashes:
                     seen_hashes.add(h)
                     unique_results.append(r)
 
-            logger.info(f"✅ {len(unique_results)} unique valid result(s) from {len(valid_results)} group(s)")
+            logger.info(f"✅ {len(unique_results)} unique valid result(s) from {len(valid_results)} source(s)")
 
             if len(unique_results) == 1:
-                # Single result — return as-is
+                # Single result — return as-is (handle_search_query will send it)
                 return unique_results[0]
             else:
-                # Multiple results — combine into multi_results payload
+                # Multiple results — always use multi_results path so ALL are sent
                 combined_raw = "\n\n".join(
                     r.get("raw_result", r.get("result", "")) for r in unique_results
                 )
                 return {
                     "success": True,
-                    "multi_results": unique_results,   # list of individual result dicts
-                    "result": unique_results[0].get("result", ""),  # fallback for compat
+                    "multi_results": unique_results,
+                    "result": unique_results[0].get("result", ""),  # fallback
                     "raw_result": combined_raw,
                     "has_file": False,
                     "result_count": len(unique_results),
@@ -5348,8 +5355,11 @@ class SearchEngine:
                     query_in_message = bool(query and len(query) >= 4 and query in text_lower)
 
                     # B) After a scanning placeholder, accept ANY substantive non-scanning msg
+                    # IMPORTANT: Never apply to basic_db — the shared group has other
+                    # users posting results, so accepting any message would grab theirs.
                     pending_any_result = (
                         pending_encorex
+                        and not search_info.get('basic_db')
                         and len(text.strip()) >= 15
                     )
 
@@ -5614,10 +5624,20 @@ class SearchEngine:
 
             if search_info.get("pending_encorex"):
                 logger.info(
-                    f"✅ Result received after scanning wait from {search_info['group']['name']} "
-                    f"(msg_id={message.id}, scanning_msg_id={search_info.get('scanning_message_id')})"
+                    f"✅ Result received after scanning/intelx wait "
+                    f"from {search_info['group']['name']} "
+                    f"(msg_id={message.id})"
                 )
-                search_info["pending_encorex"]  = False
+                # Only clear pending_encorex if we are NOT still waiting for:
+                #   • an IntelX HTML file (intelx_waiting_for_html)
+                #   • more IntelX data pages (intelx_pending)
+                # Those handlers will clear the flag themselves when done.
+                still_waiting = (
+                    search_info.get("intelx_waiting_for_html")
+                    or search_info.get("intelx_pending")
+                )
+                if not still_waiting:
+                    search_info["pending_encorex"] = False
                 search_info["_came_after_scan"] = True
             # ===== END SCANNING FILTER =====
             
@@ -5627,7 +5647,11 @@ class SearchEngine:
             
             file_result = await self._check_and_process_file(message, search_info)
             if file_result is not None:
-                logger.info(f"✅ Processing file from message")
+                logger.info(f"✅ Processing file from message (intelx_html={search_info.get('intelx_waiting_for_html')})")
+                # Clear IntelX HTML wait flags so search is cleanly finalised
+                search_info.pop("intelx_waiting_for_html", None)
+                search_info.pop("intelx_pending", None)
+                search_info.pop("pending_encorex", None)
                 if search_id in self.active_searches:
                     future = self.active_searches[search_id]["future"]
                     if not future.done():
@@ -5730,45 +5754,54 @@ class SearchEngine:
                     f"📥 IntelX data chunk accumulated "
                     f"({len(search_info['intelx_accumulated'])} chars total)"
                 )
-                # ── Auto-click "Download" button to fetch full HTML file ──────
-                # IntelX data messages carry a "Download" button that, when clicked,
-                # causes IntelX to send an HTML file with ALL result sources.
-                # We click it once per search so the HTML arrives as a file event
-                # which _process_file → _parse_intelx_html will handle.
-                if not search_info.get("intelx_download_clicked"):
-                    try:
-                        dl_buttons = getattr(message, "buttons", None)
-                        dl_row_i, dl_col_i = None, None
-                        if dl_buttons:
-                            for _ri, _row in enumerate(dl_buttons):
-                                for _ci, _btn in enumerate(_row):
-                                    _bt = getattr(_btn, "text", "") or ""
-                                    if "download" in _bt.lower():
-                                        dl_row_i, dl_col_i = _ri, _ci
-                                        break
-                                if dl_row_i is not None:
-                                    break
+
+                msg_id  = getattr(message, "id", None)
+                buttons = getattr(message, "buttons", None)
+
+                # Record message id so edits are routed back to this search.
+                if msg_id and not search_info.get("intelx_paged_msg_id"):
+                    search_info["intelx_paged_msg_id"] = msg_id
+
+                # ── Strategy 1: Click "Download" button (highest priority) ────
+                # The Download button triggers IntelX to send an HTML file that
+                # contains ALL sources with full data.  We click it and then keep
+                # the search alive (intelx_pending + intelx_waiting_for_html) so
+                # that when the HTML file message arrives it is routed here and
+                # processed by _process_file → _parse_intelx_html.
+                # We do NOT resolve the future here — the HTML handler does that.
+                if not search_info.get("intelx_download_clicked") and buttons:
+                    dl_row_i, dl_col_i = None, None
+                    for _ri, _row in enumerate(buttons):
+                        for _ci, _btn in enumerate(_row):
+                            _bt = getattr(_btn, "text", "") or ""
+                            if "download" in _bt.lower():
+                                dl_row_i, dl_col_i = _ri, _ci
+                                break
                         if dl_row_i is not None:
+                            break
+                    if dl_row_i is not None:
+                        try:
                             await message.click(dl_row_i, dl_col_i)
-                            search_info["intelx_download_clicked"] = True
-                            logger.info("✅ IntelX 'Download' button clicked — HTML file incoming")
-                            # Extend deadline so HTML file has time to arrive
+                            search_info["intelx_download_clicked"]  = True
+                            search_info["intelx_waiting_for_html"]  = True
+                            # Keep search alive while HTML file travels to us
+                            search_info["intelx_pending"]     = True
                             search_info["pending_encorex"]    = True
                             search_info["encorex_wait_start"] = time.time()
-                    except Exception as _dl_err:
-                        logger.warning(f"⚠️ IntelX Download click failed: {_dl_err}")
+                            logger.info("✅ IntelX 'Download' clicked — keeping search alive for HTML file")
+                            return  # wait for HTML file; do NOT resolve yet
+                        except Exception as _dl_err:
+                            logger.warning(f"⚠️ IntelX Download click failed: {_dl_err}")
                 # ── End Download auto-click ───────────────────────────────────
-                # ── IntelX inline keyboard pagination (CLICK-based) ─────────
-                # IntelX paginates by showing a ➡️ inline button that MUST be
-                # clicked to reveal the next result.  It does NOT auto-edit.
-                # We click the button via the user_client so IntelX sends a NEW
-                # message (or edits the existing one) with the next page.
-                # We keep clicking until no ➡️ button is present, then resolve.
+
+                # ── Strategy 2: ➡️ pagination (next result pages) ────────────
+                # IntelX paginates by showing a ➡️ button.  Clicking it causes
+                # IntelX to send the next page as a NEW message.  We accumulate
+                # every page keeping intelx_pending=True so successive pages are
+                # also accumulated, then resolve when no ➡️ button remains.
                 try:
-                    msg_id  = getattr(message, "id", None)
-                    buttons = getattr(message, "buttons", None)
                     has_next     = False
-                    next_btn_idx = None   # (row, col) of the ➡️ button
+                    next_btn_idx = None
 
                     if buttons:
                         for ri, row in enumerate(buttons):
@@ -5781,52 +5814,45 @@ class SearchEngine:
                             if has_next:
                                 break
 
-                    # Record this message's id so any follow-up edit/message
-                    # is routed back to this search.
-                    if msg_id and not search_info.get("intelx_paged_msg_id"):
-                        search_info["intelx_paged_msg_id"] = msg_id
-
                     if has_next:
                         logger.info(
-                            f"⏭️ IntelX page received (msg_id={msg_id}) — "
-                            f"➡️ button found at {next_btn_idx}, clicking it now"
+                            f"⏭️ IntelX page (msg_id={msg_id}) — "
+                            f"➡️ at {next_btn_idx}, clicking for next page"
                         )
-                        # Click the button so IntelX sends the next result page
-                        try:
-                            await message.click(next_btn_idx[0], next_btn_idx[1])
-                            logger.info(f"✅ IntelX ➡️ button clicked successfully")
-                        except Exception as _click_err:
-                            logger.warning(f"⚠️ IntelX button click failed: {_click_err} — will try message.click(data)")
-                            # Fallback: try clicking by button data directly
-                            try:
-                                if buttons and next_btn_idx:
-                                    ri, ci = next_btn_idx
-                                    btn_data = getattr(buttons[ri][ci], "data", None)
-                                    if btn_data:
-                                        await message.click(data=btn_data)
-                                        logger.info(f"✅ IntelX button clicked via data fallback")
-                            except Exception as _click_err2:
-                                logger.warning(f"⚠️ IntelX button click fallback also failed: {_click_err2}")
-
-                        # Extend the deadline to allow the next page to arrive
+                        # Keep intelx_pending=True so the next arriving message
+                        # is also accumulated (not discarded).
+                        search_info["intelx_pending"]     = True
                         search_info["pending_encorex"]    = True
                         search_info["encorex_wait_start"] = time.time()
-                        return  # wait for next message / edit from IntelX
+                        try:
+                            await message.click(next_btn_idx[0], next_btn_idx[1])
+                            logger.info(f"✅ IntelX ➡️ clicked")
+                        except Exception as _click_err:
+                            logger.warning(f"⚠️ IntelX ➡️ click failed: {_click_err} — trying data fallback")
+                            try:
+                                ri, ci = next_btn_idx
+                                btn_data = getattr(buttons[ri][ci], "data", None)
+                                if btn_data:
+                                    await message.click(data=btn_data)
+                                    logger.info(f"✅ IntelX ➡️ clicked via data fallback")
+                            except Exception as _click_err2:
+                                logger.warning(f"⚠️ IntelX ➡️ data fallback also failed: {_click_err2}")
+                        return  # wait for next page message
                     else:
-                        # No ➡️ button — this is the final page; fall through to resolve
                         logger.info(
-                            f"✅ IntelX final page received (msg_id={msg_id}) — "
+                            f"✅ IntelX final page (msg_id={msg_id}) — "
                             f"no more pages, resolving with all accumulated data"
                         )
                 except Exception as _btn_err:
                     logger.warning(f"⚠️ IntelX pagination check failed: {_btn_err}")
                 # ── End pagination ─────────────────────────────────────────────
-                # Final page (or pagination disabled): resolve with all collected data
+
+                # Final page (no ➡️, no Download): resolve with all collected data
                 all_data = search_info.get("intelx_accumulated", "")
                 if all_data and search_id in self.active_searches:
                     logger.info(
                         f"✅ IntelX all pages collected — resolving "
-                        f"({len(all_data)} chars, pages accumulated)"
+                        f"({len(all_data)} chars)"
                     )
                     result = await self._process_text(all_data, search_info)
                     future = self.active_searches[search_id]["future"]
@@ -9210,27 +9236,35 @@ async def handle_search_query(event, state):
                 preview = result.get("raw_result", result.get("result", ""))[:200]
                 await db_manager.update_searches(user_id, search_type, query, True, response_preview=preview)
 
-            elif result.get("multi_results") and len(result["multi_results"]) > 1:
-                # Multiple valid results from different groups — send all
+            elif result.get("multi_results") and len(result["multi_results"]) >= 1:
+                # Multiple results (from IntelX HTML or different groups) — send ALL
                 multi = result["multi_results"]
                 count = len(multi)
-                await event.respond(
-                    f"📊 **{count} SOURCES FOUND** for `{query}`\n"
-                    f"Sending all results below ↓",
-                    parse_mode="md"
-                )
+                # Show header only when multiple results
+                if count > 1:
+                    try:
+                        await event.respond(
+                            f"📊 **{count} SOURCES FOUND** for `{query}`\n"
+                            f"Sending all results below ↓",
+                            parse_mode="md"
+                        )
+                    except Exception:
+                        pass
                 for idx, r in enumerate(multi, 1):
-                    header = f"**━━ Result {idx}/{count} ━━**\n"
+                    header = f"**━━ Result {idx}/{count} ━━**\n" if count > 1 else ""
                     body = r.get("result") or r.get("raw_result") or ""
                     if not body:
-                        continue  # skip empty entries — don't crash
+                        logger.warning(f"⚠️ Result {idx}/{count} has no body — skipping")
+                        continue
+                    full_msg = header + body
                     try:
-                        await event.respond(header + body, parse_mode="md")
+                        await event.respond(full_msg, parse_mode="md")
                     except Exception:
                         try:
-                            await event.respond(header + body)
+                            await event.respond(full_msg)
                         except Exception as _send_err:
                             logger.error(f"❌ Could not send result {idx}: {_send_err}")
+                    await asyncio.sleep(0.3)  # small delay between messages
                 preview = result.get("raw_result", "")[:200]
                 await db_manager.update_searches(user_id, search_type, query, True, response_preview=preview)
 
