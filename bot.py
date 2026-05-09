@@ -281,6 +281,7 @@ GROUP_PRIORITIES = {
         "weight": 10,
         "enabled": True,
         "entity": None,
+        "direct_reply_only": True,   # ← shared group: ONLY accept direct replies to our message
         "commands": {
             "phone":   "/num",
             "family":  "/familyinfo",
@@ -5276,15 +5277,14 @@ class SearchEngine:
                     if reply_to_id == search_info["message_id"]:
                         logger.info(f"📩 Found direct reply to our search message")
                         await self._process_search_response(search_id, search_info, message)
-                        # For multi-collect, don't return — keep listening for more.
-                        # Also don't return early if there are still active basic_db
-                        # searches pending — they listen for group-posted replies that
-                        # won't arrive as direct replies to our message.
-                        has_pending_basic_db = any(
-                            si.get("basic_db") and sid != search_id
-                            for sid, si in self.active_searches.items()
+                        # Never return early while other searches (any group) are still
+                        # active — each parallel group task has its own future and we
+                        # must keep the event handler alive so they can all resolve.
+                        has_other_pending = any(
+                            sid != search_id
+                            for sid in self.active_searches
                         )
-                        if not search_info.get("multi_collect") and not has_pending_basic_db:
+                        if not search_info.get("multi_collect") and not has_other_pending:
                             return
             
             # ── Priority 1.5: Edited IntelX paginated message ──────────────
@@ -5312,6 +5312,24 @@ class SearchEngine:
                     
                     if not chat_match:
                         continue
+
+                    # ── DIRECT_REPLY_ONLY guard ────────────────────────────────
+                    # For shared group chats (like premium DB) the bot replies to
+                    # our command with a direct reply. Any other message in the
+                    # same group belongs to a DIFFERENT user's query and must be
+                    # ignored — otherwise we'd steal their result.
+                    # basic_db is exempt because it NEVER sends direct replies.
+                    if search_info["group"].get("direct_reply_only") and not search_info.get("basic_db"):
+                        is_direct_reply = (
+                            message.reply_to
+                            and message.reply_to.reply_to_msg_id == search_info["message_id"]
+                        )
+                        if not is_direct_reply:
+                            logger.debug(
+                                f"⛔ [{search_info['group']['name']}] Skipping non-reply message "
+                                f"(direct_reply_only, our_msg={search_info['message_id']})"
+                            )
+                            continue
 
                     # Check if this is a file attachment
                     file_check = await self._check_and_process_file(message, search_info)
