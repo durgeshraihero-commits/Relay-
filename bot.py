@@ -4848,7 +4848,7 @@ class SearchEngine:
         search_id     = f"{user_id}_{int(time.time() * 1000)}_{group['name']}"
         future        = asyncio.get_running_loop().create_future()
         collect_until = time.time() + multi_collect_window if is_multi_collect else None
-        wait_secs     = group.get("basic_db_wait", 10) if is_basic_db else group["timeout"]
+        wait_secs     = group.get("basic_db_wait", 20) if is_basic_db else group["timeout"]
 
         self.active_searches[search_id] = {
             "user_id":        user_id,
@@ -5210,8 +5210,21 @@ class SearchEngine:
             if not group_data.get("enabled", True):
                 continue
             if not group_data.get("entity"):
-                logger.warning(f"⚠️ Group {group_data['name']} ({key}) has no entity — skipping")
-                continue
+                # Try on-demand resolution for basic_db groups before giving up
+                identifier = group_data.get("identifier", "")
+                if identifier and group_data.get("basic_db"):
+                    try:
+                        import asyncio as _asyncio
+                        loop = _asyncio.get_event_loop()
+                        if loop.is_running():
+                            group_data["entity"] = loop.run_until_complete(
+                                user_client.get_entity(identifier)
+                            ) if not loop.is_running() else None
+                    except Exception:
+                        pass
+                if not group_data.get("entity"):
+                    logger.warning(f"⚠️ Group {group_data['name']} ({key}) has no entity — skipping")
+                    continue
             ident = group_data.get("identifier", group_data["name"])
             if ident in seen_identifiers:
                 logger.info(f"⏩ Skipping duplicate group identifier: {ident}")
@@ -5308,6 +5321,10 @@ class SearchEngine:
                     if entity and hasattr(entity, 'id'):
                         chat_match = incoming_chat_norm == self._normalize_chat_id(entity.id)
                     elif search_info.get("chat_id"):
+                        chat_match = incoming_chat_norm == self._normalize_chat_id(search_info["chat_id"])
+                    # Extra fallback for basic_db: if entity missing, try matching
+                    # via the stored chat_id regardless (belt-and-suspenders)
+                    if not chat_match and search_info.get("basic_db") and search_info.get("chat_id"):
                         chat_match = incoming_chat_norm == self._normalize_chat_id(search_info["chat_id"])
                     
                     if not chat_match:
@@ -5432,31 +5449,57 @@ class SearchEngine:
 
                     # ── BASIC DB: always accept if query in message text ───────
                     # The Basic DB group bot replies to the group, not to us.
-                    # So we accept any message containing the query that is
-                    # not our own outgoing command, and passes validity check.
-                    # NOTE: query may appear inside JSON quotes e.g. "9939608735"
-                    # so we strip non-alphanumeric chars for comparison too.
-                    _query_digits = re.sub(r'\D', '', query)  # digits only for phone
-                    _text_nodots  = re.sub(r'["\'\s]', '', text_lower)  # strip quotes/spaces
-                    _query_in_stripped = bool(_query_digits and len(_query_digits) >= 6
-                                              and _query_digits in _text_nodots)
+                    # ── Basic DB query-presence check (multiple strategies) ───
+                    # The EncoreX group bot posts the result INTO the group,
+                    # not as a direct reply to us. We match any message that
+                    # contains the query (bare, JSON-quoted, or digit-only form).
+                    _query_digits = re.sub(r'\D', '', query)  # digits only
+                    # Strategy 1: raw query substring appears in lowercased text
+                    _basic_raw_match = bool(
+                        query and len(query) >= 3 and query in text_lower
+                    )
+                    # Strategy 2: digit-only form of query anywhere in text digits
+                    _query_in_stripped = bool(
+                        _query_digits and len(_query_digits) >= 6
+                        and _query_digits in re.sub(r'\D', '', text)
+                    )
+                    # Strategy 3: query appears wrapped in JSON quotes or after colon
+                    _query_in_json = bool(
+                        query and len(query) >= 3
+                        and (
+                            f'"{query}"' in text_lower
+                            or f"'{query}'" in text_lower
+                            or f': {query}' in text_lower
+                            or f':{query}' in text_lower
+                        )
+                    )
+                    _basic_query_found = _basic_raw_match or _query_in_stripped or _query_in_json
+                    # Fallback: accept any message with strong EncoreX data signals
+                    # even if query match is slightly off (reformatted number etc.)
+                    _basic_data_signal = bool(
+                        search_info.get('basic_db')
+                        and not getattr(message, 'out', False)
+                        and len(text.strip()) >= 5
+                        and not TextProcessor.is_processing_message(text)
+                        and (
+                            'number to details' in text_lower
+                            or ('"mobile"' in text_lower and '"name"' in text_lower)
+                            or ('"id"' in text_lower and '"mobile"' in text_lower)
+                        )
+                    )
                     is_basic_db_match = (
-                        search_info.get("basic_db")
+                        search_info.get('basic_db')
                         and not getattr(message, 'out', False)
                         and query
-                        and len(query) >= 3
-                        and (query in text_lower or _query_in_stripped)
-                        and len(text.strip()) >= 10
+                        and len(text.strip()) >= 5
                         and not TextProcessor.is_processing_message(text)
+                        and (_basic_query_found or _basic_data_signal)
                     )
 
-                    # For basic_db group, ONLY accept if our exact query is present.
-                    # All the broad universal matchers (looks_like_result,
-                    # universal_match, large_message_result, is_intelx_message,
-                    # has_masked_data) would match OTHER users' results posted in
-                    # the shared group. Strict query-match keeps us from stealing
-                    # someone else's result.
-                    if search_info.get("basic_db"):
+                    # For basic_db group, ONLY match if query is in the message
+                    # (or strong data signal). Broad matchers would steal other
+                    # users' results posted in the same shared group.
+                    if search_info.get('basic_db'):
                         matched = is_basic_db_match
                     else:
                         matched = (
@@ -5815,7 +5858,27 @@ class SearchEngine:
                 if not future.done():
                     future.set_result(result)
                 del self.active_searches[search_id]
-                
+
+            # ── BASIC DB SAFETY NET: also send result directly to user ───────
+            # The EncoreX group (basic_db) result flows through the future
+            # poll loop in _search_single_group. As a safety net, if the
+            # result is valid, we also push it directly to the user via
+            # bot_client so the user always sees it within seconds.
+            if search_info.get("basic_db") and result.get("success"):
+                try:
+                    uid = search_info.get("user_id")
+                    msg_text = result.get("result", "")
+                    if uid and msg_text:
+                        logger.info(
+                            f"📤 [Basic DB Safety Net] Sending result directly to user {uid}"
+                        )
+                        try:
+                            await bot_client.send_message(uid, msg_text, parse_mode="md")
+                        except Exception:
+                            await bot_client.send_message(uid, msg_text)
+                except Exception as _direct_err:
+                    logger.warning(f"⚠️ Basic DB direct send failed: {_direct_err}")
+
         except Exception as e:
             logger.error(f"❌ Error processing search response: {e}")
     
@@ -6277,7 +6340,19 @@ class SearchEngine:
         # ── "NUMBER TO DETAILS:" JSON array format (Basic DB group) ──────────
         # Format: "NUMBER TO DETAILS:\n[{...}]"  or  "[{...}]" alone
         # The JSON is an array; extract and pretty-print it.
-        if 'number to details' in text_lower or (text_lower.strip().startswith('[{') and '"mobile"' in text_lower):
+        # Detect EncoreX / Basic DB result formats:
+        # - "NUMBER TO DETAILS:\n[{...}]"  (explicit header)
+        # - "[{...}]" JSON array with mobile/name keys (no header)
+        # - Any JSON containing "mobile" and "name" from basic_db group
+        _is_number_to_details = (
+            'number to details' in text_lower
+            or (text_lower.strip().startswith('[{') and '"mobile"' in text_lower)
+            or (search_info.get('basic_db') and '"mobile"' in text_lower
+                and ('"name"' in text_lower or '"father_name"' in text_lower))
+            or (search_info.get('basic_db') and text.strip().startswith('[')
+                and '"mobile"' in text_lower)
+        )
+        if _is_number_to_details:
             arr_start = text.find('[')
             arr_end   = text.rfind(']')
             if arr_start != -1 and arr_end > arr_start:
