@@ -5462,18 +5462,33 @@ class SearchEngine:
                         return bool(re.search(pattern, haystack, re.IGNORECASE))
 
                     _query_exact        = _exact_token_match(query, text_lower)
+
+                    # Strip all non-digit chars from text for JSON-format matching.
+                    # EncoreX sends: "mobile": "7600383050" — digits-only match
+                    # handles this without being confused by quote boundaries.
+                    _text_digits_only = re.sub(r'\D', '', text)
                     _query_digits_exact = (
                         bool(_query_digits)
                         and len(_query_digits) >= 6
-                        and _exact_token_match(_query_digits, re.sub(r'["\'\s]', '', text_lower))
+                        and (
+                            _exact_token_match(_query_digits, re.sub(r'["\'\s]', '', text_lower))
+                            or _query_digits in _text_digits_only
+                        )
                     )
+                    # Explicit JSON string value match: "7600383050" in message
+                    _query_in_json = (
+                        (f'"{query}"' in text)
+                        or (f"'{query}'" in text)
+                        or (bool(_query_digits) and f'"{_query_digits}"' in text)
+                    )
+
                     _query_in_stripped = _query_digits_exact  # keep name for compat
                     is_basic_db_match = (
                         search_info.get("basic_db")
                         and not getattr(message, 'out', False)
                         and query
                         and len(query) >= 3
-                        and (_query_exact or _query_digits_exact)
+                        and (_query_exact or _query_digits_exact or _query_in_json)
                         and len(text.strip()) >= 10
                         and not TextProcessor.is_processing_message(text)
                     )
@@ -5756,7 +5771,12 @@ class SearchEngine:
                 )
 
                 msg_id  = getattr(message, "id", None)
-                buttons = getattr(message, "buttons", None)
+                # Telethon requires await to fetch inline keyboard buttons;
+                # getattr(message, "buttons") is always None without this call.
+                try:
+                    buttons = await message.get_buttons()
+                except Exception:
+                    buttons = getattr(message, "buttons", None)
 
                 # Record message id so edits are routed back to this search.
                 if msg_id and not search_info.get("intelx_paged_msg_id"):
